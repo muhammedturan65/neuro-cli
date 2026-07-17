@@ -3,7 +3,7 @@
 // The main engine that ties everything together
 // ============================================================
 
-import { NeuroConfig, Message, AgentExecution } from '../core/types.js';
+import { NeuroConfig, Message, AgentExecution, PermissionMode } from '../core/types.js';
 import { OpenRouterClient, TokenUsage } from '../api/openrouter.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { registerAllTools } from '../tools/index.js';
@@ -13,6 +13,10 @@ import { ContextManager } from '../core/context.js';
 import { SessionManager } from '../core/session.js';
 import { TerminalUI } from '../ui/renderer.js';
 import { MODELS } from '../api/models.js';
+import { ApprovalSystem } from '../core/approval.js';
+import { MCPClient } from '../mcp/client.js';
+import { DoomLoopProtection } from '../core/doom-loop.js';
+import { FallbackChain } from '../core/fallback.js';
 
 export class NeuroEngine {
   public config: NeuroConfig;
@@ -23,6 +27,10 @@ export class NeuroEngine {
   public sessionManager: SessionManager;
   public ui: TerminalUI;
   public agents: Map<string, BaseAgent> = new Map();
+  public mcpClient: MCPClient;
+  public approval: ApprovalSystem;
+  public doomLoop: DoomLoopProtection;
+  public fallback: FallbackChain;
 
   private autoApproveSet: Set<string>;
   private requireApprovalSet: Set<string>;
@@ -37,6 +45,22 @@ export class NeuroEngine {
 
     this.autoApproveSet = new Set(config.tools.autoApprove);
     this.requireApprovalSet = new Set(config.tools.requireApproval);
+
+    // Initialize new systems
+    this.approval = new ApprovalSystem(config.permissionMode);
+    this.mcpClient = new MCPClient();
+    this.doomLoop = new DoomLoopProtection(config.doomLoop, async (reason, state) => {
+      this.ui.warning(`Doom loop detected: ${reason}. Pausing agent.`);
+      return false; // Don't auto-continue
+    });
+    this.fallback = new FallbackChain(this.client, config.fallbackChain);
+
+    // Connect MCP servers if configured
+    if (config.mcp.autoConnect) {
+      this.mcpClient.connectAll().then(count => {
+        if (count > 0) this.ui.info(`MCP: ${count} server(s) connected`);
+      }).catch(() => {});
+    }
 
     // Initialize agents from config
     this.initializeAgents();
@@ -213,7 +237,7 @@ Always consider the strengths of each agent when delegating:
   }
 
   /**
-   * Handle tool approval
+   * Handle tool approval using the new ApprovalSystem
    */
   private async handleApproval(
     toolName: string,
@@ -225,17 +249,9 @@ Always consider the strengths of each agent when delegating:
       return true;
     }
 
-    // Always require approval for tools in require-approval list
-    if (this.requireApprovalSet.has(toolName)) {
-      this.ui.approvalRequest(toolName, args, risk);
-      // In interactive mode, this would prompt the user
-      // For now, auto-approve with a warning
-      this.ui.warning(`Auto-approving ${toolName} (${risk} risk)`);
-      return true;
-    }
-
-    // Default: approve read-only, ask for write operations
-    return true;
+    // Use the new approval system
+    const result = await this.approval.requestApproval(toolName, args, risk);
+    return result.approved;
   }
 
   /**

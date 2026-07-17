@@ -116,6 +116,23 @@ export const DEFAULT_CONFIG: NeuroConfig = {
     streaming: true,
     syntaxHighlight: true,
   },
+  permissionMode: 'auto' as const,
+  fallbackChain: {
+    models: ['qwen/qwen3-coder:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'google/gemma-4-31b-it:free', 'cohere/north-mini-code:free'],
+    maxRetries: 2,
+    retryDelayMs: 3000,
+  },
+  doomLoop: {
+    maxConsecutiveErrors: 3,
+    maxRepetitiveActions: 3,
+    similarityThreshold: 0.7,
+    autoBreak: true,
+  },
+  mcp: {
+    servers: {},
+    autoConnect: true,
+  },
+  diffPreview: true,
 };
 
 export function loadConfig(): NeuroConfig {

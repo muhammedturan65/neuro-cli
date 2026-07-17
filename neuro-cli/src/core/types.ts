@@ -91,6 +91,14 @@ export interface NeuroConfig {
     streaming: boolean;
     syntaxHighlight: boolean;
   };
+  permissionMode: PermissionMode;
+  fallbackChain: FallbackModelChain;
+  doomLoop: DoomLoopConfig;
+  mcp: {
+    servers: Record<string, MCPServerConfig>;
+    autoConnect: boolean;
+  };
+  diffPreview: boolean;
 }
 
 export interface Session {
@@ -150,4 +158,46 @@ export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   cost: number;
+}
+
+// Permission mode types
+export type PermissionMode = 'manual' | 'auto' | 'plan' | 'yolo';
+
+// Fallback model chain
+export interface FallbackModelChain {
+  models: string[];
+  maxRetries: number;
+  retryDelayMs: number;
+}
+
+// Doom loop protection config
+export interface DoomLoopConfig {
+  maxConsecutiveErrors: number;
+  maxRepetitiveActions: number;
+  similarityThreshold: number;
+  autoBreak: boolean;
+}
+
+// Headless/CI mode options
+export interface HeadlessOptions {
+  prompt: string;
+  model?: string;
+  agent?: string;
+  maxTurns?: number;
+  allowedTools?: string[];
+  outputFormat?: 'text' | 'json' | 'stream-json';
+  autoApprove?: boolean;
+  continueSession?: string;
+}
+
+// MCP server config
+export interface MCPServerConfig {
+  transport: 'stdio' | 'sse' | 'http';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  timeout?: number;
+  disabled?: boolean;
 }

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.local
+*.tsbuildinfo
+.neuro/
+~/.neuro/
+*.log
+.DS_Store
