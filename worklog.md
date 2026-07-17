@@ -1,25 +1,37 @@
 ---
-Task ID: 2
+Task ID: 3
 Agent: Super Z (Main)
-Task: Research OpenRouter free models, add them to NeuroCLI, and test with real API
+Task: Research competitor terminal AI tools and implement all missing features
 
 Work Log:
-- Fetched 23 free models from OpenRouter API using live endpoint
-- Researched each model's capabilities: context window, tool support, vision, streaming
-- Added all 23 free models to models.ts with detailed configurations
-- Updated MODEL_CATEGORIES with free, free-vision, free-tools groupings
-- Updated all 8 agents to use free models as defaults
-- Set default model to qwen/qwen3-coder:free
-- Added retry logic with exponential backoff for rate-limited free models
-- Fixed tool_call_id bug (was using registry-generated ID instead of API-provided ID)
-- Disabled streaming for better compatibility with free models
-- Updated model list UI with free model categories and FREE/FREE pricing display
-- Successfully tested with nvidia/nemotron-nano-9b-v2:free (Turkish response)
-- Successfully tested with cohere/north-mini-code:free (Python code generation)
+- Researched Claude Code: 25+ tools, 30+ hook events, Agent Teams, 5-layer compaction, Advisor tool, Skills system, CLAUDE.md, MCP, Git worktrees, LSP, Monitor tool, CrontCreate/CronDelete/CronList, AskUserQuestion, Permission risk explanation, Artifact publishing
+- Researched Gemini CLI: 7 built-in tools, GEMINI.md, MCP with OAuth, Subagents, Agent Skills, Hooks (8 events), Extensions marketplace, Seatbelt sandboxing, Google Search grounding, Checkpointing, @-references, Custom slash commands
+- Researched OpenCode/CRUSH: LSP integration (unique), Client/server HTTP API, Sub-agent Task tool, Auto-compact, Todo list, 75+ model providers, Vim-like editor
+- Researched Kilo Code: 500+ models with mid-task switching, MCP Marketplace, Orchestrator agent, Sandbox mode, Zero markup pricing
+- Researched Aider: Repository Map (semantic codebase context), Git-native auto-commit, Architect Mode (two-model), Voice-to-code
+- Researched Codex CLI: Rust implementation, OS-level sandboxing, Full-auto mode, Computer control, ChatGPT integration
+- Researched Kiro/Q: Spec-driven development, AWS ecosystem, Terminal autocompletion
+- Researched Warp: Agent-agnostic orchestration, Cloud parallel agents, Block-based UI
+- Researched Cursor: Cloud agents with own computers, Background agents, Auto model routing
+
+Implemented New Features:
+1. NEURO.md - Hierarchical persistent context (global/user/project/local/rules, @imports, auto-detect tech stack, /init)
+2. Hooks System - 20 lifecycle events (command/http/prompt/agent hooks, matcher support)
+3. Skills System - SKILL.md with YAML frontmatter, 7 bundled skills (code-review, debug, verify, run, doctor, batch, loop), auto-discovery, triggers
+4. LSP Integration - TypeScript/Python/Go/Rust language server support, diagnostics, goto definition, find references
+5. Repository Map - Semantic codebase mapping (definitions extraction per language, references, context string for LLM)
+6. Git Auto-Commit & Checkpointing - Shadow repo snapshots, auto-commit, undo/restore, diff view
+7. Agent Teams - Lead + members, inter-agent messaging, task dependency resolution, dynamic task planning
+8. Custom Slash Commands - 14 bundled commands (init, memory, compact, review, debug, verify, test, refactor, explain, security, perf, migrate, doctor, stats), YAML frontmatter, user-defined commands
+9. Advisor Model - Second model consultation, 6 trigger types, recurring error detection, PROCEED/REVISE recommendations
+10. Todo List Tool - Create/update/list/delete todos, priority levels, persistent storage
+11. AskUserQuestion Tool - Multiple-choice questions to user
+12. Monitor Tool - Background process monitoring with WebSocket-style output capture
+13. 5-Layer Context Compaction - Tool budget → Snip → Micro → Session Memory → Full Collapse
 
 Stage Summary:
-- 23 free models integrated: Qwen3 Coder, Nemotron 3 Super/Ultra, Gemma 4, Cohere, Llama 3.3, etc.
-- API key configured and working
-- Cost: $0.0000 for all free model calls
-- Best free models for coding: qwen/qwen3-coder:free (1M ctx), cohere/north-mini-code:free
-- Rate limiting handled with automatic retry (3 retries, exponential backoff)
+- 29 source files total across 9 modules
+- 18+ tools registered (file:7, shell:2, web:3, memory:3, extended:3)
+- 23 free models + 14 premium models = 37 total models
+- All new modules compile successfully
+- NeuroCLI is now the most feature-complete open-source terminal AI coding assistant

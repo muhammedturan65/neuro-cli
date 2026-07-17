@@ -1,0 +1,1268 @@
+Gemini CLI &nbsp;|&nbsp; Gemini Code Assist &nbsp;|&nbsp; Google for Developers
+Skip to main content
+Gemini Code Assist
+English
+Deutsch
+Español
+Español – América Latina
+Français
+Indonesia
+Italiano
+Polski
+Português – Brasil
+Tiếng Việt
+Türkçe
+Русский
+العربيّة
+ภาษาไทย
+中文 – 简体
+中文 – 繁體
+Sign in
+Guides
+Resources
+Gemini Code Assist
+Guides
+Resources
+Discover
+Overview
+Gemini in Android Studio
+Gemini CLI
+Terms of Service and Privacy Policies
+Supported languages,
+and interfaces
+How Gemini Code Assist works
+Gemini 3 with Gemini Code Assist
+How Gemini Code Assist uses your data
+Responsible AI
+Get started
+Set up Gemini Code Assist
+Use the Gemini Code Assist chat
+Code in IDEs
+Code features overview
+Code with Gemini Code Assist
+Chat in IDEs
+Chat features overview
+Chat with Gemini Code Assist
+Agent mode overview
+Use the Gemini Code Assist agent mode
+Review code in Git
+Review Git
+Hub code with Gemini Code Assist
+Set up Gemini Code Assist for Git
+Use Gemini Code Assist for Git
+Customize Gemini Code Assist behavior in Git
+Code review style guide
+Configure
+Keyboard shortcuts
+Exclude files from Gemini Code Assist use
+Configure local codebase awareness
+Use pre-release features in Gemini Code Assist for VS Code
+Control Network Access with User Domain Restrictions
+Configure Gemini Code Assist logging
+Configure VPC Service Controls
+Turn off Gemini Code Assist
+Troubleshoot
+Troubleshoot access to Gemini Code Assist features
+Provide feedback
+On this page
+Privacy
+Gemini Code Assist agent mode (Preview)
+What's next
+Products
+Gemini Code Assist
+Guides
+Was this helpful?
+Gemini CLI
+Stay organized with collections
+Save and categorize content based on your preferences.
+On this page
+Privacy
+Gemini Code Assist agent mode (Preview)
+What's next
+Page Summary
+outlined_flag
+The Gemini command line interface (CLI) is an open source AI agent that provides access to Gemini directly in your terminal.
+The Gemini CLI uses a reason and act (ReAct) loop with your built-in tools and local or remote MCP servers to complete complex use cases like fixing bugs, creating new features, and improving test coverage.
+Gemini Code Assist for individuals, Standard, and Enterprise each provide quotas for using the Gemini CLI, shared with Gemini Code Assist agent mode.
+The Gemini CLI is available without additional setup in Cloud Shell or can be set up in other environments.
+Gemini Code Assist agent mode in VS Code is powered by Gemini CLI and offers a subset of its functionality directly within the chat in your IDE.
+Gemini command line interface (CLI)
+is an open source
+AI agent that provides access to Gemini directly in your terminal. The
+Gemini CLI uses a reason and act (ReAct) loop with your built-in tools
+and local or remote MCP servers to complete complex use cases like fixing bugs,
+creating new features, and improving test coverage. While the Gemini
+CLI excels at coding, it's also a versatile local utility that you can use for
+a wide range of tasks, from content generation and problem solving to deep
+research and task management.
+Gemini Code Assist edition
+provides
+quotas
+for using the
+Gemini CLI. Note that these quotas are shared between Gemini
+CLI and
+Gemini Code Assist agent mode
+. Gemini
+CLI also supports using a Gemini API key to
+pay as you go
+The Gemini CLI is available without additional setup in
+Cloud Shell
+. To get
+started with Gemini CLI in other environments, see the
+Gemini CLI documentation
+Privacy
+For users of Gemini Code Assist Standard and Enterprise, the
+data protection and privacy practices described in
+Security, privacy, and compliance for Gemini Code Assist Standard and Enterprise
+also apply to Gemini CLI.
+Gemini Code Assist agent mode (Preview)
+Gemini Code Assist agent mode
+in VS Code is powered by
+Gemini CLI. A subset of Gemini CLI functionality is
+available directly in the Gemini Code Assist chat within VS Code.
+The following Gemini CLI features are available in
+Gemini Code Assist for VS Code.
+Model Context Protocol (MCP) servers
+Gemini CLI
+commands
+/memory
+/stats
+/tools
+Yolo mode
+built-in tools like grep, terminal, file read or file write
+Web search
+Web fetch
+What's next
+Read more about
+Gemini CLI documentation
+Download and
+install Gemini CLI
+Was this helpful?
+Except as otherwise noted, the content of this page is licensed under the
+Creative Commons Attribution 4.0 License
+, and code samples are licensed under the
+Apache 2.0 License
+. For details, see the
+Google Developers Site Policies
+. Java is a registered trademark of Oracle and/or its affiliates.
+Last updated 2026-06-18 UTC.
+[[["Easy to understand","easyToUnderstand","thumb-up"],["Solved my problem","solvedMyProblem","thumb-up"],["Other","otherUp","thumb-up"]],[["Missing the information I need","missingTheInformationINeed","thumb-down"],["Too complicated / too many steps","tooComplicatedTooManySteps","thumb-down"],["Out of date","outOfDate","thumb-down"],["Samples / code issue","samplesCodeIssue","thumb-down"],["Other","otherDown","thumb-down"]],["Last updated 2026-06-18 UTC."],[],[]]
+Connect
+Bluesky
+Instagram
+LinkedIn
+X (Twitter)
+YouTube
+Programs
+Google Developer Program
+Google Developer Groups
+Google Developer Experts
+Accelerators
+Google Cloud &amp; NVIDIA
+Developer consoles
+Google API Console
+Google Cloud Platform Console
+Google Play Console
+Firebase Console
+Actions on Google Console
+Cast SDK Developer Console
+Chrome Web Store Dashboard
+Google Home Developer Console
+Android
+Chrome
+Firebase
+Google Cloud Platform
+Google AI
+All products
+Privacy
+Manage cookies
+English
+Deutsch
+Español
+Español – América Latina
+Français
+Indonesia
+Italiano
+Polski
+Português – Brasil
+Tiếng Việt
+Türkçe
+Русский
+العربيّة
+ภาษาไทย
+中文 – 简体
+中文 – 繁體
+
+
+=== CONFIG ===
+
+Gemini CLI Configuration | gemini-cli
+gemini-cli
+Gemini CLI Configuration
+Note on Configuration Format, 9/17/25:
+The format of the
+settings.json
+file has been updated to a new, more organized structure.
+The new format will be supported in the stable release starting
+[09/10/25]
+Automatic migration from the old format to the new format will begin on
+[09/17/25]
+For details on the previous format, please see the
+v1 Configuration documentation
+Gemini CLI offers several ways to configure its behavior, including environment variables, command-line arguments, and settings files. This document outlines the different configuration methods and available settings.
+Configuration layers
+Configuration is applied in the following order of precedence (lower numbers are overridden by higher numbers):
+Default values:
+Hardcoded defaults within the application.
+System defaults file:
+System-wide default settings that can be overridden by other settings files.
+User settings file:
+Global settings for the current user.
+Project settings file:
+Project-specific settings.
+System settings file:
+System-wide settings that override all other settings files.
+Environment variables:
+System-wide or session-specific variables, potentially loaded from
+files.
+Command-line arguments:
+Values passed when launching the CLI.
+Settings files
+Gemini CLI uses JSON settings files for persistent configuration. There are four locations for these files:
+System defaults file:
+Location:
+/etc/gemini-cli/system-defaults.json
+(Linux),
+C:\ProgramData\gemini-cli\system-defaults.json
+(Windows) or
+/Library/Application Support/GeminiCli/system-defaults.json
+(macOS). The path can be overridden using the
+GEMINI_CLI_SYSTEM_DEFAULTS_PATH
+environment variable.
+Scope:
+Provides a base layer of system-wide default settings. These settings have the lowest precedence and are intended to be overridden by user, project, or system override settings.
+User settings file:
+Location:
+~/.gemini/settings.json
+(where
+is your home directory).
+Scope:
+Applies to all Gemini CLI sessions for the current user. User settings override system defaults.
+Project settings file:
+Location:
+.gemini/settings.json
+within your project’s root directory.
+Scope:
+Applies only when running Gemini CLI from that specific project. Project settings override user settings and system defaults.
+System settings file:
+Location:
+/etc/gemini-cli/settings.json
+(Linux),
+C:\ProgramData\gemini-cli\settings.json
+(Windows) or
+/Library/Application Support/GeminiCli/settings.json
+(macOS). The path can be overridden using the
+GEMINI_CLI_SYSTEM_SETTINGS_PATH
+environment variable.
+Scope:
+Applies to all Gemini CLI sessions on the system, for all users. System settings act as overrides, taking precedence over all other settings files. May be useful for system administrators at enterprises to have controls over users’ Gemini CLI setups.
+Note on environment variables in settings:
+String values within your
+settings.json
+files can reference environment variables using either
+$VAR_NAME
+${VAR_NAME}
+syntax. These variables will be automatically resolved when the settings are loaded. For example, if you have an environment variable
+MY_API_TOKEN
+, you could use it in
+settings.json
+like this:
+"apiKey": "$MY_API_TOKEN"
+Note for Enterprise Users:
+For guidance on deploying and managing Gemini CLI in a corporate environment, please see the
+Enterprise Configuration
+documentation.
+.gemini
+directory in your project
+In addition to a project settings file, a project’s
+.gemini
+directory can contain other project-specific files related to Gemini CLI’s operation, such as:
+Custom sandbox profiles
+(e.g.,
+.gemini/sandbox-macos-custom.sb
+.gemini/sandbox.Dockerfile
+Available settings in
+settings.json
+Settings are organized into categories. All settings should be placed within their corresponding top-level category object in your
+settings.json
+general
+general.preferredEditor
+(string):
+Description:
+The preferred editor to open files in.
+Default:
+undefined
+general.vimMode
+(boolean):
+Description:
+Enable Vim keybindings.
+Default:
+general.disableAutoUpdate
+(boolean):
+Description:
+Disable automatic updates.
+Default:
+general.disableUpdateNag
+(boolean):
+Description:
+Disable update notification prompts.
+Default:
+general.checkpointing.enabled
+(boolean):
+Description:
+Enable session checkpointing for recovery.
+Default:
+output
+output.format
+(string):
+Description:
+The format of the CLI output.
+Default:
+"text"
+Values:
+"text"
+"json"
+ui.theme
+(string):
+Description:
+The color theme for the UI. See
+Themes
+for available options.
+Default:
+undefined
+ui.customThemes
+(object):
+Description:
+Custom theme definitions.
+Default:
+ui.hideWindowTitle
+(boolean):
+Description:
+Hide the window title bar.
+Default:
+ui.hideTips
+(boolean):
+Description:
+Hide helpful tips in the UI.
+Default:
+ui.hideBanner
+(boolean):
+Description:
+Hide the application banner.
+Default:
+ui.hideFooter
+(boolean):
+Description:
+Hide the footer from the UI.
+Default:
+ui.showMemoryUsage
+(boolean):
+Description:
+Display memory usage information in the UI.
+Default:
+ui.showLineNumbers
+(boolean):
+Description:
+Show line numbers in the chat.
+Default:
+ui.showCitations
+(boolean):
+Description:
+Show citations for generated text in the chat.
+Default:
+ui.accessibility.disableLoadingPhrases
+(boolean):
+Description:
+Disable loading phrases for accessibility.
+Default:
+ui.customWittyPhrases
+(array of strings):
+Description:
+A list of custom phrases to display during loading states. When provided, the CLI will cycle through these phrases instead of the default ones.
+Default:
+ide.enabled
+(boolean):
+Description:
+Enable IDE integration mode.
+Default:
+ide.hasSeenNudge
+(boolean):
+Description:
+Whether the user has seen the IDE integration nudge.
+Default:
+privacy
+privacy.usageStatisticsEnabled
+(boolean):
+Description:
+Enable collection of usage statistics.
+Default:
+model.name
+(string):
+Description:
+The Gemini model to use for conversations.
+Default:
+undefined
+model.maxSessionTurns
+(number):
+Description:
+Maximum number of user/model/tool turns to keep in a session. -1 means unlimited.
+Default:
+model.summarizeToolOutput
+(object):
+Description:
+Enables or disables the summarization of tool output. You can specify the token budget for the summarization using the
+tokenBudget
+setting. Note: Currently only the
+run_shell_command
+tool is supported. For example
+Default:
+undefined
+model.chatCompression.contextPercentageThreshold
+(number):
+Description:
+Sets the threshold for chat history compression as a percentage of the model’s total token limit. This is a value between 0 and 1 that applies to both automatic compression and the manual
+/compress
+command. For example, a value of
+will trigger compression when the chat history exceeds 60% of the token limit.
+Default:
+model.skipNextSpeakerCheck
+(boolean):
+Description:
+Skip the next speaker check.
+Default:
+context
+context.fileName
+(string or array of strings):
+Description:
+The name of the context file(s).
+Default:
+undefined
+context.importFormat
+(string):
+Description:
+The format to use when importing memory.
+Default:
+undefined
+context.discoveryMaxDirs
+(number):
+Description:
+Maximum number of directories to search for memory.
+Default:
+context.includeDirectories
+(array):
+Description:
+Additional directories to include in the workspace context. Missing directories will be skipped with a warning.
+Default:
+context.loadFromIncludeDirectories
+(boolean):
+Description:
+Controls the behavior of the
+/memory refresh
+command. If set to
+GEMINI.md
+files should be loaded from all directories that are added. If set to
+GEMINI.md
+should only be loaded from the current directory.
+Default:
+context.fileFiltering.respectGitIgnore
+(boolean):
+Description:
+Respect .gitignore files when searching.
+Default:
+context.fileFiltering.respectGeminiIgnore
+(boolean):
+Description:
+Respect .geminiignore files when searching.
+Default:
+context.fileFiltering.enableRecursiveFileSearch
+(boolean):
+Description:
+Whether to enable searching recursively for filenames under the current tree when completing
+prefixes in the prompt.
+Default:
+tools.sandbox
+(boolean or string):
+Description:
+Sandbox execution environment (can be a boolean or a path string).
+Default:
+undefined
+tools.shell.enableInteractiveShell
+(boolean):
+node-pty
+for an interactive shell experience. Fallback to
+child_process
+still applies. Defaults to
+tools.core
+(array of strings):
+Description:
+This can be used to restrict the set of built-in tools
+with an allowlist
+Built-in Tools
+for a list of core tools. The match semantics are the same as
+tools.allowed
+Default:
+undefined
+tools.exclude
+(array of strings):
+Description:
+Tool names to exclude from discovery.
+Default:
+undefined
+tools.allowed
+(array of strings):
+Description:
+A list of tool names that will bypass the confirmation dialog. This is useful for tools that you trust and use frequently. For example,
+["run_shell_command(git)", "run_shell_command(npm test)"]
+will skip the confirmation dialog to run any
+npm test
+commands. See
+Shell Tool command restrictions
+for details on prefix matching, command chaining, etc.
+Default:
+undefined
+tools.discoveryCommand
+(string):
+Description:
+Command to run for tool discovery.
+Default:
+undefined
+tools.callCommand
+(string):
+Description:
+Defines a custom shell command for calling a specific tool that was discovered using
+tools.discoveryCommand
+. The shell command must meet the following criteria:
+It must take function
+(exactly as in
+) as the first command line argument.
+It must read function arguments as JSON on
+, analogous to
+It must return function output as JSON on
+stdout
+, analogous to
+Default:
+undefined
+mcp.serverCommand
+(string):
+Description:
+Command to start an MCP server.
+Default:
+undefined
+mcp.allowed
+(array of strings):
+Description:
+An allowlist of MCP servers to allow.
+Default:
+undefined
+mcp.excluded
+(array of strings):
+Description:
+A denylist of MCP servers to exclude.
+Default:
+undefined
+security
+security.folderTrust.enabled
+(boolean):
+Description:
+Setting to track whether Folder trust is enabled.
+Default:
+security.auth.selectedType
+(string):
+Description:
+The currently selected authentication type.
+Default:
+undefined
+security.auth.enforcedType
+(string):
+Description:
+The required auth type (useful for enterprises).
+Default:
+undefined
+security.auth.useExternal
+(boolean):
+Description:
+Whether to use an external authentication flow.
+Default:
+undefined
+advanced
+advanced.autoConfigureMemory
+(boolean):
+Description:
+Automatically configure Node.js memory limits.
+Default:
+advanced.dnsResolutionOrder
+(string):
+Description:
+The DNS resolution order.
+Default:
+undefined
+advanced.excludedEnvVars
+(array of strings):
+Description:
+Environment variables to exclude from project context.
+Default:
+["DEBUG","DEBUG_MODE"]
+advanced.bugCommand
+(object):
+Description:
+Configuration for the bug report command.
+Default:
+undefined
+mcpServers
+Configures connections to one or more Model-Context Protocol (MCP) servers for discovering and using custom tools. Gemini CLI attempts to connect to each configured MCP server to discover available tools. If multiple MCP servers expose a tool with the same name, the tool names will be prefixed with the server alias you defined in the configuration (e.g.,
+serverAlias__actualToolName
+) to avoid conflicts. Note that the system might strip certain schema properties from MCP tool definitions for compatibility. At least one of
+command
+httpUrl
+must be provided. If multiple are specified, the order of precedence is
+httpUrl
+, then
+, then
+command
+mcpServers.&lt;SERVER_NAME&gt;
+(object): The server parameters for the named server.
+command
+(string, optional): The command to execute to start the MCP server via standard I/O.
+(array of strings, optional): Arguments to pass to the command.
+(object, optional): Environment variables to set for the server process.
+(string, optional): The working directory in which to start the server.
+(string, optional): The URL of an MCP server that uses Server-Sent Events (SSE) for communication.
+httpUrl
+(string, optional): The URL of an MCP server that uses streamable HTTP for communication.
+headers
+(object, optional): A map of HTTP headers to send with requests to
+httpUrl
+timeout
+(number, optional): Timeout in milliseconds for requests to this MCP server.
+(boolean, optional): Trust this server and bypass all tool call confirmations.
+description
+(string, optional): A brief description of the server, which may be used for display purposes.
+includeTools
+(array of strings, optional): List of tool names to include from this MCP server. When specified, only the tools listed here will be available from this server (allowlist behavior). If not specified, all tools from the server are enabled by default.
+excludeTools
+(array of strings, optional): List of tool names to exclude from this MCP server. Tools listed here will not be available to the model, even if they are exposed by the server.
+excludeTools
+takes precedence over
+includeTools
+- if a tool is in both lists, it will be excluded.
+telemetry
+Configures logging and metrics collection for Gemini CLI. For more information, see
+Telemetry
+Properties:
+enabled
+(boolean): Whether or not telemetry is enabled.
+target
+(string): The destination for collected telemetry. Supported values are
+otlpEndpoint
+(string): The endpoint for the OTLP Exporter.
+otlpProtocol
+(string): The protocol for the OTLP Exporter (
+logPrompts
+(boolean): Whether or not to include the content of user prompts in the logs.
+outfile
+(string): The file to write telemetry to when
+target
+useCollector
+(boolean): Whether to use an external OTLP collector.
+Example
+settings.json
+Here is an example of a
+settings.json
+file with the nested structure, new as of v0.3.0:
+"general"
+"vimMode"
+"preferredEditor"
+"code"
+"theme"
+"GitHub"
+"hideBanner"
+"hideTips"
+"customWittyPhrases"
+"You forget a thousand things every day. Make sure this is one of ’em"
+"Connecting to AGI"
+"tools"
+"sandbox"
+"docker"
+"discoveryCommand"
+"bin/get_tools"
+"callCommand"
+"bin/call_tool"
+"exclude"
+"write_file"
+"mcpServers"
+"mainServer"
+"command"
+"bin/mcp_server.py"
+"anotherServer"
+"command"
+"node"
+"args"
+"mcp_server.js"
+"--verbose"
+"telemetry"
+"enabled"
+"target"
+"local"
+"otlpEndpoint"
+"http://localhost:4317"
+"logPrompts"
+"privacy"
+"usageStatisticsEnabled"
+"model"
+"name"
+"gemini-1.5-pro-latest"
+"maxSessionTurns"
+"summarizeToolOutput"
+"run_shell_command"
+"tokenBudget"
+"context"
+"fileName"
+"CONTEXT.md"
+"GEMINI.md"
+
+
+=== MCP ===
+
+MCP servers with the Gemini CLI | gemini-cli
+gemini-cli
+MCP servers with the Gemini CLI
+This document provides a guide to configuring and using Model Context Protocol (MCP) servers with the Gemini CLI.
+What is an MCP server?
+An MCP server is an application that exposes tools and resources to the Gemini CLI through the Model Context Protocol, allowing it to interact with external systems and data sources. MCP servers act as a bridge between the Gemini model and your local environment or other services like APIs.
+An MCP server enables the Gemini CLI to:
+Discover tools:
+List available tools, their descriptions, and parameters through standardized schema definitions.
+Execute tools:
+Call specific tools with defined arguments and receive structured responses.
+Access resources:
+Read data from specific resources (though the Gemini CLI primarily focuses on tool execution).
+With an MCP server, you can extend the Gemini CLI’s capabilities to perform actions beyond its built-in features, such as interacting with databases, APIs, custom scripts, or specialized workflows.
+Core Integration Architecture
+The Gemini CLI integrates with MCP servers through a sophisticated discovery and execution system built into the core package (
+packages/core/src/tools/
+Discovery Layer (
+mcp-client.ts
+The discovery process is orchestrated by
+discoverMcpTools()
+, which:
+Iterates through configured servers
+from your
+settings.json
+mcpServers
+configuration
+Establishes connections
+using appropriate transport mechanisms (Stdio, SSE, or Streamable HTTP)
+Fetches tool definitions
+from each server using the MCP protocol
+Sanitizes and validates
+tool schemas for compatibility with the Gemini API
+Registers tools
+in the global tool registry with conflict resolution
+Execution Layer (
+mcp-tool.ts
+Each discovered MCP tool is wrapped in a
+DiscoveredMCPTool
+instance that:
+Handles confirmation logic
+based on server trust settings and user preferences
+Manages tool execution
+by calling the MCP server with proper parameters
+Processes responses
+for both the LLM context and user display
+Maintains connection state
+and handles timeouts
+Transport Mechanisms
+The Gemini CLI supports three MCP transport types:
+Stdio Transport:
+Spawns a subprocess and communicates via stdin/stdout
+SSE Transport:
+Connects to Server-Sent Events endpoints
+Streamable HTTP Transport:
+Uses HTTP streaming for communication
+How to set up your MCP server
+The Gemini CLI uses the
+mcpServers
+configuration in your
+settings.json
+file to locate and connect to MCP servers. This configuration supports multiple servers with different transport mechanisms.
+Configure the MCP server in settings.json
+You can configure MCP servers in your
+settings.json
+file in two main ways: through the top-level
+mcpServers
+object for specific server definitions, and through the
+object for global settings that control server discovery and execution.
+Global MCP Settings (
+object in your
+settings.json
+allows you to define global rules for all MCP servers.
+mcp.serverCommand
+(string): A global command to start an MCP server.
+mcp.allowed
+(array of strings): A list of MCP server names to allow. If this is set, only servers from this list (matching the keys in the
+mcpServers
+object) will be connected to.
+mcp.excluded
+(array of strings): A list of MCP server names to exclude. Servers in this list will not be connected to.
+Example:
+"allowed"
+"my-trusted-server"
+"excluded"
+"experimental-server"
+Server-Specific Configuration (
+mcpServers
+mcpServers
+object is where you define each individual MCP server you want the CLI to connect to.
+Configuration Structure
+Add an
+mcpServers
+object to your
+settings.json
+...file
+contains
+config
+objects
+"mcpServers"
+"serverName"
+"command"
+"path/to/server"
+"args"
+"--arg1"
+"value1"
+"API_KEY"
+"$MY_API_TOKEN"
+"./server-directory"
+"timeout"
+"trust"
+Configuration Properties
+Each server configuration supports the following properties:
+Required (one of the following)
+command
+(string): Path to the executable for Stdio transport
+(string): SSE endpoint URL (e.g.,
+"http://localhost:8080/sse"
+httpUrl
+(string): HTTP streaming endpoint URL
+Optional
+(string[]): Command-line arguments for Stdio transport
+headers
+(object): Custom HTTP headers when using
+httpUrl
+(object): Environment variables for the server process. Values can reference environment variables using
+$VAR_NAME
+${VAR_NAME}
+syntax
+(string): Working directory for Stdio transport
+timeout
+(number): Request timeout in milliseconds (default: 600,000ms = 10 minutes)
+(boolean): When
+, bypasses all tool call confirmations for this server (default:
+includeTools
+(string[]): List of tool names to include from this MCP server. When specified, only the tools listed here will be available from this server (allowlist behavior). If not specified, all tools from the server are enabled by default.
+excludeTools
+(string[]): List of tool names to exclude from this MCP server. Tools listed here will not be available to the model, even if they are exposed by the server.
+excludeTools
+takes precedence over
+includeTools
+- if a tool is in both lists, it will be excluded.
+targetAudience
+(string): The OAuth Client ID allowlisted on the IAP-protected application you are trying to access. Used with
+authProviderType: 'service_account_impersonation'
+targetServiceAccount
+(string): The email address of the Google Cloud Service Account to impersonate. Used with
+authProviderType: 'service_account_impersonation'
+OAuth Support for Remote MCP Servers
+The Gemini CLI supports OAuth 2.0 authentication for remote MCP servers using SSE or HTTP transports. This enables secure access to MCP servers that require authentication.
+Automatic OAuth Discovery
+For servers that support OAuth discovery, you can omit the OAuth configuration and let the CLI discover it automatically:
+"mcpServers"
+"discoveredServer"
+"https://api.example.com/sse"
+The CLI will automatically:
+Detect when a server requires OAuth authentication (401 responses)
+Discover OAuth endpoints from server metadata
+Perform dynamic client registration if supported
+Handle the OAuth flow and token management
+Authentication Flow
+When connecting to an OAuth-enabled server:
+Initial connection attempt
+fails with 401 Unauthorized
+OAuth discovery
+finds authorization and token endpoints
+Browser opens
+for user authentication (requires local browser access)
+Authorization code
+is exchanged for access tokens
+Tokens are stored
+securely for future use
+Connection retry
+succeeds with valid tokens
+Browser Redirect Requirements
+Important:
+OAuth authentication requires that your local machine can:
+Open a web browser for authentication
+Receive redirects on
+http://localhost:7777/oauth/callback
+This feature will not work in:
+Headless environments without browser access
+Remote SSH sessions without X11 forwarding
+Containerized environments without browser support
+Managing OAuth Authentication
+Use the
+/mcp auth
+command to manage OAuth authentication:
+# List servers requiring authentication
+/mcp auth
+# Authenticate with a specific server
+/mcp auth serverName
+# Re-authenticate if tokens expire
+/mcp auth serverName
+OAuth Configuration Properties
+enabled
+(boolean): Enable OAuth for this server
+clientId
+(string): OAuth client identifier (optional with dynamic registration)
+clientSecret
+(string): OAuth client secret (optional for public clients)
+authorizationUrl
+(string): OAuth authorization endpoint (auto-discovered if omitted)
+tokenUrl
+(string): OAuth token endpoint (auto-discovered if omitted)
+scopes
+(string[]): Required OAuth scopes
+redirectUri
+(string): Custom redirect URI (defaults to
+http://localhost:7777/oauth/callback
+tokenParamName
+(string): Query parameter name for tokens in SSE URLs
+audiences
+(string[]): Audiences the token is valid for
+Token Management
+OAuth tokens are automatically:
+Stored securely
+~/.gemini/mcp-oauth-tokens.json
+Refreshed
+when expired (if refresh tokens are available)
+Validated
+before each connection attempt
+Cleaned up
+when invalid or expired
+Authentication Provider Type
+You can specify the authentication provider type using the
+authProviderType
+property:
+authProviderType
+(string): Specifies the authentication provider. Can be one of the following:
+dynamic_discovery
+(default): The CLI will automatically discover the OAuth configuration from the server.
+google_credentials
+: The CLI will use the Google Application Default Credentials (ADC) to authenticate with the server. When using this provider, you must specify the required scopes.
+service_account_impersonation
+: The CLI will impersonate a Google Cloud Service Account to authenticate with the server. This is useful for accessing IAP-protected services (this was specifically designed for Cloud Run services).
+Google Credentials
+"mcpServers"
+"googleCloudServer"
+"httpUrl"
+"https://my-gcp-service.run.app/mcp"
+"authProviderType"
+"google_credentials"
+"oauth"
+"scopes"
+"https://www.googleapis.com/auth/userinfo.email"
+Service Account Impersonation
+To authenticate with a server using Service Account Impersonation, you must set the
+authProviderType
+service_account_impersonation
+and provide the following properties:
+targetAudience
+(string): The OAuth Client ID allowslisted on the IAP-protected application you are trying to access.
+targetServiceAccount
+(string): The email address of the Google Cloud Service Account to impersonate.
+The CLI will use your local Application Default Credentials (ADC) to generate an OIDC ID token for the specified service account and audience. This token will then be used to authenticate with the MCP server.
+Setup Instructions
+Create
+or use an existing OAuth 2.0 client ID.
+To use an existing OAuth 2.0 client ID, follow the steps in
+How to share OAuth Clients
+Add the OAuth ID to the allowlist for
+programmatic access
+for the application.
+Since Cloud Run is not yet a supported resource type in gcloud iap, you must allowlist the Client ID on the project.
+Create a service account.
+Documentation
+Cloud Console Link
+Add both the service account and users to the IAP Policy
+in the “Security” tab of the Cloud Run service itself or via gcloud.
+Grant all users and groups
+who will access the MCP Server the necessary permissions to
+impersonate the service account
+(i.e.,
+roles/iam.serviceAccountTokenCreator
+Enable
+the IAM Credentials API
+for your project.
+Example Configurations
+Python MCP Server (Stdio)
+"mcpServers"
+"pythonTools"
+"command"
+"python"
+"args"
+"my_mcp_server"
+"--port"
+"8080"
+"./mcp-servers/python"
+"DATABASE_URL"
+"$DB_CONNECTION_STRING"
+"API_KEY"
+"${EXTERNAL_API_KEY}"
+"timeout"
+Node.js MCP Server (Stdio)
+"mcpServers"
+"nodeServer"
+"command"
+"node"
+"args"
+"dist/server.js"
+"--verbose"
+"./mcp-servers/node"
+"trust"
+Docker-based MCP Server
+"mcpServers"
+"dockerizedServer"
+"command"
+"docker"
+"args"
+"--rm"
+"API_KEY"
+"${PWD}:/workspace"
+"my-mcp-server:latest"
+"API_KEY"
+"$EXTERNAL_SERVICE_TOKEN"
+HTTP-based MCP Server
+"mcpServers"
+"httpServer"
+"httpUrl"
+"http://localhost:3000/mcp"
+"timeout"
+HTTP-based MCP Server with Custom Headers
+"mcpServers"
+"httpServerWithAuth"
+"httpUrl"
+"http://localhost:3000/mcp"
+"headers"
+"Authorization"
+"Bearer your-api-token"
+"X-Custom-Header"
+"custom-value"
+"Content-Type"
+"application/json"
+"timeout"
+MCP Server with Tool Filtering
+"mcpServers"
+"filteredServer"
+"command"
+"python"
+"args"
+"my_mcp_server"
+"includeTools"
+"safe_tool"
+"file_reader"
+"data_processor"
+"excludeTools"
+"dangerous_tool"
+"file_deleter"
+"timeout"
+SSE MCP Server with SA Impersonation
+"mcpServers"
+"myIapProtectedServer"
+"https://my-iap-service.run.app/sse"
+"authProviderType"
+"service_account_impersonation"
+"targetAudience"
+"YOUR_IAP_CLIENT_ID.apps.googleusercontent.com"
+"targetServiceAccount"
+"your-sa@your-project.iam.gserviceaccount.com"
+Discovery Process Deep Dive
+When the Gemini CLI starts, it performs MCP server discovery through the following detailed process:
+1. Server Iteration and Connection
+For each configured server in
+mcpServers
+Status tracking begins:
+Server status is set to
+CONNECTING
+Transport selection:
+Based on configuration properties:
+httpUrl
+StreamableHTTPClientTransport
+SSEClientTransport
+command
+StdioClientTransport
+Connection establishment:
+The MCP client attempts to connect with the configured timeout
+Error handling:
+Connection failures are logged and the server status is set to
+DISCONNECTED
+2. Tool Discovery
+Upon successful connection:
+Tool listing:
+The client calls the MCP server’s tool listing endpoint
+Schema validation:
+Each tool’s function declaration is validated
+Tool filtering:
+Tools are filtered based on
+includeTools
+excludeTools
+configuration
+Name sanitization:
+Tool names are cleaned to meet Gemini API requirements:
+Invalid characters (non-alphanumeric, underscore, dot, hyphen) are replaced with underscores
+Names longer than 63 characters are truncated with middle replacement (
+3. Conflict Resolution
+When multiple servers expose tools with the same name:
+First registration wins:
+The first server to register a tool name gets the unprefixed name
+Automatic prefixing:
+Subsequent servers get prefixed names:
+serverName__toolName
+Registry tracking:
+The tool registry maintains mappings between server names and their tools
+4. Schema Processing
+Tool parameter schemas undergo sanitization for Gemini API compatibility:
+$schema
+properties
+are removed
+additionalProperties
+are stripped
+default
+have their default values removed (Vertex AI compatibility)
+Recursive processing
+applies to nested schemas
+5. Connection Management
+After discovery:
+Persistent connections:
+Servers that successfully register tools maintain their connections
+Cleanup:
+Servers that provide no usable tools have their connections closed
+Status updates:
+Final server statuses are set to
+CONNECTED
+DISCONNECTED
+Tool Execution Flow
+When the Gemini model decides to use an MCP tool, the following execution flow occurs:
+1. Tool Invocation
+The model generates a
+FunctionCall
+Tool name:
+The registered name (potentially prefixed)
+Arguments:
+JSON object matching the tool’s parameter schema
+2. Confirmation Process
+DiscoveredMCPTool
+implements sophisticated confirmation logic:
+Trust-based Bypass
+return
+Dynamic Allow-listing
+The system maintains internal allow-lists for:
+Server-level:
+serverName
+→ All tools from this server are trusted
+Tool-level:
+serverName.toolName
+→ This specific tool is trusted
+User Choice Handling
+When confirmation is required, users can choose:
+Proceed once:
+Execute this time only
+Always allow this tool:
+Add to tool-level allow-list
+Always allow this server:
+Add to server-level allow-list
+Cancel:
+Abort execution
+3. Execution
+Upon confirmation (or trust bypass):
+Parameter preparation:
+Arguments are validated against the tool’s schema
+MCP call:
+The underlying
+CallableTool
+invokes the server with:
+serverToolName
+params
+Response processing:
+Results are formatted for both LLM context and user display
+4. Response Handling
+The execution result contains:
+llmContent
+Raw response parts for the language model’s context
+returnDisplay
+Formatted output for user display (often JSON in markdown code blocks)
+How to interact with your MCP server
+Using the
+Command
+command provides comprehensive information about your MCP server setup:
+This displays:
+Server list:
+All configured MCP servers
+Connection status:
+CONNECTED
+CONNECTING
+DISCONNECTED
+Server details:
+Configuration summary (excluding sensitive data)
+Available tools:
+List of tools from each server with descriptions
+Discovery state:
+Overall discovery process status
+Example
+Output
+MCP Servers Status:
+📡 pythonTools (CONNECTED)
+Command: python -m my_mcp_server --port 8080
+Working Directory: ./mcp-servers/python
+Timeout: 15000ms
+Tools: calculate_sum, file_analyzer, data_processor
+🔌 nodeServer (DISCONNECTED)
+Command: node dist/server.js --verbose
+Error: Connection refused
+🐳 dockerizedServer (CONNECTED)
+Command: docker run -i --rm -e API_KEY my-mcp-server:latest
+Tools: docker__deploy, docker__status
+Discovery State: COMPLETED
+Tool Usage
+Once discovered, MCP tools are available to the Gemini model like built-in tools. The model will automatically:
+Select appropriate tools
+based on your requests
+Present confirmation dialogs
+(unless the server is trusted)
+Execute tools
+with proper parameters
+Display results
+in a user-friendly format
+Status Monitoring and Troubleshooting
+Connection States
+The MCP integration tracks several states:
+Server Status (
+MCPServerStatus
+DISCONNECTED
+Server is not connected or has errors
+CONNECTING
+Connection attempt in progress
+CONNECTED
+Server is connected and ready
+Discovery State (
+MCPDiscoveryState
+NOT_STARTED
+Discovery hasn’t begun
+IN_PROGRESS
