@@ -83,27 +83,57 @@ export class OpenRouterClient {
       }));
     }
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://neurocli.dev',
-        'X-Title': 'NeuroCLI',
-      },
-      body: JSON.stringify(body),
-    });
+    const maxRetries = 3;
+    let lastError: Error | null = null;
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`OpenRouter API error (${response.status}): ${errorBody}`);
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        // Exponential backoff: 5s, 15s, 30s
+        const waitTime = Math.min(5000 * Math.pow(3, attempt - 1), 30000);
+        callbacks?.onThinking?.(`⏳ Rate limited, retrying in ${waitTime / 1000}s (attempt ${attempt + 1}/${maxRetries + 1})...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://neurocli.dev',
+          'X-Title': 'NeuroCLI',
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        // Parse retry_after from 429 errors
+        if (response.status === 429) {
+          try {
+            const errorData = JSON.parse(errorBody);
+            const retryAfter = errorData?.error?.metadata?.retry_after_seconds;
+            if (retryAfter && attempt < maxRetries) {
+              lastError = new Error(`Rate limited, retry after ${retryAfter}s`);
+              continue; // Retry
+            }
+          } catch {}
+          // If we can't parse retry_after or max retries reached, throw
+          if (attempt < maxRetries) {
+            lastError = new Error(`Rate limited (429): ${errorBody}`);
+            continue;
+          }
+        }
+        throw new Error(`OpenRouter API error (${response.status}): ${errorBody}`);
+      }
+
+      if (request.stream && callbacks) {
+        return this.handleStreamingResponse(response, request.model, callbacks);
+      } else {
+        return this.handleNonStreamingResponse(response, request.model);
+      }
     }
 
-    if (request.stream && callbacks) {
-      return this.handleStreamingResponse(response, request.model, callbacks);
-    } else {
-      return this.handleNonStreamingResponse(response, request.model);
-    }
+    throw lastError || new Error('Max retries exceeded');
   }
 
   /**

@@ -115,11 +115,12 @@ export class BaseAgent {
             // Call LLM
             try {
                 const response = await this.client.chat({
-                    model: this.config.model || 'anthropic/claude-sonnet-4',
+                    model: this.config.model || 'qwen/qwen3-coder:free',
                     messages: this.messages,
                     tools: toolDefs.length > 0 ? toolDefs : undefined,
                     temperature: this.config.temperature,
                     maxTokens: this.config.maxTokens,
+                    stream: false, // Disable streaming for better compatibility with free models
                 }, streamCallbacks);
                 totalUsage.inputTokens += response.usage.inputTokens;
                 totalUsage.outputTokens += response.usage.outputTokens;
@@ -162,7 +163,8 @@ export class BaseAgent {
                         onProgress: (msg) => callbacks?.onThinking?.(msg),
                     };
                     const result = await this.registry.execute(toolName, args, toolContext);
-                    this.addToolResult(result.toolCallId, result.content, toolName, result.isError);
+                    // Use the original tool_call_id from the assistant's tool call, not the registry's generated one
+                    this.addToolResult(toolCall.id, result.content, toolName, result.isError);
                     callbacks?.onToolResult?.(toolName, result.content, result.isError || false);
                 }
             }

@@ -63,7 +63,7 @@ Always consider the strengths of each agent when delegating:
 - Debugger: For investigating and fixing bugs
 - Architect: For system design and technology decisions
 - DevOps: For deployment and infrastructure`,
-      model: 'anthropic/claude-sonnet-4',
+      model: 'qwen/qwen3-coder:free',
       temperature: 0.7,
       maxTokens: 4096,
       tools: [],
@@ -92,8 +92,10 @@ Always consider the strengths of each agent when delegating:
     const cwd = process.cwd();
 
     for (const [key, agentConfig] of Object.entries(this.config.agents)) {
+      // Always use default model from config (allows easy model switching)
+      const overrideConfig = { ...agentConfig, model: this.config.defaultModel };
       const agent = new BaseAgent(
-        agentConfig,
+        overrideConfig,
         this.client,
         this.registry,
         cwd,

@@ -251,10 +251,27 @@ ${this.theme.primary('  ╚═════════════════�
     console.log(`\n  ${this.theme.bold('Available Models:')}\n`);
 
     const categories = {
-      'Flagship': ['anthropic/claude-opus-4', 'openai/o3', 'google/gemini-2.5-pro'],
-      'Balanced': ['anthropic/claude-sonnet-4', 'openai/gpt-4o', 'deepseek/deepseek-r1'],
-      'Fast & Cheap': ['anthropic/claude-3.5-haiku', 'openai/gpt-4o-mini', 'google/gemini-2.5-flash', 'deepseek/deepseek-chat'],
-      'Open Source': ['meta-llama/llama-4-maverick', 'qwen/qwen3-235b-a22b'],
+      '🆓 Free (Best for Coding)': [
+        'qwen/qwen3-coder:free',
+        'nvidia/nemotron-3-super-120b-a12b:free',
+        'nvidia/nemotron-3-ultra-550b-a55b:free',
+        'cohere/north-mini-code:free',
+      ],
+      '🆓 Free (Large Context)': [
+        'nvidia/nemotron-3-super-120b-a12b:free',
+        'nvidia/nemotron-3-ultra-550b-a55b:free',
+        'tencent/hy3:free',
+        'meta-llama/llama-3.3-70b-instruct:free',
+      ],
+      '🆓 Free (Vision + Tools)': [
+        'google/gemma-4-31b-it:free',
+        'nvidia/nemotron-nano-12b-v2-vl:free',
+        'openai/gpt-oss-20b:free',
+        'poolside/laguna-m.1:free',
+      ],
+      '💎 Premium Flagship': ['anthropic/claude-opus-4', 'openai/o3', 'google/gemini-2.5-pro'],
+      '💎 Premium Balanced': ['anthropic/claude-sonnet-4', 'openai/gpt-4o', 'deepseek/deepseek-r1'],
+      '💎 Premium Fast': ['anthropic/claude-3.5-haiku', 'openai/gpt-4o-mini', 'google/gemini-2.5-flash', 'deepseek/deepseek-chat'],
     };
 
     for (const [category, models] of Object.entries(categories)) {
@@ -263,8 +280,10 @@ ${this.theme.primary('  ╚═════════════════�
         const model = MODELS[modelId];
         if (!model) continue;
         const selected = modelId === selectedModel ? this.theme.accent(' ◀ current') : '';
-        const price = `$${model.inputPrice}/${model.outputPrice}`;
-        console.log(`    ${this.theme.muted('•')} ${this.theme.tool(model.name.padEnd(20))} ${this.theme.muted(price.padEnd(12))} ${this.theme.muted(`${(model.contextWindow / 1000).toFixed(0)}K ctx`)}${selected}`);
+        const isFree = model.inputPrice === 0 && model.outputPrice === 0;
+        const price = isFree ? 'FREE' : `$${model.inputPrice}/${model.outputPrice}`;
+        const priceColored = isFree ? this.theme.success(price.padEnd(12)) : this.theme.muted(price.padEnd(12));
+        console.log(`    ${this.theme.muted('•')} ${this.theme.tool(model.name.padEnd(35))} ${priceColored} ${this.theme.muted(`${(model.contextWindow / 1000).toFixed(0)}K ctx`)}${model.supportsTools ? this.theme.muted(' 🔧') : ''}${selected}`);
       }
       console.log();
     }
