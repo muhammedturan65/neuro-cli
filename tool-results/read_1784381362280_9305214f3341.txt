@@ -1,0 +1,1506 @@
+     1→/**
+     2→ * NeuroCLI — SKILL.md Standard Compliance System
+     3→ *
+     4→ * Implements the agentskills.io specification for SKILL.md files.
+     5→ * Provides auto-discovery, parsing, activation, registry, and
+     6→ * cross-tool compatibility with Claude Code, Codex CLI, and GitHub Copilot.
+     7→ *
+     8→ * Uses only Node.js built-in modules (fs, path, os, crypto, https, http, url).
+     9→ */
+    10→
+    11→import * as fs from "fs";
+    12→import * as path from "path";
+    13→import * as os from "os";
+    14→import * as crypto from "crypto";
+    15→import * as https from "https";
+    16→import * as http from "http";
+    17→import { URL } from "url";
+    18→
+    19→// ---------------------------------------------------------------------------
+    20→// Constants
+    21→// ---------------------------------------------------------------------------
+    22→
+    23→/** File name for skill definitions */
+    24→const SKILL_FILENAME = "SKILL.md";
+    25→
+    26→/** Maximum allowed length for skill names */
+    27→const MAX_NAME_LENGTH = 64;
+    28→
+    29→/** Regex for valid skill names: lowercase, digits, hyphens; must start with letter */
+    30→const VALID_NAME_REGEX = /^[a-z][a-z0-9-]{0,63}$/;
+    31→
+    32→/** Default global skills directory relative to home */
+    33→const DEFAULT_GLOBAL_SKILLS_DIR = ".neuro/skills";
+    34→
+    35→/** Default project-level skills directory */
+    36→const DEFAULT_PROJECT_SKILLS_DIR = ".neuro/skills";
+    37→
+    38→/** Maximum number of nested directories to traverse during discovery */
+    39→const MAX_DISCOVERY_DEPTH = 5;
+    40→
+    41→/** Cache TTL in milliseconds (5 minutes) */
+    42→const CACHE_TTL_MS = 5 * 60 * 1000;
+    43→
+    44→/** Neuro skill registry base URL */
+    45→const REGISTRY_BASE_URL = "https://registry.agentskills.io";
+    46→
+    47→// ---------------------------------------------------------------------------
+    48→// Interfaces
+    49→// ---------------------------------------------------------------------------
+    50→
+    51→/**
+    52→ * Represents a fully-parsed SKILL.md definition conforming to the
+    53→ * agentskills.io specification.
+    54→ */
+    55→export interface StandardSkillDefinition {
+    56→  /** Unique skill name (lowercase, hyphens, max 64 chars) — REQUIRED */
+    57→  name: string;
+    58→  /** Trigger condition for agent activation — REQUIRED */
+    59→  description: string;
+    60→  /** Semantic version string — optional */
+    61→  version?: string;
+    62→  /** Author or organisation — optional */
+    63→  author?: string;
+    64→  /** Searchable tags — optional */
+    65→  tags?: string[];
+    66→  /** Tools this skill requires access to — optional */
+    67→  tools?: string[];
+    68→  /** Priority 0-100 (higher = more important) — optional, default 50 */
+    69→  priority?: number;
+    70→  /** Invocation mode: "explicit" (user-triggered) or "auto" (agent decides) */
+    71→  invoke?: "explicit" | "auto";
+    72→  /** Load timing: "startup" or "on-demand" — optional, default "on-demand" */
+    73→  load?: "startup" | "on-demand";
+    74→  /** Full Markdown body after frontmatter */
+    75→  body: string;
+    76→  /** Absolute file-system path to the SKILL.md file */
+    77→  filePath: string;
+    78→  /** Source of the skill: "global" or "project" */
+    79→  source: "global" | "project";
+    80→}
+    81→
+    82→/**
+    83→ * Minimal representation used for the compact listing that the agent sees
+    84→ * when deciding which skill to activate.
+    85→ */
+    86→export interface SkillCompactEntry {
+    87→  name: string;
+    88→  description: string;
+    89→  priority: number;
+    90→  invoke: "explicit" | "auto";
+    91→  load: "startup" | "on-demand";
+    92→}
+    93→
+    94→/**
+    95→ * Result of parsing a SKILL.md file — includes both the definition and
+    96→ * any validation warnings encountered.
+    97→ */
+    98→export interface ParseResult {
+    99→  skill: StandardSkillDefinition | null;
+   100→  warnings: string[];
+   101→  errors: string[];
+   102→}
+   103→
+   104→/**
+   105→ * Represents an entry in the Neuro skill registry (local or remote).
+   106→ */
+   107→export interface SkillRegistryEntry {
+   108→  /** Unique skill name */
+   109→  name: string;
+   110→  /** Human-readable description */
+   111→  description: string;
+   112→  /** Semantic version */
+   113→  version: string;
+   114→  /** Author */
+   115→  author: string;
+   116→  /** Tags */
+   117→  tags: string[];
+   118→  /** Download URL or local path */
+   119→  source: string;
+   120→  /** SHA-256 checksum of the SKILL.md content */
+   121→  checksum: string;
+   122→  /** ISO-8601 timestamp of when the entry was added */
+   123→  addedAt: string;
+   124→  /** Whether the skill is currently installed locally */
+   125→  installed: boolean;
+   126→}
+   127→
+   128→/**
+   129→ * Internal cache entry for discovery results.
+   130→ */
+   131→interface CacheEntry {
+   132→  compactListing: SkillCompactEntry[];
+   133→  skills: Map<string, StandardSkillDefinition>;
+   134→  timestamp: number;
+   135→}
+   136→
+   137→/**
+   138→ * Options for the SkillStandard constructor.
+   139→ */
+   140→export interface SkillStandardOptions {
+   141→  /** Override the global skills directory (default: ~/.neuro/skills) */
+   142→  globalSkillsDir?: string;
+   143→  /** Override the project skills directory (default: .neuro/skills) */
+   144→  projectSkillsDir?: string;
+   145→  /** Whether to enable caching (default: true) */
+   146→  enableCache?: boolean;
+   147→  /** Cache TTL in milliseconds (default: 300 000) */
+   148→  cacheTtlMs?: number;
+   149→  /** Custom registry base URL (default: https://registry.agentskills.io) */
+   150→  registryBaseUrl?: string;
+   151→}
+   152→
+   153→// ---------------------------------------------------------------------------
+   154→// YAML Frontmatter Parser
+   155→// ---------------------------------------------------------------------------
+   156→
+   157→/**
+   158→ * Minimal YAML frontmatter parser that handles the subset of YAML used in
+   159→ * SKILL.md files. Supports scalars (strings, numbers, booleans) and
+   160→ * inline arrays (["a", "b"]). Does NOT depend on any external library.
+   161→ */
+   162→function parseFrontmatter(raw: string): {
+   163→  metadata: Record<string, unknown>;
+   164→  body: string;
+   165→} {
+   166→  const trimmed = raw.trimStart();
+   167→  if (!trimmed.startsWith("---")) {
+   168→    return { metadata: {}, body: raw };
+   169→  }
+   170→
+   171→  // Find the closing ---
+   172→  const firstDelimiterEnd = trimmed.indexOf("\n", 0);
+   173→  if (firstDelimiterEnd === -1) {
+   174→    return { metadata: {}, body: raw };
+   175→  }
+   176→
+   177→  const secondDelimiter = trimmed.indexOf("\n---", firstDelimiterEnd);
+   178→  if (secondDelimiter === -1) {
+   179→    return { metadata: {}, body: raw };
+   180→  }
+   181→
+   182→  const frontmatterText = trimmed.slice(firstDelimiterEnd + 1, secondDelimiter);
+   183→  const body = trimmed.slice(secondDelimiter + 4).trimStart();
+   184→
+   185→  const metadata: Record<string, unknown> = {};
+   186→
+   187→  // Parse line by line — handles top-level keys only (spec compliant)
+   188→  const lines = frontmatterText.split("\n");
+   189→  for (const line of lines) {
+   190→    const colonIdx = line.indexOf(":");
+   191→    if (colonIdx === -1) continue;
+   192→
+   193→    const key = line.slice(0, colonIdx).trim();
+   194→    let value: unknown = line.slice(colonIdx + 1).trim();
+   195→
+   196→    if (value === "") {
+   197→      continue;
+   198→    }
+   199→
+   200→    // Inline array: ["a", "b", "c"]
+   201→    if (typeof value === "string" && value.startsWith("[") && value.endsWith("]")) {
+   202→      value = parseInlineArray(value);
+   203→    }
+   204→    // Quoted string
+   205→    else if (typeof value === "string") {
+   206→      value = unquote(value);
+   207→    }
+   208→    // Numeric
+   209→    else if (typeof value === "string" && /^\d+(\.\d+)?$/.test(value)) {
+   210→      value = Number(value);
+   211→    }
+   212→    // Boolean
+   213→    else if (value === "true") {
+   214→      value = true;
+   215→    } else if (value === "false") {
+   216→      value = false;
+   217→    }
+   218→
+   219→    metadata[key] = value;
+   220→  }
+   221→
+   222→  return { metadata, body };
+   223→}
+   224→
+   225→/**
+   226→ * Parse a YAML inline array like `["react", "nextjs", "frontend"]`.
+   227→ */
+   228→function parseInlineArray(raw: string): string[] {
+   229→  const inner = raw.slice(1, -1).trim();
+   230→  if (inner === "") return [];
+   231→
+   232→  const items: string[] = [];
+   233→  let current = "";
+   234→  let inQuote: string | null = null;
+   235→
+   236→  for (let i = 0; i < inner.length; i++) {
+   237→    const ch = inner[i];
+   238→    if (inQuote) {
+   239→      if (ch === inQuote) {
+   240→        inQuote = null;
+   241→      } else {
+   242→        current += ch;
+   243→      }
+   244→    } else if (ch === '"' || ch === "'") {
+   245→      inQuote = ch;
+   246→    } else if (ch === ",") {
+   247→      items.push(current.trim());
+   248→      current = "";
+   249→    } else {
+   250→      current += ch;
+   251→    }
+   252→  }
+   253→
+   254→  if (current.trim()) {
+   255→    items.push(current.trim());
+   256→  }
+   257→
+   258→  return items.map((s) => unquote(s));
+   259→}
+   260→
+   261→/**
+   262→ * Remove surrounding quotes from a string value.
+   263→ */
+   264→function unquote(value: string): string {
+   265→  if (
+   266→    (value.startsWith('"') && value.endsWith('"')) ||
+   267→    (value.startsWith("'") && value.endsWith("'"))
+   268→  ) {
+   269→    return value.slice(1, -1);
+   270→  }
+   271→  return value;
+   272→}
+   273→
+   274→// ---------------------------------------------------------------------------
+   275→// Cross-Tool Compatibility Adapters
+   276→// ---------------------------------------------------------------------------
+   277→
+   278→/**
+   279→ * Adapter for Claude Code skill format.
+   280→ * Claude Code uses a CLAUDE.md convention with similar frontmatter.
+   281→ */
+   282→function adaptFromClaudeCode(raw: string, filePath: string): ParseResult {
+   283→  const warnings: string[] = [];
+   284→  const errors: string[] = [];
+   285→
+   286→  // Claude Code files may not have structured frontmatter; attempt extraction
+   287→  const { metadata, body } = parseFrontmatter(raw);
+   288→
+   289→  const name =
+   290→    (metadata.name as string) ||
+   291→    path.basename(path.dirname(filePath)).toLowerCase().replace(/\s+/g, "-");
+   292→
+   293→  if (!VALID_NAME_REGEX.test(name)) {
+   294→    errors.push(
+   295→      `Invalid skill name "${name}". Must match ${VALID_NAME_REGEX.source}`
+   296→    );
+   297→  }
+   298→
+   299→  const description =
+   300→    (metadata.description as string) ||
+   301→    (metadata.trigger as string) ||
+   302→    body.split("\n").find((l) => l.trim().length > 0) ||
+   303→    "";
+   304→
+   305→  return {
+   306→    skill: {
+   307→      name,
+   308→      description,
+   309→      version: (metadata.version as string) || undefined,
+   310→      author: (metadata.author as string) || undefined,
+   311→      tags: Array.isArray(metadata.tags) ? (metadata.tags as string[]) : undefined,
+   312→      tools: Array.isArray(metadata.tools) ? (metadata.tools as string[]) : undefined,
+   313→      priority: typeof metadata.priority === "number" ? metadata.priority : 50,
+   314→      invoke: (metadata.invoke as "explicit" | "auto") || "auto",
+   315→      load: (metadata.load as "startup" | "on-demand") || "on-demand",
+   316→      body,
+   317→      filePath,
+   318→      source: "project",
+   319→    },
+   320→    warnings,
+   321→    errors,
+   322→  };
+   323→}
+   324→
+   325→/**
+   326→ * Adapter for Codex CLI skill format.
+   327→ * Codex CLI uses codex.md / AGENTS.md files.
+   328→ */
+   329→function adaptFromCodexCli(raw: string, filePath: string): ParseResult {
+   330→  const { metadata, body } = parseFrontmatter(raw);
+   331→  const warnings: string[] = [];
+   332→  const errors: string[] = [];
+   333→
+   334→  const name =
+   335→    (metadata.name as string) ||
+   336→    path.basename(path.dirname(filePath)).toLowerCase().replace(/\s+/g, "-");
+   337→
+   338→  if (!VALID_NAME_REGEX.test(name)) {
+   339→    errors.push(
+   340→      `Invalid skill name "${name}". Must match ${VALID_NAME_REGEX.source}`
+   341→    );
+   342→  }
+   343→
+   344→  // Codex CLI uses "triggers" (plural) or "when" as activation condition
+   345→  const description =
+   346→    (metadata.description as string) ||
+   347→    (metadata.triggers as string) ||
+   348→    (metadata.when as string) ||
+   349→    "";
+   350→
+   351→  return {
+   352→    skill: {
+   353→      name,
+   354→      description,
+   355→      version: (metadata.version as string) || undefined,
+   356→      author: (metadata.author as string) || undefined,
+   357→      tags: Array.isArray(metadata.tags) ? (metadata.tags as string[]) : undefined,
+   358→      tools: Array.isArray(metadata.tools) ? (metadata.tools as string[]) : undefined,
+   359→      priority: typeof metadata.priority === "number" ? metadata.priority : 50,
+   360→      invoke: (metadata.invoke as "explicit" | "auto") || "auto",
+   361→      load: (metadata.load as "startup" | "on-demand") || "on-demand",
+   362→      body,
+   363→      filePath,
+   364→      source: "project",
+   365→    },
+   366→    warnings,
+   367→    errors,
+   368→  };
+   369→}
+   370→
+   371→/**
+   372→ * Adapter for GitHub Copilot skill format.
+   373→ * Copilot uses .github/copilot-skills/ with .md files.
+   374→ */
+   375→function adaptFromCopilot(raw: string, filePath: string): ParseResult {
+   376→  const { metadata, body } = parseFrontmatter(raw);
+   377→  const warnings: string[] = [];
+   378→  const errors: string[] = [];
+   379→
+   380→  const name =
+   381→    (metadata.name as string) ||
+   382→    path.basename(filePath, ".md").toLowerCase().replace(/\s+/g, "-");
+   383→
+   384→  if (!VALID_NAME_REGEX.test(name)) {
+   385→    errors.push(
+   386→      `Invalid skill name "${name}". Must match ${VALID_NAME_REGEX.source}`
+   387→    );
+   388→  }
+   389→
+   390→  // Copilot uses "appliesTo" or "whenToSuggest" as activation condition
+   391→  const description =
+   392→    (metadata.description as string) ||
+   393→    (metadata.appliesTo as string) ||
+   394→    (metadata.whenToSuggest as string) ||
+   395→    "";
+   396→
+   397→  return {
+   398→    skill: {
+   399→      name,
+   400→      description,
+   401→      version: (metadata.version as string) || undefined,
+   402→      author: (metadata.author as string) || undefined,
+   403→      tags: Array.isArray(metadata.tags) ? (metadata.tags as string[]) : undefined,
+   404→      tools: Array.isArray(metadata.tools) ? (metadata.tools as string[]) : undefined,
+   405→      priority: typeof metadata.priority === "number" ? metadata.priority : 50,
+   406→      invoke: (metadata.invoke as "explicit" | "auto") || "auto",
+   407→      load: (metadata.load as "startup" | "on-demand") || "on-demand",
+   408→      body,
+   409→      filePath,
+   410→      source: "project",
+   411→    },
+   412→    warnings,
+   413→    errors,
+   414→  };
+   415→}
+   416→
+   417→// ---------------------------------------------------------------------------
+   418→// Utility helpers
+   419→// ---------------------------------------------------------------------------
+   420→
+   421→/**
+   422→ * Walk a directory tree up to `maxDepth` levels, returning all files named
+   423→ * `SKILL_FILENAME` or recognized cross-tool skill files.
+   424→ */
+   425→function walkForSkills(
+   426→  dir: string,
+   427→  maxDepth: number,
+   428→  currentDepth: number = 0
+   429→): string[] {
+   430→  const results: string[] = [];
+   431→
+   432→  if (currentDepth > maxDepth) return results;
+   433→  if (!fs.existsSync(dir)) return results;
+   434→
+   435→  let entries: fs.Dirent[];
+   436→  try {
+   437→    entries = fs.readdirSync(dir, { withFileTypes: true });
+   438→  } catch {
+   439→    return results;
+   440→  }
+   441→
+   442→  for (const entry of entries) {
+   443→    const fullPath = path.join(dir, entry.name);
+   444→
+   445→    if (entry.isFile()) {
+   446→      // Standard SKILL.md
+   447→      if (entry.name === SKILL_FILENAME) {
+   448→        results.push(fullPath);
+   449→      }
+   450→      // Cross-tool: Claude Code
+   451→      else if (entry.name === "CLAUDE.md") {
+   452→        results.push(fullPath);
+   453→      }
+   454→      // Cross-tool: Codex CLI
+   455→      else if (entry.name === "codex.md" || entry.name === "AGENTS.md") {
+   456→        results.push(fullPath);
+   457→      }
+   458→    } else if (entry.isDirectory()) {
+   459→      // Recurse into subdirectories (e.g. nested skill folders)
+   460→      if (!entry.name.startsWith(".") && entry.name !== "node_modules") {
+   461→        results.push(...walkForSkills(fullPath, maxDepth, currentDepth + 1));
+   462→      }
+   463→    }
+   464→  }
+   465→
+   466→  return results;
+   467→}
+   468→
+   469→/**
+   470→ * Determine the source type based on file path.
+   471→ */
+   472→function determineSource(
+   473→  filePath: string,
+   474→  globalDir: string,
+   475→  projectDir: string
+   476→): "global" | "project" {
+   477→  const normalized = path.resolve(filePath);
+   478→  if (normalized.startsWith(path.resolve(globalDir))) {
+   479→    return "global";
+   480→  }
+   481→  return "project";
+   482→}
+   483→
+   484→/**
+   485→ * Detect the skill format from the file name.
+   486→ */
+   487→type SkillFormat = "neuro" | "claude" | "codex" | "copilot";
+   488→
+   489→function detectFormat(filePath: string): SkillFormat {
+   490→  const base = path.basename(filePath);
+   491→  switch (base) {
+   492→    case "CLAUDE.md":
+   493→      return "claude";
+   494→    case "codex.md":
+   495→    case "AGENTS.md":
+   496→      return "codex";
+   497→    default:
+   498→      // Check for GitHub Copilot path pattern
+   499→      if (filePath.includes(path.join(".github", "copilot-skills"))) {
+   500→        return "copilot";
+   501→      }
+   502→      return "neuro";
+   503→  }
+   504→}
+   505→
+   506→/**
+   507→ * Compute SHA-256 checksum of a string.
+   508→ */
+   509→function checksum(content: string): string {
+   510→  return crypto.createHash("sha256").update(content, "utf8").digest("hex");
+   511→}
+   512→
+   513→/**
+   514→ * Ensure a directory exists, creating it recursively if needed.
+   515→ */
+   516→function ensureDir(dir: string): void {
+   517→  if (!fs.existsSync(dir)) {
+   518→    fs.mkdirSync(dir, { recursive: true });
+   519→  }
+   520→}
+   521→
+   522→/**
+   523→ * HTTP/HTTPS GET request that returns the body as a string.
+   524→ * Works with both http and https protocols using only built-in modules.
+   525→ */
+   526→function httpGet(urlStr: string): Promise<string> {
+   527→  return new Promise((resolve, reject) => {
+   528→    let client: typeof http | typeof https;
+   529→    try {
+   530→      const parsed = new URL(urlStr);
+   531→      client = parsed.protocol === "https:" ? https : http;
+   532→    } catch (err) {
+   533→      reject(new Error(`Invalid URL: ${urlStr}`));
+   534→      return;
+   535→    }
+   536→
+   537→    client
+   538→      .get(urlStr, { timeout: 15000 }, (res) => {
+   539→        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+   540→          // Follow redirect
+   541→          httpGet(res.headers.location).then(resolve).catch(reject);
+   542→          return;
+   543→        }
+   544→
+   545→        if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+   546→          reject(new Error(`HTTP ${res.statusCode} for ${urlStr}`));
+   547→          return;
+   548→        }
+   549→
+   550→        const chunks: Buffer[] = [];
+   551→        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+   552→        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+   553→        res.on("error", reject);
+   554→      })
+   555→      .on("error", reject)
+   556→      .on("timeout", function (this: http.ClientRequest) {
+   557→        this.destroy();
+   558→        reject(new Error(`Request timeout for ${urlStr}`));
+   559→      });
+   560→  });
+   561→}
+   562→
+   563→/**
+   564→ * HTTP POST request that sends a JSON body and returns the response.
+   565→ */
+   566→function httpPost(urlStr: string, body: unknown): Promise<string> {
+   567→  return new Promise((resolve, reject) => {
+   568→    let client: typeof http | typeof https;
+   569→    try {
+   570→      const parsed = new URL(urlStr);
+   571→      client = parsed.protocol === "https:" ? https : http;
+   572→    } catch (err) {
+   573→      reject(new Error(`Invalid URL: ${urlStr}`));
+   574→      return;
+   575→    }
+   576→
+   577→    const payload = JSON.stringify(body);
+   578→    const options: https.RequestOptions = {
+   579→      method: "POST",
+   580→      headers: {
+   581→        "Content-Type": "application/json",
+   582→        "Content-Length": Buffer.byteLength(payload),
+   583→      },
+   584→      timeout: 15000,
+   585→    };
+   586→
+   587→    const req = client.request(urlStr, options, (res) => {
+   588→      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+   589→        const chunks: Buffer[] = [];
+   590→        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+   591→        res.on("end", () => {
+   592→          reject(
+   593→            new Error(
+   594→              `HTTP ${res.statusCode}: ${Buffer.concat(chunks).toString("utf8")}`
+   595→            )
+   596→          );
+   597→        });
+   598→        return;
+   599→      }
+   600→
+   601→      const chunks: Buffer[] = [];
+   602→      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+   603→      res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+   604→      res.on("error", reject);
+   605→    });
+   606→
+   607→    req.on("error", reject);
+   608→    req.on("timeout", () => {
+   609→      req.destroy();
+   610→      reject(new Error(`Request timeout for ${urlStr}`));
+   611→    });
+   612→
+   613→    req.write(payload);
+   614→    req.end();
+   615→  });
+   616→}
+   617→
+   618→// ---------------------------------------------------------------------------
+   619→// SkillStandard Class
+   620→// ---------------------------------------------------------------------------
+   621→
+   622→/**
+   623→ * Core class implementing the agentskills.io SKILL.md standard compliance
+   624→ * system for NeuroCLI.
+   625→ *
+   626→ * Handles discovery, parsing, activation, installation, search, publishing,
+   627→ * and cross-tool compatibility.
+   628→ */
+   629→export class SkillStandard {
+   630→  private globalSkillsDir: string;
+   631→  private projectSkillsDir: string;
+   632→  private enableCache: boolean;
+   633→  private cacheTtlMs: number;
+   634→  private registryBaseUrl: string;
+   635→
+   636→  /** In-memory skill definitions, keyed by name */
+   637→  private skills: Map<string, StandardSkillDefinition> = new Map();
+   638→
+   639→  /** Compact listing cache for agent activation */
+   640→  private compactListing: SkillCompactEntry[] = [];
+   641→
+   642→  /** Internal cache */
+   643→  private cache: CacheEntry | null = null;
+   644→
+   645→  /** Local registry index (file-backed) */
+   646→  private registryIndex: Map<string, SkillRegistryEntry> = new Map();
+   647→
+   648→  /** Path to the local registry file */
+   649→  private registryFilePath: string;
+   650→
+   651→  /** Whether discovery has been run at least once */
+   652→  private discovered: boolean = false;
+   653→
+   654→  constructor(options: SkillStandardOptions = {}) {
+   655→    this.globalSkillsDir =
+   656→      options.globalSkillsDir ||
+   657→      path.join(os.homedir(), DEFAULT_GLOBAL_SKILLS_DIR);
+   658→
+   659→    this.projectSkillsDir =
+   660→      options.projectSkillsDir || DEFAULT_PROJECT_SKILLS_DIR;
+   661→
+   662→    this.enableCache = options.enableCache ?? true;
+   663→    this.cacheTtlMs = options.cacheTtlMs ?? CACHE_TTL_MS;
+   664→    this.registryBaseUrl = options.registryBaseUrl || REGISTRY_BASE_URL;
+   665→
+   666→    this.registryFilePath = path.join(
+   667→      this.globalSkillsDir,
+   668→      "..",
+   669→      "registry.json"
+   670→    );
+   671→  }
+   672→
+   673→  // -----------------------------------------------------------------------
+   674→  // Public API
+   675→  // -----------------------------------------------------------------------
+   676→
+   677→  /**
+   678→   * Discover all skills from both global and project directories.
+   679→   * Reads ONLY the `name` and `description` from each skill's YAML
+   680→   * frontmatter for the compact listing, but also caches full definitions.
+   681→   *
+   682→   * @param projectRoot - The root directory of the current project
+   683→   * @returns Array of compact skill entries for agent activation
+   684→   */
+   685→  discoverSkills(projectRoot: string): SkillCompactEntry[] {
+   686→    // Return cached if still valid
+   687→    if (this.enableCache && this.cache && Date.now() - this.cache.timestamp < this.cacheTtlMs) {
+   688→      return this.cache.compactListing;
+   689→    }
+   690→
+   691→    this.skills.clear();
+   692→    this.compactListing = [];
+   693→
+   694→    const globalDir = this.globalSkillsDir;
+   695→    const localDir = path.resolve(projectRoot, this.projectSkillsDir);
+   696→
+   697→    // Discover from global directory
+   698→    const globalFiles = walkForSkills(globalDir, MAX_DISCOVERY_DEPTH);
+   699→    for (const file of globalFiles) {
+   700→      const result = this.parseSkillMd(file);
+   701→      if (result.skill && result.errors.length === 0) {
+   702→        result.skill.source = "global";
+   703→        this.skills.set(result.skill.name, result.skill);
+   704→      }
+   705→    }
+   706→
+   707→    // Discover from project directory
+   708→    const projectFiles = walkForSkills(localDir, MAX_DISCOVERY_DEPTH);
+   709→    for (const file of projectFiles) {
+   710→      const result = this.parseSkillMd(file);
+   711→      if (result.skill && result.errors.length === 0) {
+   712→        // Project skills override global skills with the same name
+   713→        result.skill.source = "project";
+   714→        this.skills.set(result.skill.name, result.skill);
+   715→      }
+   716→    }
+   717→
+   718→    // Also check for GitHub Copilot skill files in .github/copilot-skills/
+   719→    const copilotDir = path.resolve(projectRoot, ".github/copilot-skills");
+   720→    const copilotFiles = walkForSkills(copilotDir, MAX_DISCOVERY_DEPTH);
+   721→    for (const file of copilotFiles) {
+   722→      const result = this.parseSkillMd(file);
+   723→      if (result.skill && result.errors.length === 0) {
+   724→        result.skill.source = "project";
+   725→        this.skills.set(result.skill.name, result.skill);
+   726→      }
+   727→    }
+   728→
+   729→    // Build compact listing — sorted by priority descending, then name ascending
+   730→    this.compactListing = Array.from(this.skills.values())
+   731→      .map((s): SkillCompactEntry => ({
+   732→        name: s.name,
+   733→        description: s.description,
+   734→        priority: s.priority ?? 50,
+   735→        invoke: s.invoke ?? "auto",
+   736→        load: s.load ?? "on-demand",
+   737→      }))
+   738→      .sort((a, b) => {
+   739→        if (b.priority !== a.priority) return b.priority - a.priority;
+   740→        return a.name.localeCompare(b.name);
+   741→      });
+   742→
+   743→    // Update cache
+   744→    if (this.enableCache) {
+   745→      this.cache = {
+   746→        compactListing: this.compactListing,
+   747→        skills: new Map(this.skills),
+   748→        timestamp: Date.now(),
+   749→      };
+   750→    }
+   751→
+   752→    this.discovered = true;
+   753→    return this.compactListing;
+   754→  }
+   755→
+   756→  /**
+   757→   * Parse a SKILL.md file according to the agentskills.io specification.
+   758→   * Supports cross-tool format detection and automatic adaptation.
+   759→   *
+   760→   * @param filePath - Absolute path to the SKILL.md (or compatible) file
+   761→   * @returns Parse result with skill definition, warnings, and errors
+   762→   */
+   763→  parseSkillMd(filePath: string): ParseResult {
+   764→    const warnings: string[] = [];
+   765→    const errors: string[] = [];
+   766→
+   767→    // Read file
+   768→    let raw: string;
+   769→    try {
+   770→      raw = fs.readFileSync(filePath, "utf8");
+   771→    } catch (err) {
+   772→      return {
+   773→        skill: null,
+   774→        warnings,
+   775→        errors: [
+   776→          `Failed to read skill file at ${filePath}: ${(err as Error).message}`,
+   777→        ],
+   778→      };
+   779→    }
+   780→
+   781→    // Detect format and adapt
+   782→    const format = detectFormat(filePath);
+   783→    let result: ParseResult;
+   784→
+   785→    switch (format) {
+   786→      case "claude":
+   787→        result = adaptFromClaudeCode(raw, filePath);
+   788→        warnings.push(
+   789→          `Adapted from Claude Code format (CLAUDE.md). Some fields may need review.`
+   790→        );
+   791→        break;
+   792→      case "codex":
+   793→        result = adaptFromCodexCli(raw, filePath);
+   794→        warnings.push(
+   795→          `Adapted from Codex CLI format (${path.basename(filePath)}). Some fields may need review.`
+   796→        );
+   797→        break;
+   798→      case "copilot":
+   799→        result = adaptFromCopilot(raw, filePath);
+   800→        warnings.push(
+   801→          `Adapted from GitHub Copilot format. Some fields may need review.`
+   802→        );
+   803→        break;
+   804→      case "neuro":
+   805→      default:
+   806→        result = this.parseNeuroFormat(raw, filePath);
+   807→        break;
+   808→    }
+   809→
+   810→    // Merge warnings
+   811→    warnings.push(...result.warnings);
+   812→
+   813→    // Validate required fields
+   814→    if (result.skill) {
+   815→      // Validate name
+   816→      if (!result.skill.name) {
+   817→        errors.push("Required field 'name' is missing.");
+   818→        result.skill = null;
+   819→      } else if (!VALID_NAME_REGEX.test(result.skill.name)) {
+   820→        errors.push(
+   821→          `Invalid skill name "${result.skill.name}". Must be lowercase, start with a letter, contain only letters, digits, and hyphens, and be at most ${MAX_NAME_LENGTH} characters. Pattern: ${VALID_NAME_REGEX.source}`
+   822→        );
+   823→        result.skill = null;
+   824→      }
+   825→
+   826→      // Validate description
+   827→      if (result.skill && !result.skill.description) {
+   828→        errors.push("Required field 'description' is missing.");
+   829→        result.skill = null;
+   830→      }
+   831→
+   832→      // Validate version format if present
+   833→      if (result.skill && result.skill.version) {
+   834→        if (!/^\d+\.\d+\.\d+/.test(result.skill.version)) {
+   835→          warnings.push(
+   836→            `Version "${result.skill.version}" does not follow semver (major.minor.patch).`
+   837→          );
+   838→        }
+   839→      }
+   840→
+   841→      // Validate priority range
+   842→      if (result.skill && result.skill.priority !== undefined) {
+   843→        if (result.skill.priority < 0 || result.skill.priority > 100) {
+   844→          warnings.push(
+   845→            `Priority ${result.skill.priority} is outside the recommended 0-100 range. Clamping.`
+   846→          );
+   847→          result.skill.priority = Math.max(
+   848→            0,
+   849→            Math.min(100, result.skill.priority)
+   850→          );
+   851→        }
+   852→      }
+   853→
+   854→      // Set defaults
+   855→      if (result.skill) {
+   856→        result.skill.priority = result.skill.priority ?? 50;
+   857→        result.skill.invoke = result.skill.invoke ?? "auto";
+   858→        result.skill.load = result.skill.load ?? "on-demand";
+   859→        result.skill.source = determineSource(
+   860→          filePath,
+   861→          this.globalSkillsDir,
+   862→          this.projectSkillsDir
+   863→        );
+   864→      }
+   865→    }
+   866→
+   867→    return {
+   868→      skill: result.skill,
+   869→      warnings,
+   870→      errors: [...errors, ...result.errors],
+   871→    };
+   872→  }
+   873→
+   874→  /**
+   875→   * Get the compact listing of name+description pairs for agent activation.
+   876→   * This is the minimal information the agent sees to decide which skill
+   877→   * to activate. Must call discoverSkills() first.
+   878→   *
+   879→   * @returns Array of compact skill entries
+   880→   */
+   881→  getCompactListing(): SkillCompactEntry[] {
+   882→    if (!this.discovered) {
+   883→      return [];
+   884→    }
+   885→    return this.compactListing;
+   886→  }
+   887→
+   888→  /**
+   889→   * Activate a skill if its description matches the current context or prompt.
+   890→   * For "auto" invoke skills, the description is used as a trigger condition.
+   891→   * For "explicit" invoke skills, the skill name must be directly referenced.
+   892→   *
+   893→   * @param name - The skill name to activate
+   894→   * @param prompt - The current user prompt or context for matching
+   895→   * @returns The full skill definition if activated, or null
+   896→   */
+   897→  activateSkill(
+   898→    name: string,
+   899→    prompt: string
+   900→  ): StandardSkillDefinition | null {
+   901→    const skill = this.skills.get(name);
+   902→    if (!skill) return null;
+   903→
+   904→    // For explicit invoke, only activate if the skill name is directly
+   905→    // referenced in the prompt
+   906→    if (skill.invoke === "explicit") {
+   907→      const namePatterns = [
+   908→        name,
+   909→        name.replace(/-/g, " "),
+   910→        name.replace(/-/g, "_"),
+   911→      ];
+   912→      const promptLower = prompt.toLowerCase();
+   913→      const isReferenced = namePatterns.some((p) =>
+   914→        promptLower.includes(p.toLowerCase())
+   915→      );
+   916→      if (!isReferenced) return null;
+   917→    }
+   918→
+   919→    // For auto invoke, check if the description matches the prompt context.
+   920→    // Use a simple keyword-overlap heuristic with a threshold.
+   921→    if (skill.invoke === "auto") {
+   922→      const descriptionKeywords = extractKeywords(skill.description);
+   923→      const promptKeywords = extractKeywords(prompt);
+   924→
+   925→      if (descriptionKeywords.length > 0) {
+   926→        const overlap = descriptionKeywords.filter((k) =>
+   927→          promptKeywords.includes(k)
+   928→        );
+   929→        // Require at least 30% keyword overlap, or at least 1 match for
+   930→        // short descriptions
+   931→        const threshold = Math.max(1, Math.ceil(descriptionKeywords.length * 0.3));
+   932→        if (overlap.length < threshold) return null;
+   933→      }
+   934→    }
+   935→
+   936→    return skill;
+   937→  }
+   938→
+   939→  /**
+   940→   * Install a skill from a URL or local path.
+   941→   *
+   942→   * @param source - URL (http/https) or local file path to the SKILL.md
+   943→   * @param options - Installation options
+   944→   * @returns The installed skill definition, or null on failure
+   945→   */
+   946→  async installSkill(
+   947→    source: string,
+   948→    options: {
+   949→      /** Install to global directory instead of project directory */
+   950→      global?: boolean;
+   951→      /** Override the skill name (auto-detected from frontmatter by default) */
+   952→      name?: string;
+   953→      /** Project root for project-level installs */
+   954→      projectRoot?: string;
+   955→    } = {}
+   956→  ): Promise<{ skill: StandardSkillDefinition | null; errors: string[] }> {
+   957→    const errors: string[] = [];
+   958→    let content: string;
+   959→
+   960→    // Determine if source is a URL or local path
+   961→    if (source.startsWith("http://") || source.startsWith("https://")) {
+   962→      try {
+   963→        content = await httpGet(source);
+   964→      } catch (err) {
+   965→        return {
+   966→          skill: null,
+   967→          errors: [
+   968→            `Failed to fetch skill from ${source}: ${(err as Error).message}`,
+   969→          ],
+   970→        };
+   971→      }
+   972→    } else {
+   973→      // Local path
+   974→      const resolvedPath = path.resolve(source);
+   975→      if (!fs.existsSync(resolvedPath)) {
+   976→        return {
+   977→          skill: null,
+   978→          errors: [`Local path does not exist: ${resolvedPath}`],
+   979→        };
+   980→      }
+   981→      try {
+   982→        content = fs.readFileSync(resolvedPath, "utf8");
+   983→      } catch (err) {
+   984→        return {
+   985→          skill: null,
+   986→          errors: [
+   987→            `Failed to read local file at ${resolvedPath}: ${(err as Error).message}`,
+   988→          ],
+   989→        };
+   990→      }
+   991→    }
+   992→
+   993→    // Parse the content
+   994→    const tempPath = path.join(os.tmpdir(), `neuro-skill-install-${Date.now()}.md`);
+   995→    try {
+   996→      fs.writeFileSync(tempPath, content, "utf8");
+   997→      const parseResult = this.parseSkillMd(tempPath);
+   998→
+   999→      if (parseResult.errors.length > 0 || !parseResult.skill) {
+  1000→        return {
+  1001→          skill: null,
+  1002→          errors: [...parseResult.errors, "Failed to parse skill content."],
+  1003→        };
+  1004→      }
+  1005→
+  1006→      const skillName = options.name || parseResult.skill.name;
+  1007→      if (!VALID_NAME_REGEX.test(skillName)) {
+  1008→        return {
+  1009→          skill: null,
+  1010→          errors: [
+  1011→            `Invalid skill name "${skillName}". Must match ${VALID_NAME_REGEX.source}`,
+  1012→          ],
+  1013→        };
+  1014→      }
+  1015→
+  1016→      // Determine target directory
+  1017→      const targetDir = options.global
+  1018→        ? path.join(this.globalSkillsDir, skillName)
+  1019→        : path.join(
+  1020→            path.resolve(options.projectRoot || process.cwd()),
+  1021→            this.projectSkillsDir,
+  1022→            skillName
+  1023→          );
+  1024→
+  1025→      ensureDir(targetDir);
+  1026→      const targetPath = path.join(targetDir, SKILL_FILENAME);
+  1027→
+  1028→      // If content came from a different format, re-serialize to standard SKILL.md
+  1029→      const format = detectFormat(source);
+  1030→      if (format !== "neuro" && parseResult.skill) {
+  1031→        content = serializeToStandardFormat(parseResult.skill);
+  1032→      }
+  1033→
+  1034→      fs.writeFileSync(targetPath, content, "utf8");
+  1035→
+  1036→      // Re-parse from final location
+  1037→      const finalResult = this.parseSkillMd(targetPath);
+  1038→      if (finalResult.skill) {
+  1039→        finalResult.skill.source = options.global ? "global" : "project";
+  1040→        this.skills.set(finalResult.skill.name, finalResult.skill);
+  1041→        this.invalidateCache();
+  1042→
+  1043→        // Update registry index
+  1044→        this.updateRegistryEntry(finalResult.skill, source);
+  1045→      }
+  1046→
+  1047→      return { skill: finalResult.skill, errors: [] };
+  1048→    } finally {
+  1049→      // Clean up temp file
+  1050→      try {
+  1051→        fs.unlinkSync(tempPath);
+  1052→      } catch {
+  1053→        // Ignore cleanup errors
+  1054→      }
+  1055→    }
+  1056→  }
+  1057→
+  1058→  /**
+  1059→   * Search available skills from the registry.
+  1060→   * Searches both the local registry index and the remote registry.
+  1061→   *
+  1062→   * @param query - Search query string
+  1063→   * @returns Array of matching registry entries
+  1064→   */
+  1065→  async searchSkills(query: string): Promise<SkillRegistryEntry[]> {
+  1066→    const results: SkillRegistryEntry[] = [];
+  1067→    const queryLower = query.toLowerCase();
+  1068→    const queryTerms = queryLower.split(/\s+/);
+  1069→
+  1070→    // Search local registry first
+  1071→    this.loadRegistryIndex();
+  1072→    for (const entry of this.registryIndex.values()) {
+  1073→      if (this.matchesQuery(entry, queryTerms)) {
+  1074→        results.push(entry);
+  1075→      }
+  1076→    }
+  1077→
+  1078→    // Search remote registry
+  1079→    try {
+  1080→      const remoteResults = await this.searchRemoteRegistry(query);
+  1081→      for (const entry of remoteResults) {
+  1082→        // Don't duplicate entries already found locally
+  1083→        if (!results.some((r) => r.name === entry.name)) {
+  1084→          // Mark installation status
+  1085→          entry.installed = this.skills.has(entry.name);
+  1086→          results.push(entry);
+  1087→        }
+  1088→      }
+  1089→    } catch {
+  1090→      // Remote registry unavailable — return local results only
+  1091→    }
+  1092→
+  1093→    // Sort by relevance: installed first, then by name
+  1094→    results.sort((a, b) => {
+  1095→      if (a.installed !== b.installed) return a.installed ? -1 : 1;
+  1096→      return a.name.localeCompare(b.name);
+  1097→    });
+  1098→
+  1099→    return results;
+  1100→  }
+  1101→
+  1102→  /**
+  1103→   * Publish a skill to the registry.
+  1104→   *
+  1105→   * @param skillPath - Path to the SKILL.md file or the skill directory
+  1106→   * @returns The registry entry created, or null on failure
+  1107→   */
+  1108→  async publishSkill(
+  1109→    skillPath: string
+  1110→  ): Promise<{ entry: SkillRegistryEntry | null; errors: string[] }> {
+  1111→    const errors: string[] = [];
+  1112→
+  1113→    // Resolve path
+  1114→    const resolved = path.resolve(skillPath);
+  1115→    let filePath: string;
+  1116→
+  1117→    if (fs.statSync(resolved).isDirectory()) {
+  1118→      filePath = path.join(resolved, SKILL_FILENAME);
+  1119→    } else {
+  1120→      filePath = resolved;
+  1121→    }
+  1122→
+  1123→    if (!fs.existsSync(filePath)) {
+  1124→      return {
+  1125→        entry: null,
+  1126→        errors: [`Skill file not found at ${filePath}`],
+  1127→      };
+  1128→    }
+  1129→
+  1130→    // Parse the skill
+  1131→    const parseResult = this.parseSkillMd(filePath);
+  1132→    if (parseResult.errors.length > 0 || !parseResult.skill) {
+  1133→      return {
+  1134→        entry: null,
+  1135→        errors: [...parseResult.errors, "Cannot publish invalid skill."],
+  1136→      };
+  1137→    }
+  1138→
+  1139→    const skill = parseResult.skill;
+  1140→
+  1141→    // Read raw content for checksum
+  1142→    const content = fs.readFileSync(filePath, "utf8");
+  1143→
+  1144→    const entry: SkillRegistryEntry = {
+  1145→      name: skill.name,
+  1146→      description: skill.description,
+  1147→      version: skill.version || "1.0.0",
+  1148→      author: skill.author || "unknown",
+  1149→      tags: skill.tags || [],
+  1150→      source: filePath,
+  1151→      checksum: checksum(content),
+  1152→      addedAt: new Date().toISOString(),
+  1153→      installed: true,
+  1154→    };
+  1155→
+  1156→    // Attempt remote publish
+  1157→    try {
+  1158→      await httpPost(`${this.registryBaseUrl}/api/v1/skills`, {
+  1159→        name: entry.name,
+  1160→        description: entry.description,
+  1161→        version: entry.version,
+  1162→        author: entry.author,
+  1163→        tags: entry.tags,
+  1164→        checksum: entry.checksum,
+  1165→        content,
+  1166→      });
+  1167→    } catch (err) {
+  1168→      errors.push(
+  1169→        `Remote publish failed: ${(err as Error).message}. Skill saved to local registry only.`
+  1170→      );
+  1171→    }
+  1172→
+  1173→    // Update local registry
+  1174→    this.loadRegistryIndex();
+  1175→    this.registryIndex.set(entry.name, entry);
+  1176→    this.saveRegistryIndex();
+  1177→
+  1178→    return { entry, errors };
+  1179→  }
+  1180→
+  1181→  /**
+  1182→   * Get the full content of an activated skill.
+  1183→   * This should be called after activateSkill() returns a match.
+  1184→   *
+  1185→   * @param name - The skill name
+  1186→   * @returns The full skill definition including the Markdown body, or null
+  1187→   */
+  1188→  getSkillContent(name: string): StandardSkillDefinition | null {
+  1189→    const skill = this.skills.get(name);
+  1190→    if (!skill) return null;
+  1191→
+  1192→    // Re-read from disk to ensure we have the latest content
+  1193→    try {
+  1194→      const raw = fs.readFileSync(skill.filePath, "utf8");
+  1195→      const result = this.parseSkillMd(skill.filePath);
+  1196→      if (result.skill) {
+  1197→        // Update the cached version
+  1198→        this.skills.set(name, result.skill);
+  1199→        return result.skill;
+  1200→      }
+  1201→    } catch {
+  1202→      // Fall back to cached version
+  1203→    }
+  1204→
+  1205→    return skill;
+  1206→  }
+  1207→
+  1208→  /**
+  1209→   * List all installed skills with their current status.
+  1210→   *
+  1211→   * @returns Array of skill definitions with status information
+  1212→   */
+  1213→  listInstalled(): Array<
+  1214→    StandardSkillDefinition & {
+  1215→      /** Whether the skill is currently loaded in memory */
+  1216→      loaded: boolean;
+  1217→      /** The skill format origin */
+  1218→      format: SkillFormat;
+  1219→    }
+  1220→  > {
+  1221→    return Array.from(this.skills.values()).map((skill) => ({
+  1222→      ...skill,
+  1223→      loaded: true,
+  1224→      format: detectFormat(skill.filePath),
+  1225→    }));
+  1226→  }
+  1227→
+  1228→  // -----------------------------------------------------------------------
+  1229→  // Private Methods
+  1230→  // -----------------------------------------------------------------------
+  1231→
+  1232→  /**
+  1233→   * Parse a standard Neuro SKILL.md file.
+  1234→   */
+  1235→  private parseNeuroFormat(raw: string, filePath: string): ParseResult {
+  1236→    const warnings: string[] = [];
+  1237→    const errors: string[] = [];
+  1238→    const { metadata, body } = parseFrontmatter(raw);
+  1239→
+  1240→    const name = metadata.name as string | undefined;
+  1241→    const description = metadata.description as string | undefined;
+  1242→
+  1243→    if (!name) {
+  1244→      errors.push("Required field 'name' is missing from frontmatter.");
+  1245→    }
+  1246→
+  1247→    if (!description) {
+  1248→      errors.push("Required field 'description' is missing from frontmatter.");
+  1249→    }
+  1250→
+  1251→    if (errors.length > 0) {
+  1252→      return {
+  1253→        skill: null,
+  1254→        warnings,
+  1255→        errors,
+  1256→      };
+  1257→    }
+  1258→
+  1259→    const skill: StandardSkillDefinition = {
+  1260→      name: name!,
+  1261→      description: description!,
+  1262→      version: (metadata.version as string) || undefined,
+  1263→      author: (metadata.author as string) || undefined,
+  1264→      tags: Array.isArray(metadata.tags) ? (metadata.tags as string[]) : undefined,
+  1265→      tools: Array.isArray(metadata.tools) ? (metadata.tools as string[]) : undefined,
+  1266→      priority: typeof metadata.priority === "number" ? metadata.priority : undefined,
+  1267→      invoke: (metadata.invoke as "explicit" | "auto") || undefined,
+  1268→      load: (metadata.load as "startup" | "on-demand") || undefined,
+  1269→      body,
+  1270→      filePath,
+  1271→      source: "project", // Will be overridden by caller
+  1272→    };
+  1273→
+  1274→    return { skill, warnings, errors };
+  1275→  }
+  1276→
+  1277→  /**
+  1278→   * Invalidate the discovery cache.
+  1279→   */
+  1280→  private invalidateCache(): void {
+  1281→    this.cache = null;
+  1282→    this.discovered = false;
+  1283→    this.compactListing = [];
+  1284→  }
+  1285→
+  1286→  /**
+  1287→   * Load the local registry index from disk.
+  1288→   */
+  1289→  private loadRegistryIndex(): void {
+  1290→    this.registryIndex.clear();
+  1291→    if (!fs.existsSync(this.registryFilePath)) return;
+  1292→
+  1293→    try {
+  1294→      const raw = fs.readFileSync(this.registryFilePath, "utf8");
+  1295→      const data = JSON.parse(raw) as Array<SkillRegistryEntry>;
+  1296→      for (const entry of data) {
+  1297→        // Verify installation status
+  1298→        const skillDir = path.join(this.globalSkillsDir, entry.name);
+  1299→        entry.installed = fs.existsSync(path.join(skillDir, SKILL_FILENAME));
+  1300→        this.registryIndex.set(entry.name, entry);
+  1301→      }
+  1302→    } catch {
+  1303→      // Corrupted or empty registry — start fresh
+  1304→    }
+  1305→  }
+  1306→
+  1307→  /**
+  1308→   * Save the local registry index to disk.
+  1309→   */
+  1310→  private saveRegistryIndex(): void {
+  1311→    ensureDir(path.dirname(this.registryFilePath));
+  1312→    const data = Array.from(this.registryIndex.values());
+  1313→    fs.writeFileSync(this.registryFilePath, JSON.stringify(data, null, 2), "utf8");
+  1314→  }
+  1315→
+  1316→  /**
+  1317→   * Update a single registry entry.
+  1318→   */
+  1319→  private updateRegistryEntry(
+  1320→    skill: StandardSkillDefinition,
+  1321→    source: string
+  1322→  ): void {
+  1323→    this.loadRegistryIndex();
+  1324→
+  1325→    try {
+  1326→      const content = fs.readFileSync(skill.filePath, "utf8");
+  1327→      const entry: SkillRegistryEntry = {
+  1328→        name: skill.name,
+  1329→        description: skill.description,
+  1330→        version: skill.version || "1.0.0",
+  1331→        author: skill.author || "unknown",
+  1332→        tags: skill.tags || [],
+  1333→        source,
+  1334→        checksum: checksum(content),
+  1335→        addedAt: new Date().toISOString(),
+  1336→        installed: true,
+  1337→      };
+  1338→
+  1339→      this.registryIndex.set(skill.name, entry);
+  1340→      this.saveRegistryIndex();
+  1341→    } catch {
+  1342→      // Silently fail — non-critical
+  1343→    }
+  1344→  }
+  1345→
+  1346→  /**
+  1347→   * Search the remote skill registry.
+  1348→   */
+  1349→  private async searchRemoteRegistry(
+  1350→    query: string
+  1351→  ): Promise<SkillRegistryEntry[]> {
+  1352→    const url = `${this.registryBaseUrl}/api/v1/skills/search?q=${encodeURIComponent(query)}`;
+  1353→    const raw = await httpGet(url);
+  1354→    const data = JSON.parse(raw);
+  1355→
+  1356→    if (Array.isArray(data)) {
+  1357→      return data as SkillRegistryEntry[];
+  1358→    }
+  1359→
+  1360→    if (data && Array.isArray(data.results)) {
+  1361→      return data.results as SkillRegistryEntry[];
+  1362→    }
+  1363→
+  1364→    return [];
+  1365→  }
+  1366→
+  1367→  /**
+  1368→   * Check if a registry entry matches the given query terms.
+  1369→   */
+  1370→  private matchesQuery(
+  1371→    entry: SkillRegistryEntry,
+  1372→    queryTerms: string[]
+  1373→  ): boolean {
+  1374→    const searchable = [
+  1375→      entry.name,
+  1376→      entry.description,
+  1377→      entry.author,
+  1378→      ...entry.tags,
+  1379→    ]
+  1380→      .join(" ")
+  1381→      .toLowerCase();
+  1382→
+  1383→    return queryTerms.every((term) => searchable.includes(term));
+  1384→  }
+  1385→}
+  1386→
+  1387→// ---------------------------------------------------------------------------
+  1388→// Standalone utility functions
+  1389→// ---------------------------------------------------------------------------
+  1390→
+  1391→/**
+  1392→ * Extract meaningful keywords from a text string.
+  1393→ * Removes stop words and normalizes for comparison.
+  1394→ */
+  1395→function extractKeywords(text: string): string[] {
+  1396→  const stopWords = new Set([
+  1397→    "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from",
+  1398→    "has", "have", "how", "i", "if", "in", "is", "it", "its", "just",
+  1399→    "me", "my", "no", "not", "of", "on", "or", "our", "out", "own",
+  1400→    "say", "she", "so", "than", "that", "the", "their", "them", "then",
+  1401→    "there", "these", "they", "this", "to", "up", "us", "very", "was",
+  1402→    "we", "what", "when", "which", "who", "will", "with", "would", "you",
+  1403→    "your", "can", "could", "should", "shall", "may", "might", "must",
+  1404→  ]);
+  1405→
+  1406→  return text
+  1407→    .toLowerCase()
+  1408→    .replace(/[^a-z0-9\s-]/g, " ")
+  1409→    .split(/[\s-]+/)
+  1410→    .filter((word) => word.length > 1 && !stopWords.has(word));
+  1411→}
+  1412→
+  1413→/**
+  1414→ * Serialize a StandardSkillDefinition back into a valid SKILL.md format.
+  1415→ * Used when converting cross-tool formats to the standard format.
+  1416→ */
+  1417→function serializeToStandardFormat(skill: StandardSkillDefinition): string {
+  1418→  const lines: string[] = ["---"];
+  1419→
+  1420→  lines.push(`name: ${skill.name}`);
+  1421→  lines.push(`description: "${skill.description.replace(/"/g, '\\"')}"`);
+  1422→
+  1423→  if (skill.version) lines.push(`version: "${skill.version}"`);
+  1424→  if (skill.author) lines.push(`author: "${skill.author}"`);
+  1425→  if (skill.tags && skill.tags.length > 0) {
+  1426→    lines.push(`tags: [${skill.tags.map((t) => `"${t}"`).join(", ")}]`);
+  1427→  }
+  1428→  if (skill.tools && skill.tools.length > 0) {
+  1429→    lines.push(`tools: [${skill.tools.map((t) => `"${t}"`).join(", ")}]`);
+  1430→  }
+  1431→  if (skill.priority !== undefined) lines.push(`priority: ${skill.priority}`);
+  1432→  if (skill.invoke) lines.push(`invoke: ${skill.invoke}`);
+  1433→  if (skill.load) lines.push(`load: ${skill.load}`);
+  1434→
+  1435→  lines.push("---");
+  1436→  lines.push("");
+  1437→
+  1438→  if (skill.body) {
+  1439→    lines.push(skill.body);
+  1440→  }
+  1441→
+  1442→  return lines.join("\n");
+  1443→}
+  1444→
+  1445→/**
+  1446→ * Create a new SKILL.md file at the specified path.
+  1447→ * Convenience function for bootstrapping new skills.
+  1448→ */
+  1449→export function createSkillFile(
+  1450→  dirPath: string,
+  1451→  definition: Omit<StandardSkillDefinition, "filePath" | "source" | "body"> & {
+  1452→    body?: string;
+  1453→  }
+  1454→): string {
+  1455→  ensureDir(dirPath);
+  1456→
+  1457→  const skill: StandardSkillDefinition = {
+  1458→    ...definition,
+  1459→    body: definition.body || `# ${definition.name}\n\nSkill content goes here.\n`,
+  1460→    filePath: "",
+  1461→    source: "project",
+  1462→  };
+  1463→
+  1464→  const content = serializeToStandardFormat(skill);
+  1465→  const filePath = path.join(dirPath, SKILL_FILENAME);
+  1466→  fs.writeFileSync(filePath, content, "utf8");
+  1467→
+  1468→  return filePath;
+  1469→}
+  1470→
+  1471→/**
+  1472→ * Validate a skill name against the specification requirements.
+  1473→ */
+  1474→export function validateSkillName(name: string): {
+  1475→  valid: boolean;
+  1476→  errors: string[];
+  1477→} {
+  1478→  const errors: string[] = [];
+  1479→
+  1480→  if (!name) {
+  1481→    errors.push("Name is required.");
+  1482→  } else {
+  1483→    if (name.length > MAX_NAME_LENGTH) {
+  1484→      errors.push(
+  1485→        `Name exceeds maximum length of ${MAX_NAME_LENGTH} characters (got ${name.length}).`
+  1486→      );
+  1487→    }
+  1488→    if (!/^[a-z]/.test(name)) {
+  1489→      errors.push("Name must start with a lowercase letter.");
+  1490→    }
+  1491→    if (/[^a-z0-9-]/.test(name)) {
+  1492→      errors.push(
+  1493→        "Name must contain only lowercase letters, digits, and hyphens."
+  1494→      );
+  1495→    }
+  1496→    if (name.endsWith("-")) {
+  1497→      errors.push("Name must not end with a hyphen.");
+  1498→    }
+  1499→    if (name.includes("--")) {
+  1500→      errors.push("Name must not contain consecutive hyphens.");
+  1501→    }
+  1502→  }
+  1503→
+  1504→  return { valid: errors.length === 0, errors };
+  1505→}
+  1506→

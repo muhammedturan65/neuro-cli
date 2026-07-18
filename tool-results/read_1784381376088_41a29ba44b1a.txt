@@ -1,0 +1,1880 @@
+     1→// ============================================================
+     2→// NeuroCLI - Browser Automation Tool
+     3→// Headless Chrome control via Chrome DevTools Protocol
+     4→// Fallback: curl-based HTTP requests when no browser available
+     5→// ============================================================
+     6→
+     7→import { spawn, ChildProcess, execSync } from 'child_process';
+     8→import { createWriteStream, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+     9→import { join, resolve } from 'path';
+    10→import { createHash } from 'crypto';
+    11→import { ToolExecutor, ToolContext } from './registry.js';
+    12→import { ToolDefinition } from '../core/types.js';
+    13→
+    14→// ============================================================
+    15→// Interfaces
+    16→// ============================================================
+    17→
+    18→export interface BrowserConfig {
+    19→  headless: boolean;
+    20→  defaultTimeout: number;
+    21→  defaultViewport: { width: number; height: number };
+    22→  userAgent?: string;
+    23→  blockImages: boolean;
+    24→  blockCSS: boolean;
+    25→  stealth: boolean;
+    26→  proxy?: string;
+    27→  cookies?: Record<string, string>;
+    28→}
+    29→
+    30→export interface BrowserAction {
+    31→  type: 'navigate' | 'click' | 'type' | 'select' | 'wait' | 'evaluate' | 'screenshot' | 'scroll' | 'download';
+    32→  target?: string;
+    33→  value?: string;
+    34→  timestamp: number;
+    35→  duration?: number;
+    36→  result?: 'success' | 'error';
+    37→  error?: string;
+    38→}
+    39→
+    40→export interface BrowserSession {
+    41→  id: string;
+    42→  startedAt: number;
+    43→  currentUrl: string;
+    44→  title: string;
+    45→  statusCode: number;
+    46→  viewport: { width: number; height: number };
+    47→  actions: BrowserAction[];
+    48→  cookies: Record<string, string>;
+    49→  history: string[];
+    50→  historyIndex: number;
+    51→}
+    52→
+    53→interface CDPRequest {
+    54→  id: number;
+    55→  method: string;
+    56→  params?: Record<string, unknown>;
+    57→}
+    58→
+    59→interface CDPResponse {
+    60→  id: number;
+    61→  result?: Record<string, unknown>;
+    62→  error?: { code: number; message: string };
+    63→}
+    64→
+    65→interface CDPEvent {
+    66→  method: string;
+    67→  params?: Record<string, unknown>;
+    68→}
+    69→
+    70→// ============================================================
+    71→// Default Configuration
+    72→// ============================================================
+    73→
+    74→const DEFAULT_CONFIG: BrowserConfig = {
+    75→  headless: true,
+    76→  defaultTimeout: 30000,
+    77→  defaultViewport: { width: 1280, height: 720 },
+    78→  blockImages: false,
+    79→  blockCSS: false,
+    80→  stealth: false,
+    81→};
+    82→
+    83→const DEVICE_PRESETS: Record<string, { userAgent: string; viewport: { width: number; height: number }; deviceScaleFactor: number; isMobile: boolean; hasTouch: boolean }> = {
+    84→  'iphone-x': {
+    85→    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+    86→    viewport: { width: 375, height: 812 },
+    87→    deviceScaleFactor: 3,
+    88→    isMobile: true,
+    89→    hasTouch: true,
+    90→  },
+    91→  'iphone-se': {
+    92→    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+    93→    viewport: { width: 375, height: 667 },
+    94→    deviceScaleFactor: 2,
+    95→    isMobile: true,
+    96→    hasTouch: true,
+    97→  },
+    98→  'ipad-pro': {
+    99→    userAgent: 'Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+   100→    viewport: { width: 1024, height: 1366 },
+   101→    deviceScaleFactor: 2,
+   102→    isMobile: true,
+   103→    hasTouch: true,
+   104→  },
+   105→  'pixel-7': {
+   106→    userAgent: 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36',
+   107→    viewport: { width: 412, height: 915 },
+   108→    deviceScaleFactor: 2.625,
+   109→    isMobile: true,
+   110→    hasTouch: true,
+   111→  },
+   112→  'galaxy-s21': {
+   113→    userAgent: 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36',
+   114→    viewport: { width: 360, height: 800 },
+   115→    deviceScaleFactor: 3,
+   116→    isMobile: true,
+   117→    hasTouch: true,
+   118→  },
+   119→  'desktop-1080p': {
+   120→    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
+   121→    viewport: { width: 1920, height: 1080 },
+   122→    deviceScaleFactor: 1,
+   123→    isMobile: false,
+   124→    hasTouch: false,
+   125→  },
+   126→  'desktop-1440p': {
+   127→    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
+   128→    viewport: { width: 2560, height: 1440 },
+   129→    deviceScaleFactor: 1,
+   130→    isMobile: false,
+   131→    hasTouch: false,
+   132→  },
+   133→};
+   134→
+   135→// ============================================================
+   136→// CDP Connection Helper
+   137→// ============================================================
+   138→
+   139→class CDPConnection {
+   140→  private ws: any = null;
+   141→  private requestId = 0;
+   142→  private pendingRequests: Map<number, { resolve: (value: any) => void; reject: (reason: any) => void }> = new Map();
+   143→  private eventHandlers: Map<string, Array<(params: any) => void>> = new Map();
+   144→  private buffer = '';
+   145→  private connected = false;
+   146→
+   147→  constructor(private wsUrl: string) {}
+   148→
+   149→  async connect(): Promise<void> {
+   150→    // Dynamic import of ws module - only if available
+   151→    try {
+   152→      const wsModule = await import('ws');
+   153→      const WebSocket = wsModule.default || wsModule.WebSocket || wsModule;
+   154→
+   155→      return new Promise<void>((resolve, reject) => {
+   156→        this.ws = new WebSocket(this.wsUrl);
+   157→
+   158→        this.ws.on('open', () => {
+   159→          this.connected = true;
+   160→          resolve();
+   161→        });
+   162→
+   163→        this.ws.on('message', (data: Buffer) => {
+   164→          this.handleMessage(data.toString());
+   165→        });
+   166→
+   167→        this.ws.on('error', (err: Error) => {
+   168→          if (!this.connected) reject(err);
+   169→        });
+   170→
+   171→        this.ws.on('close', () => {
+   172→          this.connected = false;
+   173→          // Reject all pending requests
+   174→          this.pendingRequests.forEach((pending) => {
+   175→            pending.reject(new Error('Connection closed'));
+   176→          });
+   177→          this.pendingRequests.clear();
+   178→        });
+   179→
+   180→        // Timeout
+   181→        setTimeout(() => {
+   182→          if (!this.connected) {
+   183→            reject(new Error('Connection timeout'));
+   184→          }
+   185→        }, 10000);
+   186→      });
+   187→    } catch {
+   188→      throw new Error('WebSocket module not available. Install "ws" package or use curl fallback.');
+   189→    }
+   190→  }
+   191→
+   192→  async send(method: string, params?: Record<string, unknown>): Promise<any> {
+   193→    if (!this.connected || !this.ws) {
+   194→      throw new Error('Not connected to browser');
+   195→    }
+   196→
+   197→    const id = ++this.requestId;
+   198→    const message: CDPRequest = { id, method, params: params || {} };
+   199→
+   200→    return new Promise((resolve, reject) => {
+   201→      const timeout = setTimeout(() => {
+   202→        this.pendingRequests.delete(id);
+   203→        reject(new Error(`CDP request timeout: ${method}`));
+   204→      }, 30000);
+   205→
+   206→      this.pendingRequests.set(id, {
+   207→        resolve: (value: any) => {
+   208→          clearTimeout(timeout);
+   209→          resolve(value);
+   210→        },
+   211→        reject: (reason: any) => {
+   212→          clearTimeout(timeout);
+   213→          reject(reason);
+   214→        },
+   215→      });
+   216→
+   217→      this.ws.send(JSON.stringify(message));
+   218→    });
+   219→  }
+   220→
+   221→  on(event: string, handler: (params: any) => void): void {
+   222→    if (!this.eventHandlers.has(event)) {
+   223→      this.eventHandlers.set(event, []);
+   224→    }
+   225→    this.eventHandlers.get(event)!.push(handler);
+   226→  }
+   227→
+   228→  removeListener(event: string, handler: (params: any) => void): void {
+   229→    const handlers = this.eventHandlers.get(event);
+   230→    if (handlers) {
+   231→      const idx = handlers.indexOf(handler);
+   232→      if (idx >= 0) handlers.splice(idx, 1);
+   233→    }
+   234→  }
+   235→
+   236→  disconnect(): void {
+   237→    if (this.ws) {
+   238→      try {
+   239→        this.ws.close();
+   240→      } catch {}
+   241→      this.ws = null;
+   242→      this.connected = false;
+   243→    }
+   244→  }
+   245→
+   246→  get isConnected(): boolean {
+   247→    return this.connected;
+   248→  }
+   249→
+   250→  private handleMessage(data: string): void {
+   251→    try {
+   252→      const message = JSON.parse(data);
+   253→
+   254→      // Response to a request
+   255→      if (message.id !== undefined) {
+   256→        const pending = this.pendingRequests.get(message.id);
+   257→        if (pending) {
+   258→          this.pendingRequests.delete(message.id);
+   259→          if (message.error) {
+   260→            pending.reject(new Error(`CDP error: ${message.error.message}`));
+   261→          } else {
+   262→            pending.resolve(message.result);
+   263→          }
+   264→        }
+   265→        return;
+   266→      }
+   267→
+   268→      // Event from browser
+   269→      if (message.method) {
+   270→        const handlers = this.eventHandlers.get(message.method);
+   271→        if (handlers) {
+   272→          for (const handler of handlers) {
+   273→            try {
+   274→              handler(message.params);
+   275→            } catch {}
+   276→          }
+   277→        }
+   278→      }
+   279→    } catch {}
+   280→  }
+   281→}
+   282→
+   283→// ============================================================
+   284→// Browser Tool Class
+   285→// ============================================================
+   286→
+   287→export class BrowserTool {
+   288→  private config: BrowserConfig;
+   289→  private browserProcess: ChildProcess | null = null;
+   290→  private cdp: CDPConnection | null = null;
+   291→  private sessionId: string;
+   292→  private session: BrowserSession;
+   293→  private chromePath: string | null = null;
+   294→  private debugPort = 0;
+   295→  private useCurlFallback = false;
+   296→  private screenshotDir: string;
+   297→
+   298→  constructor(config?: Partial<BrowserConfig>) {
+   299→    this.config = { ...DEFAULT_CONFIG, ...config };
+   300→    this.sessionId = createHash('md5').update(`browser-${Date.now()}-${Math.random()}`).digest('hex').slice(0, 12);
+   301→    this.screenshotDir = join(process.cwd(), '.neuro-screenshots');
+   302→
+   303→    this.session = {
+   304→      id: this.sessionId,
+   305→      startedAt: Date.now(),
+   306→      currentUrl: '',
+   307→      title: '',
+   308→      statusCode: 0,
+   309→      viewport: { ...this.config.defaultViewport },
+   310→      actions: [],
+   311→      cookies: this.config.cookies ? { ...this.config.cookies } : {},
+   312→      history: [],
+   313→      historyIndex: -1,
+   314→    };
+   315→  }
+   316→
+   317→  // ---- Lifecycle ----
+   318→
+   319→  async launch(options?: Partial<BrowserConfig>): Promise<string> {
+   320→    if (options) {
+   321→      this.config = { ...this.config, ...options };
+   322→    }
+   323→
+   324→    // Try to find a Chrome/Chromium executable
+   325→    this.chromePath = this.findChrome();
+   326→    if (!this.chromePath) {
+   327→      this.useCurlFallback = true;
+   328→      return 'Browser not found. Falling back to curl-based HTTP mode. Limited functionality available (navigate, getContent, getLinks, download).';
+   329→    }
+   330→
+   331→    // Find a free debug port
+   332→    this.debugPort = this.findFreePort();
+   333→
+   334→    const args: string[] = [
+   335→      `--remote-debugging-port=${this.debugPort}`,
+   336→      '--no-first-run',
+   337→      '--no-default-browser-check',
+   338→      '--disable-background-networking',
+   339→      '--disable-client-side-phishing-detection',
+   340→      '--disable-default-apps',
+   341→      '--disable-extensions',
+   342→      '--disable-hang-monitor',
+   343→      '--disable-popup-blocking',
+   344→      '--disable-prompt-on-repost',
+   345→      '--disable-sync',
+   346→      '--disable-translate',
+   347→      '--metrics-recording-only',
+   348→      '--safebrowsing-disable-auto-update',
+   349→    ];
+   350→
+   351→    if (this.config.headless) {
+   352→      args.push('--headless=new');
+   353→    }
+   354→
+   355→    if (this.config.proxy) {
+   356→      args.push(`--proxy-server=${this.config.proxy}`);
+   357→    }
+   358→
+   359→    // Stealth mode: reduce automation detection
+   360→    if (this.config.stealth) {
+   361→      args.push(
+   362→        '--disable-blink-features=AutomationControlled',
+   363→        '--excludeSwitches=enable-automation',
+   364→        '--disable-features=IsolateOrigins,site-per-process',
+   365→      );
+   366→    }
+   367→
+   368→    // Block images
+   369→    if (this.config.blockImages) {
+   370→      args.push('--blink-settings=imagesEnabled=false');
+   371→    }
+   372→
+   373→    // Set viewport
+   374→    args.push(`--window-size=${this.config.defaultViewport.width},${this.config.defaultViewport.height}`);
+   375→
+   376→    return new Promise((resolve, reject) => {
+   377→      try {
+   378→        this.browserProcess = spawn(this.chromePath!, args, {
+   379→          stdio: ['ignore', 'pipe', 'pipe'],
+   380→          detached: false,
+   381→        });
+   382→
+   383→        let stderr = '';
+   384→        this.browserProcess.stderr?.on('data', (data: Buffer) => {
+   385→          stderr += data.toString();
+   386→          // Detect when DevTools is ready
+   387→          if (stderr.includes('DevTools listening on')) {
+   388→            this.connectCDP().then(resolve).catch(reject);
+   389→          }
+   390→        });
+   391→
+   392→        this.browserProcess.on('error', (err) => {
+   393→          this.useCurlFallback = true;
+   394→          resolve(`Browser launch failed: ${err.message}. Falling back to curl mode.`);
+   395→        });
+   396→
+   397→        this.browserProcess.on('exit', () => {
+   398→          this.browserProcess = null;
+   399→          this.cdp = null;
+   400→        });
+   401→
+   402→        // Timeout for CDP connection
+   403→        setTimeout(() => {
+   404→          if (!this.cdp || !this.cdp.isConnected) {
+   405→            this.connectCDP().then(resolve).catch(() => {
+   406→              this.useCurlFallback = true;
+   407→              resolve('Browser CDP connection timed out. Falling back to curl mode.');
+   408→            });
+   409→          }
+   410→        }, 5000);
+   411→      } catch (err) {
+   412→        this.useCurlFallback = true;
+   413→        resolve(`Browser launch error. Falling back to curl mode.`);
+   414→      }
+   415→    });
+   416→  }
+   417→
+   418→  async close(): Promise<string> {
+   419→    if (this.cdp) {
+   420→      try {
+   421→        await this.cdp.send('Browser.close');
+   422→      } catch {}
+   423→      this.cdp.disconnect();
+   424→      this.cdp = null;
+   425→    }
+   426→
+   427→    if (this.browserProcess) {
+   428→      try {
+   429→        this.browserProcess.kill('SIGTERM');
+   430→        // Force kill after 2 seconds
+   431→        setTimeout(() => {
+   432→          try { this.browserProcess?.kill('SIGKILL'); } catch {}
+   433→        }, 2000);
+   434→      } catch {}
+   435→      this.browserProcess = null;
+   436→    }
+   437→
+   438→    return `Browser session ${this.sessionId} closed. ${this.session.actions.length} actions recorded.`;
+   439→  }
+   440→
+   441→  // ---- Navigation ----
+   442→
+   443→  async navigate(url: string): Promise<string> {
+   444→    const actionStart = Date.now();
+   445→    const action: BrowserAction = {
+   446→      type: 'navigate',
+   447→      target: url,
+   448→      timestamp: actionStart,
+   449→    };
+   450→
+   451→    try {
+   452→      if (this.useCurlFallback) {
+   453→        return this.curlNavigate(url);
+   454→      }
+   455→
+   456→      this.ensureConnected();
+   457→
+   458→      // Set cookies before navigation if configured
+   459→      if (this.config.cookies && Object.keys(this.config.cookies).length > 0) {
+   460→        for (const [name, value] of Object.entries(this.config.cookies)) {
+   461→          await this.cdp!.send('Network.setCookie', {
+   462→            name,
+   463→            value,
+   464→            domain: new URL(url).hostname,
+   465→          });
+   466→        }
+   467→      }
+   468→
+   469→      // Enable network tracking for status code
+   470→      await this.cdp!.send('Network.enable');
+   471→
+   472→      let statusCode = 0;
+   473→      const responseHandler = (params: any) => {
+   474→        if (params.response?.url === url) {
+   475→          statusCode = params.response.status;
+   476→        }
+   477→      };
+   478→      this.cdp!.on('Network.responseReceived', responseHandler);
+   479→
+   480→      const result = await this.cdp!.send('Page.navigate', { url });
+   481→      await this.cdp!.send('Page.loadEventFired');
+   482→
+   483→      this.cdp!.removeListener('Network.responseReceived', responseHandler);
+   484→
+   485→      // Update session
+   486→      this.session.currentUrl = url;
+   487→      this.session.statusCode = statusCode || 200;
+   488→      this.session.history = this.session.history.slice(0, this.session.historyIndex + 1);
+   489→      this.session.history.push(url);
+   490→      this.session.historyIndex = this.session.history.length - 1;
+   491→
+   492→      // Get page title
+   493→      const titleResult = await this.cdp!.send('Runtime.evaluate', {
+   494→        expression: 'document.title',
+   495→      });
+   496→      this.session.title = titleResult?.result?.value || '';
+   497→
+   498→      action.duration = Date.now() - actionStart;
+   499→      action.result = 'success';
+   500→      this.session.actions.push(action);
+   501→
+   502→      return `Navigated to: ${url}\nTitle: ${this.session.title}\nStatus: ${this.session.statusCode}`;
+   503→    } catch (err: any) {
+   504→      action.duration = Date.now() - actionStart;
+   505→      action.result = 'error';
+   506→      action.error = err.message;
+   507→      this.session.actions.push(action);
+   508→      return `Navigation error: ${err.message}`;
+   509→    }
+   510→  }
+   511→
+   512→  async goBack(): Promise<string> {
+   513→    if (this.useCurlFallback) {
+   514→      if (this.session.historyIndex > 0) {
+   515→        this.session.historyIndex--;
+   516→        return this.navigate(this.session.history[this.session.historyIndex]);
+   517→      }
+   518→      return 'No previous page in history';
+   519→    }
+   520→
+   521→    this.ensureConnected();
+   522→
+   523→    try {
+   524→      await this.cdp!.send('Page.goBack');
+   525→      await this.cdp!.send('Page.loadEventFired');
+   526→
+   527→      if (this.session.historyIndex > 0) {
+   528→        this.session.historyIndex--;
+   529→        this.session.currentUrl = this.session.history[this.session.historyIndex];
+   530→      }
+   531→
+   532→      return `Navigated back to: ${this.session.currentUrl}`;
+   533→    } catch (err: any) {
+   534→      return `Go back error: ${err.message}`;
+   535→    }
+   536→  }
+   537→
+   538→  async goForward(): Promise<string> {
+   539→    if (this.useCurlFallback) {
+   540→      if (this.session.historyIndex < this.session.history.length - 1) {
+   541→        this.session.historyIndex++;
+   542→        return this.navigate(this.session.history[this.session.historyIndex]);
+   543→      }
+   544→      return 'No next page in history';
+   545→    }
+   546→
+   547→    this.ensureConnected();
+   548→
+   549→    try {
+   550→      await this.cdp!.send('Page.goForward');
+   551→      await this.cdp!.send('Page.loadEventFired');
+   552→
+   553→      if (this.session.historyIndex < this.session.history.length - 1) {
+   554→        this.session.historyIndex++;
+   555→        this.session.currentUrl = this.session.history[this.session.historyIndex];
+   556→      }
+   557→
+   558→      return `Navigated forward to: ${this.session.currentUrl}`;
+   559→    } catch (err: any) {
+   560→      return `Go forward error: ${err.message}`;
+   561→    }
+   562→  }
+   563→
+   564→  // ---- Page Interaction ----
+   565→
+   566→  async screenshot(selector?: string): Promise<string> {
+   567→    if (this.useCurlFallback) {
+   568→      return 'Screenshot not available in curl fallback mode';
+   569→    }
+   570→
+   571→    this.ensureConnected();
+   572→
+   573→    const actionStart = Date.now();
+   574→    const action: BrowserAction = {
+   575→      type: 'screenshot',
+   576→      target: selector,
+   577→      timestamp: actionStart,
+   578→    };
+   579→
+   580→    try {
+   581→      if (!existsSync(this.screenshotDir)) {
+   582→        mkdirSync(this.screenshotDir, { recursive: true });
+   583→      }
+   584→
+   585→      let screenshotData: string;
+   586→
+   587→      if (selector) {
+   588→        // Screenshot a specific element
+   589→        const elementResult = await this.cdp!.send('Runtime.evaluate', {
+   590→          expression: `
+   591→            (function() {
+   592→              const el = document.querySelector(${JSON.stringify(selector)});
+   593→              if (!el) return null;
+   594→              const rect = el.getBoundingClientRect();
+   595→              return JSON.stringify({
+   596→                x: rect.x,
+   597→                y: rect.y,
+   598→                width: rect.width,
+   599→                height: rect.height,
+   600→                scale: window.devicePixelRatio || 1
+   601→              });
+   602→            })()
+   603→          `,
+   604→        });
+   605→
+   606→        if (!elementResult?.result?.value) {
+   607→          return `Element not found: ${selector}`;
+   608→        }
+   609→
+   610→        const clip = JSON.parse(elementResult.result.value);
+   611→        const result = await this.cdp!.send('Page.captureScreenshot', {
+   612→          format: 'png',
+   613→          clip: {
+   614→            x: clip.x,
+   615→            y: clip.y,
+   616→            width: clip.width,
+   617→            height: clip.height,
+   618→            scale: clip.scale,
+   619→          },
+   620→        });
+   621→
+   622→        screenshotData = result.data;
+   623→      } else {
+   624→        // Full page screenshot
+   625→        const metrics = await this.cdp!.send('Page.getLayoutMetrics');
+   626→        const width = Math.ceil(metrics.cssContentSize?.width || this.config.defaultViewport.width);
+   627→        const height = Math.ceil(metrics.cssContentSize?.height || this.config.defaultViewport.height);
+   628→
+   629→        await this.cdp!.send('Emulation.setDeviceMetricsOverride', {
+   630→          width,
+   631→          height,
+   632→          deviceScaleFactor: 1,
+   633→          mobile: false,
+   634→        });
+   635→
+   636→        const result = await this.cdp!.send('Page.captureScreenshot', {
+   637→          format: 'png',
+   638→        });
+   639→
+   640→        screenshotData = result.data;
+   641→
+   642→        // Reset viewport
+   643→        await this.cdp!.send('Emulation.setDeviceMetricsOverride', {
+   644→          width: this.session.viewport.width,
+   645→          height: this.session.viewport.height,
+   646→          deviceScaleFactor: 1,
+   647→          mobile: false,
+   648→        });
+   649→      }
+   650→
+   651→      // Save to file
+   652→      const filename = `screenshot-${Date.now()}.png`;
+   653→      const filepath = join(this.screenshotDir, filename);
+   654→      const buffer = Buffer.from(screenshotData, 'base64');
+   655→      writeFileSync(filepath, buffer);
+   656→
+   657→      action.duration = Date.now() - actionStart;
+   658→      action.result = 'success';
+   659→      this.session.actions.push(action);
+   660→
+   661→      return `Screenshot saved: ${filepath} (${(buffer.length / 1024).toFixed(1)}KB)`;
+   662→    } catch (err: any) {
+   663→      action.duration = Date.now() - actionStart;
+   664→      action.result = 'error';
+   665→      action.error = err.message;
+   666→      this.session.actions.push(action);
+   667→      return `Screenshot error: ${err.message}`;
+   668→    }
+   669→  }
+   670→
+   671→  async click(selector: string): Promise<string> {
+   672→    if (this.useCurlFallback) {
+   673→      return 'Click not available in curl fallback mode';
+   674→    }
+   675→
+   676→    this.ensureConnected();
+   677→
+   678→    const actionStart = Date.now();
+   679→    const action: BrowserAction = {
+   680→      type: 'click',
+   681→      target: selector,
+   682→      timestamp: actionStart,
+   683→    };
+   684→
+   685→    try {
+   686→      // Get element position
+   687→      const elementResult = await this.cdp!.send('Runtime.evaluate', {
+   688→        expression: `
+   689→          (function() {
+   690→            const el = document.querySelector(${JSON.stringify(selector)});
+   691→            if (!el) return null;
+   692→            const rect = el.getBoundingClientRect();
+   693→            return JSON.stringify({
+   694→              x: rect.x + rect.width / 2,
+   695→              y: rect.y + rect.height / 2
+   696→            });
+   697→          })()
+   698→        `,
+   699→      });
+   700→
+   701→      if (!elementResult?.result?.value) {
+   702→        action.result = 'error';
+   703→        action.error = `Element not found: ${selector}`;
+   704→        this.session.actions.push(action);
+   705→        return `Element not found: ${selector}`;
+   706→      }
+   707→
+   708→      const { x, y } = JSON.parse(elementResult.result.value);
+   709→
+   710→      // Dispatch mouse events
+   711→      await this.cdp!.send('Input.dispatchMouseEvent', {
+   712→        type: 'mousePressed',
+   713→        x,
+   714→        y,
+   715→        button: 'left',
+   716→        clickCount: 1,
+   717→      });
+   718→
+   719→      await this.cdp!.send('Input.dispatchMouseEvent', {
+   720→        type: 'mouseReleased',
+   721→        x,
+   722→        y,
+   723→        button: 'left',
+   724→        clickCount: 1,
+   725→      });
+   726→
+   727→      // Small delay for any JS handlers
+   728→      await this.delay(100);
+   729→
+   730→      action.duration = Date.now() - actionStart;
+   731→      action.result = 'success';
+   732→      this.session.actions.push(action);
+   733→
+   734→      return `Clicked: ${selector} at (${x.toFixed(0)}, ${y.toFixed(0)})`;
+   735→    } catch (err: any) {
+   736→      action.duration = Date.now() - actionStart;
+   737→      action.result = 'error';
+   738→      action.error = err.message;
+   739→      this.session.actions.push(action);
+   740→      return `Click error: ${err.message}`;
+   741→    }
+   742→  }
+   743→
+   744→  async type(selector: string, text: string): Promise<string> {
+   745→    if (this.useCurlFallback) {
+   746→      return 'Type not available in curl fallback mode';
+   747→    }
+   748→
+   749→    this.ensureConnected();
+   750→
+   751→    const actionStart = Date.now();
+   752→    const action: BrowserAction = {
+   753→      type: 'type',
+   754→      target: selector,
+   755→      value: text,
+   756→      timestamp: actionStart,
+   757→    };
+   758→
+   759→    try {
+   760→      // Focus the element first
+   761→      await this.cdp!.send('Runtime.evaluate', {
+   762→        expression: `document.querySelector(${JSON.stringify(selector)})?.focus()`,
+   763→      });
+   764→
+   765→      // Clear existing content
+   766→      await this.cdp!.send('Runtime.evaluate', {
+   767→        expression: `
+   768→          (function() {
+   769→            const el = document.querySelector(${JSON.stringify(selector)});
+   770→            if (el) {
+   771→              el.value = '';
+   772→              el.dispatchEvent(new Event('input', { bubbles: true }));
+   773→            }
+   774→          })()
+   775→        `,
+   776→      });
+   777→
+   778→      // Type each character for realistic input
+   779→      for (const char of text) {
+   780→        await this.cdp!.send('Input.dispatchKeyEvent', {
+   781→          type: 'keyDown',
+   782→          text: char,
+   783→          key: char,
+   784→        });
+   785→
+   786→        await this.delay(10);
+   787→
+   788→        await this.cdp!.send('Input.dispatchKeyEvent', {
+   789→          type: 'keyUp',
+   790→          key: char,
+   791→        });
+   792→
+   793→        await this.delay(10);
+   794→      }
+   795→
+   796→      // Trigger change event
+   797→      await this.cdp!.send('Runtime.evaluate', {
+   798→        expression: `
+   799→          document.querySelector(${JSON.stringify(selector)})?.dispatchEvent(new Event('change', { bubbles: true }))
+   800→        `,
+   801→      });
+   802→
+   803→      action.duration = Date.now() - actionStart;
+   804→      action.result = 'success';
+   805→      this.session.actions.push(action);
+   806→
+   807→      return `Typed "${text.length > 50 ? text.slice(0, 50) + '...' : text}" into ${selector}`;
+   808→    } catch (err: any) {
+   809→      action.duration = Date.now() - actionStart;
+   810→      action.result = 'error';
+   811→      action.error = err.message;
+   812→      this.session.actions.push(action);
+   813→      return `Type error: ${err.message}`;
+   814→    }
+   815→  }
+   816→
+   817→  async select(selector: string, value: string): Promise<string> {
+   818→    if (this.useCurlFallback) {
+   819→      return 'Select not available in curl fallback mode';
+   820→    }
+   821→
+   822→    this.ensureConnected();
+   823→
+   824→    const actionStart = Date.now();
+   825→    const action: BrowserAction = {
+   826→      type: 'select',
+   827→      target: selector,
+   828→      value,
+   829→      timestamp: actionStart,
+   830→    };
+   831→
+   832→    try {
+   833→      const result = await this.cdp!.send('Runtime.evaluate', {
+   834→        expression: `
+   835→          (function() {
+   836→            const el = document.querySelector(${JSON.stringify(selector)});
+   837→            if (!el || el.tagName !== 'SELECT') return { error: 'Not a select element' };
+   838→            el.value = ${JSON.stringify(value)};
+   839→            el.dispatchEvent(new Event('change', { bubbles: true }));
+   840→            return { selectedValue: el.value };
+   841→          })()
+   842→        `,
+   843→        returnByValue: true,
+   844→      });
+   845→
+   846→      action.duration = Date.now() - actionStart;
+   847→
+   848→      if (result?.result?.value?.error) {
+   849→        action.result = 'error';
+   850→        action.error = result.result.value.error;
+   851→        this.session.actions.push(action);
+   852→        return `Select error: ${result.result.value.error}`;
+   853→      }
+   854→
+   855→      action.result = 'success';
+   856→      this.session.actions.push(action);
+   857→
+   858→      return `Selected "${value}" in ${selector}`;
+   859→    } catch (err: any) {
+   860→      action.duration = Date.now() - actionStart;
+   861→      action.result = 'error';
+   862→      action.error = err.message;
+   863→      this.session.actions.push(action);
+   864→      return `Select error: ${err.message}`;
+   865→    }
+   866→  }
+   867→
+   868→  async wait(selector: string, timeout?: number): Promise<string> {
+   869→    if (this.useCurlFallback) {
+   870→      return 'Wait not available in curl fallback mode';
+   871→    }
+   872→
+   873→    this.ensureConnected();
+   874→
+   875→    const actionStart = Date.now();
+   876→    const waitTimeout = timeout || this.config.defaultTimeout;
+   877→    const action: BrowserAction = {
+   878→      type: 'wait',
+   879→      target: selector,
+   880→      timestamp: actionStart,
+   881→    };
+   882→
+   883→    try {
+   884→      const result = await this.cdp!.send('Runtime.evaluate', {
+   885→        expression: `
+   886→          new Promise((resolve, reject) => {
+   887→            const timeout = setTimeout(() => reject(new Error('Timeout waiting for ${selector}')), ${waitTimeout});
+   888→            const check = () => {
+   889→              if (document.querySelector(${JSON.stringify(selector)})) {
+   890→                clearTimeout(timeout);
+   891→                resolve(true);
+   892→              } else {
+   893→                requestAnimationFrame(check);
+   894→              }
+   895→            };
+   896→            check();
+   897→          })
+   898→        `,
+   899→        awaitPromise: true,
+   900→        returnByValue: true,
+   901→      });
+   902→
+   903→      action.duration = Date.now() - actionStart;
+   904→      action.result = 'success';
+   905→      this.session.actions.push(action);
+   906→
+   907→      return `Element found: ${selector} (waited ${action.duration}ms)`;
+   908→    } catch (err: any) {
+   909→      action.duration = Date.now() - actionStart;
+   910→      action.result = 'error';
+   911→      action.error = err.message;
+   912→      this.session.actions.push(action);
+   913→      return `Wait error: ${err.message}`;
+   914→    }
+   915→  }
+   916→
+   917→  // ---- Page Evaluation ----
+   918→
+   919→  async evaluate(script: string): Promise<string> {
+   920→    if (this.useCurlFallback) {
+   921→      return 'JavaScript evaluation not available in curl fallback mode';
+   922→    }
+   923→
+   924→    this.ensureConnected();
+   925→
+   926→    const actionStart = Date.now();
+   927→    const action: BrowserAction = {
+   928→      type: 'evaluate',
+   929→      value: script.slice(0, 200),
+   930→      timestamp: actionStart,
+   931→    };
+   932→
+   933→    try {
+   934→      const result = await this.cdp!.send('Runtime.evaluate', {
+   935→        expression: script,
+   936→        returnByValue: true,
+   937→        awaitPromise: true,
+   938→      });
+   939→
+   940→      action.duration = Date.now() - actionStart;
+   941→
+   942→      if (result?.exceptionDetails) {
+   943→        action.result = 'error';
+   944→        action.error = result.exceptionDetails.text || 'Evaluation error';
+   945→        this.session.actions.push(action);
+   946→        return `Evaluation error: ${result.exceptionDetails.text}\n${result.exceptionDetails.exception?.description || ''}`;
+   947→      }
+   948→
+   949→      action.result = 'success';
+   950→      this.session.actions.push(action);
+   951→
+   952→      const value = result?.result?.value;
+   953→      const output = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? 'undefined');
+   954→
+   955→      return truncateOutput(`Result: ${output}`);
+   956→    } catch (err: any) {
+   957→      action.duration = Date.now() - actionStart;
+   958→      action.result = 'error';
+   959→      action.error = err.message;
+   960→      this.session.actions.push(action);
+   961→      return `Evaluate error: ${err.message}`;
+   962→    }
+   963→  }
+   964→
+   965→  // ---- Content Extraction ----
+   966→
+   967→  async getContent(selector?: string): Promise<string> {
+   968→    if (this.useCurlFallback) {
+   969→      return this.curlGetContent();
+   970→    }
+   971→
+   972→    this.ensureConnected();
+   973→
+   974→    try {
+   975→      const expression = selector
+   976→        ? `document.querySelector(${JSON.stringify(selector)})?.innerText || document.querySelector(${JSON.stringify(selector)})?.outerHTML || ''`
+   977→        : `document.body.innerText`;
+   978→
+   979→      const result = await this.cdp!.send('Runtime.evaluate', {
+   980→        expression,
+   981→        returnByValue: true,
+   982→      });
+   983→
+   984→      const content = result?.result?.value || '';
+   985→
+   986→      if (selector && !content) {
+   987→        // Try outerHTML
+   988→        const htmlResult = await this.cdp!.send('Runtime.evaluate', {
+   989→          expression: `document.querySelector(${JSON.stringify(selector)})?.outerHTML || ''`,
+   990→          returnByValue: true,
+   991→        });
+   992→
+   993→        return truncateOutput(htmlResult?.result?.value || `Element not found: ${selector}`);
+   994→      }
+   995→
+   996→      return truncateOutput(content || 'No content found');
+   997→    } catch (err: any) {
+   998→      return `Get content error: ${err.message}`;
+   999→    }
+  1000→  }
+  1001→
+  1002→  async getLinks(): Promise<string> {
+  1003→    if (this.useCurlFallback) {
+  1004→      return this.curlGetLinks();
+  1005→    }
+  1006→
+  1007→    this.ensureConnected();
+  1008→
+  1009→    try {
+  1010→      const result = await this.cdp!.send('Runtime.evaluate', {
+  1011→        expression: `
+  1012→          Array.from(document.querySelectorAll('a[href]')).map(a => ({
+  1013→            text: a.innerText.trim().slice(0, 100),
+  1014→            href: a.href,
+  1015→            target: a.target
+  1016→          }))
+  1017→        `,
+  1018→        returnByValue: true,
+  1019→      });
+  1020→
+  1021→      const links: Array<{ text: string; href: string; target: string }> = result?.result?.value || [];
+  1022→
+  1023→      if (links.length === 0) {
+  1024→        return 'No links found on this page';
+  1025→      }
+  1026→
+  1027→      const formatted = links.map((link, i) => {
+  1028→        const text = link.text || '(no text)';
+  1029→        return `${i + 1}. ${text}\n   ${link.href}${link.target ? ` [target=${link.target}]` : ''}`;
+  1030→      }).join('\n\n');
+  1031→
+  1032→      return `Found ${links.length} links:\n\n${truncateOutput(formatted)}`;
+  1033→    } catch (err: any) {
+  1034→      return `Get links error: ${err.message}`;
+  1035→    }
+  1036→  }
+  1037→
+  1038→  async getForms(): Promise<string> {
+  1039→    if (this.useCurlFallback) {
+  1040→      return 'Form extraction not available in curl fallback mode';
+  1041→    }
+  1042→
+  1043→    this.ensureConnected();
+  1044→
+  1045→    try {
+  1046→      const result = await this.cdp!.send('Runtime.evaluate', {
+  1047→        expression: `
+  1048→          Array.from(document.forms).map((form, i) => ({
+  1049→            index: i,
+  1050→            id: form.id,
+  1051→            name: form.name,
+  1052→            action: form.action,
+  1053→            method: form.method,
+  1054→            fields: Array.from(form.elements).map(el => ({
+  1055→              tag: el.tagName,
+  1056→              type: el.type,
+  1057→              name: el.name,
+  1058→              id: el.id,
+  1059→              value: el.type === 'password' ? '***' : (el.value || ''),
+  1060→              required: el.required,
+  1061→              placeholder: el.placeholder
+  1062→            }))
+  1063→          }))
+  1064→        `,
+  1065→        returnByValue: true,
+  1066→      });
+  1067→
+  1068→      const forms: Array<{
+  1069→        index: number;
+  1070→        id: string;
+  1071→        name: string;
+  1072→        action: string;
+  1073→        method: string;
+  1074→        fields: Array<{ tag: string; type: string; name: string; id: string; value: string; required: boolean; placeholder: string }>;
+  1075→      }> = result?.result?.value || [];
+  1076→
+  1077→      if (forms.length === 0) {
+  1078→        return 'No forms found on this page';
+  1079→      }
+  1080→
+  1081→      const formatted = forms.map(form => {
+  1082→        const header = `Form ${form.index + 1}: ${form.name || form.id || '(unnamed)'}`;
+  1083→        const meta = `  Action: ${form.action} | Method: ${form.method.toUpperCase()}`;
+  1084→        const fields = form.fields.map(f => {
+  1085→          const label = f.name || f.id || f.type;
+  1086→          const details: string[] = [f.tag.toLowerCase()];
+  1087→          if (f.type) details.push(`type=${f.type}`);
+  1088→          if (f.required) details.push('required');
+  1089→          if (f.placeholder) details.push(`placeholder="${f.placeholder}"`);
+  1090→          if (f.value) details.push(`value="${f.value.slice(0, 50)}"`);
+  1091→          return `    - ${label}: ${details.join(', ')}`;
+  1092→        }).join('\n');
+  1093→        return `${header}\n${meta}\n  Fields:\n${fields}`;
+  1094→      }).join('\n\n');
+  1095→
+  1096→      return `Found ${forms.length} form(s):\n\n${formatted}`;
+  1097→    } catch (err: any) {
+  1098→      return `Get forms error: ${err.message}`;
+  1099→    }
+  1100→  }
+  1101→
+  1102→  async fillForm(selector: string, data: Record<string, string>): Promise<string> {
+  1103→    if (this.useCurlFallback) {
+  1104→      return 'Form filling not available in curl fallback mode';
+  1105→    }
+  1106→
+  1107→    this.ensureConnected();
+  1108→
+  1109→    const actionStart = Date.now();
+  1110→    const action: BrowserAction = {
+  1111→      type: 'type',
+  1112→      target: selector,
+  1113→      value: JSON.stringify(data),
+  1114→      timestamp: actionStart,
+  1115→    };
+  1116→
+  1117→    try {
+  1118→      // Fill each field
+  1119→      const results: string[] = [];
+  1120→      for (const [name, value] of Object.entries(data)) {
+  1121→        const fillResult = await this.cdp!.send('Runtime.evaluate', {
+  1122→          expression: `
+  1123→            (function() {
+  1124→              const form = document.querySelector(${JSON.stringify(selector)});
+  1125→              if (!form) return { error: 'Form not found' };
+  1126→
+  1127→              // Try finding by name, then id
+  1128→              let el = form.elements.namedItem(${JSON.stringify(name)}) ||
+  1129→                       form.querySelector('#' + ${JSON.stringify(name)}) ||
+  1130→                       form.querySelector('[name="' + ${JSON.stringify(name)} + '"]');
+  1131→
+  1132→              if (!el) return { error: 'Field not found: ${name}' };
+  1133→
+  1134→              if (el.tagName === 'SELECT') {
+  1135→                el.value = ${JSON.stringify(value)};
+  1136→              } else if (el.type === 'checkbox') {
+  1137→                el.checked = ${JSON.stringify(value)} === 'true' || ${JSON.stringify(value)} === 'on';
+  1138→              } else if (el.type === 'radio') {
+  1139→                const radio = form.querySelector('input[name="${name}"][value="${value}"]');
+  1140→                if (radio) radio.checked = true;
+  1141→              } else {
+  1142→                el.value = ${JSON.stringify(value)};
+  1143→              }
+  1144→
+  1145→              el.dispatchEvent(new Event('input', { bubbles: true }));
+  1146→              el.dispatchEvent(new Event('change', { bubbles: true }));
+  1147→              return { success: true, field: '${name}' };
+  1148→            })()
+  1149→          `,
+  1150→          returnByValue: true,
+  1151→        });
+  1152→
+  1153→        if (fillResult?.result?.value?.error) {
+  1154→          results.push(`  ⚠ ${name}: ${fillResult.result.value.error}`);
+  1155→        } else {
+  1156→          results.push(`  ✓ ${name}: set to "${value.slice(0, 50)}"`);
+  1157→        }
+  1158→      }
+  1159→
+  1160→      action.duration = Date.now() - actionStart;
+  1161→      action.result = 'success';
+  1162→      this.session.actions.push(action);
+  1163→
+  1164→      return `Form fill results:\n${results.join('\n')}`;
+  1165→    } catch (err: any) {
+  1166→      action.duration = Date.now() - actionStart;
+  1167→      action.result = 'error';
+  1168→      action.error = err.message;
+  1169→      this.session.actions.push(action);
+  1170→      return `Fill form error: ${err.message}`;
+  1171→    }
+  1172→  }
+  1173→
+  1174→  // ---- File Download ----
+  1175→
+  1176→  async download(url: string, outputPath: string): Promise<string> {
+  1177→    const actionStart = Date.now();
+  1178→    const action: BrowserAction = {
+  1179→      type: 'download',
+  1180→      target: url,
+  1181→      value: outputPath,
+  1182→      timestamp: actionStart,
+  1183→    };
+  1184→
+  1185→    try {
+  1186→      const absolutePath = resolve(outputPath);
+  1187→      const dir = join(absolutePath, '..');
+  1188→      if (!existsSync(dir)) {
+  1189→        mkdirSync(dir, { recursive: true });
+  1190→      }
+  1191→
+  1192→      // Use curl for downloads (works in both modes)
+  1193→      const result = execSync(
+  1194→        `curl -L -s -o "${absolutePath}" -w "%{http_code}|%{size_download}|%{content_type}" "${url}"`,
+  1195→        { encoding: 'utf-8', timeout: 120000 }
+  1196→      );
+  1197→
+  1198→      const [statusCode, size, contentType] = result.split('|');
+  1199→
+  1200→      action.duration = Date.now() - actionStart;
+  1201→      action.result = 'success';
+  1202→      this.session.actions.push(action);
+  1203→
+  1204→      return `Downloaded: ${url}\n  → ${absolutePath}\n  Size: ${(Number(size) / 1024).toFixed(1)}KB | Status: ${statusCode} | Type: ${contentType}`;
+  1205→    } catch (err: any) {
+  1206→      action.duration = Date.now() - actionStart;
+  1207→      action.result = 'error';
+  1208→      action.error = err.message;
+  1209→      this.session.actions.push(action);
+  1210→      return `Download error: ${err.message}`;
+  1211→    }
+  1212→  }
+  1213→
+  1214→  // ---- Scroll ----
+  1215→
+  1216→  async scroll(direction: 'up' | 'down' | 'left' | 'right', amount: number = 300): Promise<string> {
+  1217→    if (this.useCurlFallback) {
+  1218→      return 'Scroll not available in curl fallback mode';
+  1219→    }
+  1220→
+  1221→    this.ensureConnected();
+  1222→
+  1223→    const actionStart = Date.now();
+  1224→    const action: BrowserAction = {
+  1225→      type: 'scroll',
+  1226→      value: `${direction} ${amount}`,
+  1227→      timestamp: actionStart,
+  1228→    };
+  1229→
+  1230→    try {
+  1231→      let scrollExpr: string;
+  1232→      switch (direction) {
+  1233→        case 'down':
+  1234→          scrollExpr = `window.scrollBy(0, ${amount})`;
+  1235→          break;
+  1236→        case 'up':
+  1237→          scrollExpr = `window.scrollBy(0, -${amount})`;
+  1238→          break;
+  1239→        case 'right':
+  1240→          scrollExpr = `window.scrollBy(${amount}, 0)`;
+  1241→          break;
+  1242→        case 'left':
+  1243→          scrollExpr = `window.scrollBy(-${amount}, 0)`;
+  1244→          break;
+  1245→      }
+  1246→
+  1247→      await this.cdp!.send('Runtime.evaluate', {
+  1248→        expression: scrollExpr,
+  1249→      });
+  1250→
+  1251→      // Get scroll position
+  1252→      const posResult = await this.cdp!.send('Runtime.evaluate', {
+  1253→        expression: `JSON.stringify({ x: window.scrollX, y: window.scrollY })`,
+  1254→        returnByValue: true,
+  1255→      });
+  1256→
+  1257→      const pos = JSON.parse(posResult?.result?.value || '{}');
+  1258→
+  1259→      action.duration = Date.now() - actionStart;
+  1260→      action.result = 'success';
+  1261→      this.session.actions.push(action);
+  1262→
+  1263→      return `Scrolled ${direction} by ${amount}px. Position: (${pos.x}, ${pos.y})`;
+  1264→    } catch (err: any) {
+  1265→      action.duration = Date.now() - actionStart;
+  1266→      action.result = 'error';
+  1267→      action.error = err.message;
+  1268→      this.session.actions.push(action);
+  1269→      return `Scroll error: ${err.message}`;
+  1270→    }
+  1271→  }
+  1272→
+  1273→  // ---- Page Info ----
+  1274→
+  1275→  async getPageInfo(): Promise<string> {
+  1276→    if (this.useCurlFallback) {
+  1277→      return `Session: ${this.session.id}\nMode: curl fallback\nURL: ${this.session.currentUrl || 'none'}\nActions: ${this.session.actions.length}`;
+  1278→    }
+  1279→
+  1280→    try {
+  1281→      this.ensureConnected();
+  1282→
+  1283→      const infoResult = await this.cdp!.send('Runtime.evaluate', {
+  1284→        expression: `
+  1285→          JSON.stringify({
+  1286→            url: window.location.href,
+  1287→            title: document.title,
+  1288→            charset: document.characterSet,
+  1289→            language: document.documentElement.lang,
+  1290→            referrer: document.referrer,
+  1291→            readyState: document.readyState,
+  1292→            viewport: { width: window.innerWidth, height: window.innerHeight },
+  1293→            scrollPosition: { x: window.scrollX, y: window.scrollY },
+  1294→            documentHeight: document.documentElement.scrollHeight,
+  1295→            cookieCount: document.cookie.split(';').filter(c => c.trim()).length,
+  1296→            linkCount: document.querySelectorAll('a').length,
+  1297→            imageCount: document.querySelectorAll('img').length,
+  1298→            formCount: document.forms.length,
+  1299→            scriptCount: document.querySelectorAll('script').length,
+  1300→          })
+  1301→        `,
+  1302→        returnByValue: true,
+  1303→      });
+  1304→
+  1305→      const info = JSON.parse(infoResult?.result?.value || '{}');
+  1306→
+  1307→      return [
+  1308→        `Page Info:`,
+  1309→        `  URL: ${info.url || this.session.currentUrl}`,
+  1310→        `  Title: ${info.title || this.session.title}`,
+  1311→        `  Status: ${this.session.statusCode}`,
+  1312→        `  Charset: ${info.charset || 'unknown'}`,
+  1313→        `  Language: ${info.language || 'unknown'}`,
+  1314→        `  Ready State: ${info.readyState}`,
+  1315→        `  Viewport: ${info.viewport?.width}x${info.viewport?.height}`,
+  1316→        `  Scroll: (${info.scrollPosition?.x}, ${info.scrollPosition?.y})`,
+  1317→        `  Document Height: ${info.documentHeight}px`,
+  1318→        `  Links: ${info.linkCount} | Images: ${info.imageCount} | Forms: ${info.formCount} | Scripts: ${info.scriptCount}`,
+  1319→        `  Cookies: ${info.cookieCount}`,
+  1320→        ``,
+  1321→        `Session: ${this.session.id}`,
+  1322→        `  Actions: ${this.session.actions.length}`,
+  1323→        `  Duration: ${((Date.now() - this.session.startedAt) / 1000).toFixed(1)}s`,
+  1324→      ].join('\n');
+  1325→    } catch (err: any) {
+  1326→      return `Page info error: ${err.message}`;
+  1327→    }
+  1328→  }
+  1329→
+  1330→  // ---- Viewport & Device Emulation ----
+  1331→
+  1332→  async setViewport(width: number, height: number): Promise<string> {
+  1333→    this.session.viewport = { width, height };
+  1334→
+  1335→    if (this.useCurlFallback || !this.cdp?.isConnected) {
+  1336→      return `Viewport set to ${width}x${height} (will apply on next navigation)`;
+  1337→    }
+  1338→
+  1339→    try {
+  1340→      await this.cdp.send('Emulation.setDeviceMetricsOverride', {
+  1341→        width,
+  1342→        height,
+  1343→        deviceScaleFactor: 1,
+  1344→        mobile: false,
+  1345→      });
+  1346→
+  1347→      return `Viewport set to ${width}x${height}`;
+  1348→    } catch (err: any) {
+  1349→      return `Set viewport error: ${err.message}`;
+  1350→    }
+  1351→  }
+  1352→
+  1353→  async emulateDevice(device: string): Promise<string> {
+  1354→    const preset = DEVICE_PRESETS[device.toLowerCase()];
+  1355→    if (!preset) {
+  1356→      const available = Object.keys(DEVICE_PRESETS).join(', ');
+  1357→      return `Unknown device: ${device}. Available: ${available}`;
+  1358→    }
+  1359→
+  1360→    this.session.viewport = { ...preset.viewport };
+  1361→
+  1362→    if (this.config.stealth || preset.userAgent) {
+  1363→      this.config.userAgent = preset.userAgent;
+  1364→    }
+  1365→
+  1366→    if (this.useCurlFallback || !this.cdp?.isConnected) {
+  1367→      return `Device emulation set to ${device} (${preset.viewport.width}x${preset.viewport.height}). Will apply on next navigation.`;
+  1368→    }
+  1369→
+  1370→    try {
+  1371→      await this.cdp.send('Emulation.setDeviceMetricsOverride', {
+  1372→        width: preset.viewport.width,
+  1373→        height: preset.viewport.height,
+  1374→        deviceScaleFactor: preset.deviceScaleFactor,
+  1375→        mobile: preset.isMobile,
+  1376→      });
+  1377→
+  1378→      await this.cdp.send('Network.setUserAgentOverride', {
+  1379→        userAgent: preset.userAgent,
+  1380→      });
+  1381→
+  1382→      if (preset.hasTouch) {
+  1383→        await this.cdp.send('Emulation.setTouchEmulationEnabled', {
+  1384→          enabled: true,
+  1385→          maxTouchPoints: 5,
+  1386→        });
+  1387→      }
+  1388→
+  1389→      return `Emulating ${device}: ${preset.viewport.width}x${preset.viewport.height}, mobile=${preset.isMobile}, touch=${preset.hasTouch}`;
+  1390→    } catch (err: any) {
+  1391→      return `Emulate device error: ${err.message}`;
+  1392→    }
+  1393→  }
+  1394→
+  1395→  // ---- Session Management ----
+  1396→
+  1397→  getSession(): BrowserSession {
+  1398→    return { ...this.session, actions: [...this.session.actions] };
+  1399→  }
+  1400→
+  1401→  getActionHistory(): BrowserAction[] {
+  1402→    return [...this.session.actions];
+  1403→  }
+  1404→
+  1405→  isUsingFallback(): boolean {
+  1406→    return this.useCurlFallback;
+  1407→  }
+  1408→
+  1409→  // ---- Private Helpers ----
+  1410→
+  1411→  private findChrome(): string | null {
+  1412→    const candidates: string[] = [];
+  1413→
+  1414→    switch (process.platform) {
+  1415→      case 'darwin':
+  1416→        candidates.push(
+  1417→          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  1418→          '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  1419→          '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+  1420→        );
+  1421→        break;
+  1422→      case 'linux':
+  1423→        candidates.push(
+  1424→          '/usr/bin/google-chrome',
+  1425→          '/usr/bin/google-chrome-stable',
+  1426→          '/usr/bin/chromium-browser',
+  1427→          '/usr/bin/chromium',
+  1428→          '/snap/bin/chromium',
+  1429→          '/usr/bin/brave-browser',
+  1430→        );
+  1431→        break;
+  1432→      case 'win32':
+  1433→        candidates.push(
+  1434→          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  1435→          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  1436→          'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+  1437→          `${process.env.LOCALAPPDATA || ''}\\Google\\Chrome\\Application\\chrome.exe`,
+  1438→          `${process.env.PROGRAMFILES || ''}\\Google\\Chrome\\Application\\chrome.exe`,
+  1439→        );
+  1440→        break;
+  1441→    }
+  1442→
+  1443→    // Check CHROME_PATH env var
+  1444→    const envPath = process.env.CHROME_PATH || process.env.CHROMIUM_PATH;
+  1445→    if (envPath && existsSync(envPath)) {
+  1446→      return envPath;
+  1447→    }
+  1448→
+  1449→    // Try which/where command
+  1450→    try {
+  1451→      const cmd = process.platform === 'win32' ? 'where chrome' : 'which google-chrome || which chromium-browser || which chromium';
+  1452→      const result = execSync(cmd, { encoding: 'utf-8', timeout: 5000 }).trim();
+  1453→      if (result && existsSync(result.split('\n')[0].trim())) {
+  1454→        return result.split('\n')[0].trim();
+  1455→      }
+  1456→    } catch {}
+  1457→
+  1458→    // Check candidate paths
+  1459→    for (const candidate of candidates) {
+  1460→      if (existsSync(candidate)) {
+  1461→        return candidate;
+  1462→      }
+  1463→    }
+  1464→
+  1465→    return null;
+  1466→  }
+  1467→
+  1468→  private findFreePort(): number {
+  1469→    // Generate a random port in the dynamic range
+  1470→    return 9222 + Math.floor(Math.random() * 1000);
+  1471→  }
+  1472→
+  1473→  private async connectCDP(): Promise<string> {
+  1474→    try {
+  1475→      // Get browser info from debug endpoint
+  1476→      const response = await fetch(`http://127.0.0.1:${this.debugPort}/json/version`);
+  1477→      const info = await response.json() as any;
+  1478→
+  1479→      const wsUrl = info.webSocketDebuggerUrl;
+  1480→      if (!wsUrl) {
+  1481→        throw new Error('No WebSocket URL found');
+  1482→      }
+  1483→
+  1484→      // Connect via CDP
+  1485→      this.cdp = new CDPConnection(wsUrl);
+  1486→      await this.cdp.connect();
+  1487→
+  1488→      // Set up stealth overrides
+  1489→      if (this.config.stealth) {
+  1490→        await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+  1491→          source: `
+  1492→            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  1493→            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+  1494→            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+  1495→            window.chrome = { runtime: {} };
+  1496→          `,
+  1497→        });
+  1498→      }
+  1499→
+  1500→      // Set user agent if specified
+  1501→      if (this.config.userAgent) {
+  1502→        await this.cdp.send('Network.setUserAgentOverride', {
+  1503→          userAgent: this.config.userAgent,
+  1504→        });
+  1505→      }
+  1506→
+  1507→      // Block resources if configured
+  1508→      if (this.config.blockImages || this.config.blockCSS) {
+  1509→        await this.cdp.send('Network.setBlockedURLs', {
+  1510→          urls: [
+  1511→            ...(this.config.blockImages ? ['*.png', '*.jpg', '*.jpeg', '*.gif', '*.webp', '*.svg'] : []),
+  1512→            ...(this.config.blockCSS ? ['*.css'] : []),
+  1513→          ],
+  1514→        });
+  1515→      }
+  1516→
+  1517→      this.useCurlFallback = false;
+  1518→      return `Browser connected via CDP on port ${this.debugPort}`;
+  1519→    } catch (err: any) {
+  1520→      this.useCurlFallback = true;
+  1521→      return `CDP connection failed: ${err.message}. Using curl fallback.`;
+  1522→    }
+  1523→  }
+  1524→
+  1525→  private ensureConnected(): void {
+  1526→    if (!this.cdp || !this.cdp.isConnected) {
+  1527→      throw new Error('Browser not connected. Call launch() first.');
+  1528→    }
+  1529→  }
+  1530→
+  1531→  private delay(ms: number): Promise<void> {
+  1532→    return new Promise(resolve => setTimeout(resolve, ms));
+  1533→  }
+  1534→
+  1535→  // ---- Curl Fallback Methods ----
+  1536→
+  1537→  private async curlNavigate(url: string): Promise<string> {
+  1538→    try {
+  1539→      const result = execSync(
+  1540→        `curl -L -s -o /dev/null -w "%{http_code}|%{url_effective}|%{content_type}" "${url}"`,
+  1541→        { encoding: 'utf-8', timeout: this.config.defaultTimeout }
+  1542→      );
+  1543→
+  1544→      const [statusCode, effectiveUrl, contentType] = result.split('|');
+  1545→      this.session.currentUrl = effectiveUrl || url;
+  1546→      this.session.statusCode = parseInt(statusCode, 10);
+  1547→      this.session.history.push(this.session.currentUrl);
+  1548→      this.session.historyIndex = this.session.history.length - 1;
+  1549→
+  1550→      const action: BrowserAction = {
+  1551→        type: 'navigate',
+  1552→        target: url,
+  1553→        timestamp: Date.now(),
+  1554→        result: 'success',
+  1555→        duration: 0,
+  1556→      };
+  1557→      this.session.actions.push(action);
+  1558→
+  1559→      return `Navigated to: ${this.session.currentUrl}\nStatus: ${this.session.statusCode}\nContent-Type: ${contentType}`;
+  1560→    } catch (err: any) {
+  1561→      const action: BrowserAction = {
+  1562→        type: 'navigate',
+  1563→        target: url,
+  1564→        timestamp: Date.now(),
+  1565→        result: 'error',
+  1566→        error: err.message,
+  1567→      };
+  1568→      this.session.actions.push(action);
+  1569→      return `Navigation error: ${err.message}`;
+  1570→    }
+  1571→  }
+  1572→
+  1573→  private async curlGetContent(): Promise<string> {
+  1574→    if (!this.session.currentUrl) {
+  1575→      return 'No URL loaded. Navigate first.';
+  1576→    }
+  1577→
+  1578→    try {
+  1579→      const result = execSync(
+  1580→        `curl -L -s --max-time 30 "${this.session.currentUrl}"`,
+  1581→        { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, timeout: 35000 }
+  1582→      );
+  1583→
+  1584→      // Basic HTML to text conversion
+  1585→      const text = result
+  1586→        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+  1587→        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+  1588→        .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
+  1589→        .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
+  1590→        .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
+  1591→        .replace(/<[^>]+>/g, ' ')
+  1592→        .replace(/&nbsp;/g, ' ')
+  1593→        .replace(/&amp;/g, '&')
+  1594→        .replace(/&lt;/g, '<')
+  1595→        .replace(/&gt;/g, '>')
+  1596→        .replace(/&quot;/g, '"')
+  1597→        .replace(/&#39;/g, "'")
+  1598→        .replace(/\s+/g, ' ')
+  1599→        .trim();
+  1600→
+  1601→      return truncateOutput(text);
+  1602→    } catch (err: any) {
+  1603→      return `Get content error: ${err.message}`;
+  1604→    }
+  1605→  }
+  1606→
+  1607→  private async curlGetLinks(): Promise<string> {
+  1608→    if (!this.session.currentUrl) {
+  1609→      return 'No URL loaded. Navigate first.';
+  1610→    }
+  1611→
+  1612→    try {
+  1613→      const result = execSync(
+  1614→        `curl -L -s --max-time 30 "${this.session.currentUrl}"`,
+  1615→        { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, timeout: 35000 }
+  1616→      );
+  1617→
+  1618→      // Extract links from HTML
+  1619→      const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi;
+  1620→      const links: Array<{ text: string; href: string }> = [];
+  1621→      let match;
+  1622→
+  1623→      while ((match = linkRegex.exec(result)) !== null) {
+  1624→        const href = match[1];
+  1625→        const text = match[2].trim();
+  1626→        if (href && !href.startsWith('#') && !href.startsWith('javascript:')) {
+  1627→          // Resolve relative URLs
+  1628→          const resolved = new URL(href, this.session.currentUrl).href;
+  1629→          links.push({ text: text.slice(0, 100) || '(no text)', href: resolved });
+  1630→        }
+  1631→      }
+  1632→
+  1633→      if (links.length === 0) {
+  1634→        return 'No links found on this page';
+  1635→      }
+  1636→
+  1637→      const formatted = links.slice(0, 100).map((link, i) => {
+  1638→        return `${i + 1}. ${link.text}\n   ${link.href}`;
+  1639→      }).join('\n\n');
+  1640→
+  1641→      return `Found ${links.length} links:\n\n${truncateOutput(formatted)}`;
+  1642→    } catch (err: any) {
+  1643→      return `Get links error: ${err.message}`;
+  1644→    }
+  1645→  }
+  1646→}
+  1647→
+  1648→// ============================================================
+  1649→// Tool Registration (compatible with NeuroCLI ToolExecutor)
+  1650→// ============================================================
+  1651→
+  1652→function truncateOutput(output: string, maxLength: number = 30000): string {
+  1653→  if (output.length <= maxLength) return output;
+  1654→  const half = Math.floor(maxLength / 2);
+  1655→  return output.slice(0, half) + '\n\n... [truncated] ...\n\n' + output.slice(-half);
+  1656→}
+  1657→
+  1658→// Singleton browser instance for tool use
+  1659→let browserInstance: BrowserTool | null = null;
+  1660→
+  1661→async function getBrowser(): Promise<BrowserTool> {
+  1662→  if (!browserInstance) {
+  1663→    browserInstance = new BrowserTool();
+  1664→    await browserInstance.launch();
+  1665→  }
+  1666→  return browserInstance;
+  1667→}
+  1668→
+  1669→// ---- Browser Navigate Tool ----
+  1670→const browserNavigateDef: ToolDefinition = {
+  1671→  name: 'browser_navigate',
+  1672→  description: 'Navigate the headless browser to a URL. Launches browser if not already running.',
+  1673→  parameters: {
+  1674→    type: 'object',
+  1675→    properties: {
+  1676→      url: { type: 'string', description: 'URL to navigate to' },
+  1677→    },
+  1678→    required: ['url'],
+  1679→  },
+  1680→};
+  1681→
+  1682→export const browserNavigateTool: ToolExecutor = {
+  1683→  name: 'browser_navigate',
+  1684→  definition: browserNavigateDef,
+  1685→  risk: 'low',
+  1686→  async execute(args) {
+  1687→    const browser = await getBrowser();
+  1688→    return browser.navigate(args.url as string);
+  1689→  },
+  1690→};
+  1691→
+  1692→// ---- Browser Screenshot Tool ----
+  1693→const browserScreenshotDef: ToolDefinition = {
+  1694→  name: 'browser_screenshot',
+  1695→  description: 'Take a screenshot of the current page or a specific element.',
+  1696→  parameters: {
+  1697→    type: 'object',
+  1698→    properties: {
+  1699→      selector: { type: 'string', description: 'CSS selector for element screenshot (optional, full page if omitted)' },
+  1700→    },
+  1701→    required: [],
+  1702→  },
+  1703→};
+  1704→
+  1705→export const browserScreenshotTool: ToolExecutor = {
+  1706→  name: 'browser_screenshot',
+  1707→  definition: browserScreenshotDef,
+  1708→  risk: 'low',
+  1709→  async execute(args) {
+  1710→    const browser = await getBrowser();
+  1711→    return browser.screenshot(args.selector as string | undefined);
+  1712→  },
+  1713→};
+  1714→
+  1715→// ---- Browser Click Tool ----
+  1716→const browserClickDef: ToolDefinition = {
+  1717→  name: 'browser_click',
+  1718→  description: 'Click an element on the page by CSS selector.',
+  1719→  parameters: {
+  1720→    type: 'object',
+  1721→    properties: {
+  1722→      selector: { type: 'string', description: 'CSS selector of the element to click' },
+  1723→    },
+  1724→    required: ['selector'],
+  1725→  },
+  1726→};
+  1727→
+  1728→export const browserClickTool: ToolExecutor = {
+  1729→  name: 'browser_click',
+  1730→  definition: browserClickDef,
+  1731→  risk: 'medium',
+  1732→  async execute(args) {
+  1733→    const browser = await getBrowser();
+  1734→    return browser.click(args.selector as string);
+  1735→  },
+  1736→};
+  1737→
+  1738→// ---- Browser Type Tool ----
+  1739→const browserTypeDef: ToolDefinition = {
+  1740→  name: 'browser_type',
+  1741→  description: 'Type text into a form element by CSS selector.',
+  1742→  parameters: {
+  1743→    type: 'object',
+  1744→    properties: {
+  1745→      selector: { type: 'string', description: 'CSS selector of the input element' },
+  1746→      text: { type: 'string', description: 'Text to type' },
+  1747→    },
+  1748→    required: ['selector', 'text'],
+  1749→  },
+  1750→};
+  1751→
+  1752→export const browserTypeTool: ToolExecutor = {
+  1753→  name: 'browser_type',
+  1754→  definition: browserTypeDef,
+  1755→  risk: 'medium',
+  1756→  async execute(args) {
+  1757→    const browser = await getBrowser();
+  1758→    return browser.type(args.selector as string, args.text as string);
+  1759→  },
+  1760→};
+  1761→
+  1762→// ---- Browser Evaluate Tool ----
+  1763→const browserEvaluateDef: ToolDefinition = {
+  1764→  name: 'browser_evaluate',
+  1765→  description: 'Execute JavaScript in the browser page context.',
+  1766→  parameters: {
+  1767→    type: 'object',
+  1768→    properties: {
+  1769→      script: { type: 'string', description: 'JavaScript code to execute' },
+  1770→    },
+  1771→    required: ['script'],
+  1772→  },
+  1773→};
+  1774→
+  1775→export const browserEvaluateTool: ToolExecutor = {
+  1776→  name: 'browser_evaluate',
+  1777→  definition: browserEvaluateDef,
+  1778→  risk: 'high',
+  1779→  getApprovalRequest(args) {
+  1780→    return {
+  1781→      toolName: 'browser_evaluate',
+  1782→      args,
+  1783→      risk: 'high',
+  1784→      description: `Execute JS in browser: ${(args.script as string).slice(0, 100)}...`,
+  1785→    };
+  1786→  },
+  1787→  async execute(args) {
+  1788→    const browser = await getBrowser();
+  1789→    return browser.evaluate(args.script as string);
+  1790→  },
+  1791→};
+  1792→
+  1793→// ---- Browser Get Content Tool ----
+  1794→const browserGetContentDef: ToolDefinition = {
+  1795→  name: 'browser_get_content',
+  1796→  description: 'Get the text content of the current page or a specific element.',
+  1797→  parameters: {
+  1798→    type: 'object',
+  1799→    properties: {
+  1800→      selector: { type: 'string', description: 'CSS selector (optional, gets full page text if omitted)' },
+  1801→    },
+  1802→    required: [],
+  1803→  },
+  1804→};
+  1805→
+  1806→export const browserGetContentTool: ToolExecutor = {
+  1807→  name: 'browser_get_content',
+  1808→  definition: browserGetContentDef,
+  1809→  risk: 'low',
+  1810→  async execute(args) {
+  1811→    const browser = await getBrowser();
+  1812→    return browser.getContent(args.selector as string | undefined);
+  1813→  },
+  1814→};
+  1815→
+  1816→// ---- Browser Get Links Tool ----
+  1817→const browserGetLinksDef: ToolDefinition = {
+  1818→  name: 'browser_get_links',
+  1819→  description: 'Extract all links from the current page.',
+  1820→  parameters: {
+  1821→    type: 'object',
+  1822→    properties: {},
+  1823→    required: [],
+  1824→  },
+  1825→};
+  1826→
+  1827→export const browserGetLinksTool: ToolExecutor = {
+  1828→  name: 'browser_get_links',
+  1829→  definition: browserGetLinksDef,
+  1830→  risk: 'low',
+  1831→  async execute() {
+  1832→    const browser = await getBrowser();
+  1833→    return browser.getLinks();
+  1834→  },
+  1835→};
+  1836→
+  1837→// ---- Browser Download Tool ----
+  1838→const browserDownloadDef: ToolDefinition = {
+  1839→  name: 'browser_download',
+  1840→  description: 'Download a file from a URL to a local path.',
+  1841→  parameters: {
+  1842→    type: 'object',
+  1843→    properties: {
+  1844→      url: { type: 'string', description: 'URL to download from' },
+  1845→      output_path: { type: 'string', description: 'Local file path to save to' },
+  1846→    },
+  1847→    required: ['url', 'output_path'],
+  1848→  },
+  1849→};
+  1850→
+  1851→export const browserDownloadTool: ToolExecutor = {
+  1852→  name: 'browser_download',
+  1853→  definition: browserDownloadDef,
+  1854→  risk: 'medium',
+  1855→  getApprovalRequest(args) {
+  1856→    return {
+  1857→      toolName: 'browser_download',
+  1858→      args,
+  1859→      risk: 'medium',
+  1860→      description: `Download ${args.url} to ${args.output_path}`,
+  1861→    };
+  1862→  },
+  1863→  async execute(args) {
+  1864→    const browser = await getBrowser();
+  1865→    return browser.download(args.url as string, args.output_path as string);
+  1866→  },
+  1867→};
+  1868→
+  1869→// Export all browser tools
+  1870→export const browserTools: ToolExecutor[] = [
+  1871→  browserNavigateTool,
+  1872→  browserScreenshotTool,
+  1873→  browserClickTool,
+  1874→  browserTypeTool,
+  1875→  browserEvaluateTool,
+  1876→  browserGetContentTool,
+  1877→  browserGetLinksTool,
+  1878→  browserDownloadTool,
+  1879→];
+  1880→
