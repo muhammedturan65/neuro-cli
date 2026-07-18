@@ -1,54 +1,69 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Dependencies
+node_modules/
+package-lock.json
 
-# dependencies
-node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+# Build output
+dist/
 
-# testing
-/coverage
+# Next.js
+.next/
+out/
+build/
 
-# next.js
-/.next/
-/out/
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
 
-# production
-/build
-
-# misc
+# OS
 .DS_Store
-*.pem
+Thumbs.db
 
-# debug
+# Environment
+.env
+.env.local
+.env.*.local
+
+# NeuroCLI local config
+.neuro/
+
+# Debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-local-*
-.claude
-.z-ai-config
-*.log
 dev.log
-dev.out.log
-test
-prompt
 
-server.log
-# Skills directory
-/skills/
+# TypeScript
+*.tsbuildinfo
+*.js.map
+next-env.d.ts
+
+# Non-project files (Z.ai artifacts)
+NEW_GAPS_*.md
+free_models.json
+*.xlsx
+search*.json
+tool-results/
+agent-ctx/
+download/
+scripts/
+worklog.md
+upload/
+.zscripts/
+skills/
+bun.lock
+Caddyfile
+components.json
+eslint.config.mjs
+postcss.config.mjs
+tailwind.config.ts
+next.config.ts
+prisma/
+public/
+examples/
+mini-services/
+db/
+src/app/
+src/lib/
+src/components/
