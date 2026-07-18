@@ -1,0 +1,192 @@
+// ============================================================
+// NeuroCLI - Orchestrator Agent
+// Central coordinator that manages sub-agents
+// ============================================================
+import { BaseAgent } from './base.js';
+export class Orchestrator extends BaseAgent {
+    agents = new Map();
+    constructor(config, client, registry, workingDirectory, sessionId) {
+        super(config, client, registry, workingDirectory, sessionId);
+    }
+    /**
+     * Register a sub-agent
+     */
+    registerAgent(agent) {
+        this.agents.set(agent.name, agent);
+    }
+    /**
+     * Get all registered agents
+     */
+    getAgents() {
+        return Array.from(this.agents.values());
+    }
+    /**
+     * Plan the task decomposition using the orchestrator model
+     */
+    async plan(task, callbacks) {
+        const agentDescriptions = Array.from(this.agents.entries())
+            .map(([name, agent]) => `- ${name}: ${agent.description}`)
+            .join('\n');
+        const planPrompt = `You are the Orchestrator. Analyze the following task and create an execution plan using the available agents.
+
+## Available Agents
+${agentDescriptions}
+
+## Task
+${task}
+
+## Instructions
+1. Break down the task into specific sub-tasks
+2. Assign each sub-task to the most appropriate agent
+3. Specify dependencies between tasks (which tasks must complete before others can start)
+4. Provide any context each agent needs
+
+Respond with a JSON plan in this exact format:
+\`\`\`json
+{
+  "reasoning": "Your analysis of the task and why you chose this approach",
+  "tasks": [
+    {
+      "agent": "agent_name",
+      "task": "specific task description",
+      "context": "any additional context",
+      "dependsOn": []
+    }
+  ]
+}
+\`\`\``;
+        const messages = [
+            { role: 'system', content: 'You are an expert task orchestrator. Always respond with valid JSON.', timestamp: Date.now() },
+            { role: 'user', content: planPrompt, timestamp: Date.now() },
+        ];
+        const response = await this.client.quickChat(this.config.model || 'anthropic/claude-sonnet-4', messages);
+        try {
+            // Extract JSON from response
+            const jsonMatch = response.content.match(/```json\n([\s\S]*?)\n```/) ||
+                response.content.match(/\{[\s\S]*\}/);
+            const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : response.content;
+            return JSON.parse(jsonStr);
+        }
+        catch {
+            // Fallback: use coder agent directly
+            return {
+                reasoning: 'Could not parse plan, defaulting to direct coding approach',
+                tasks: [{ agent: 'Coder', task, dependsOn: [] }],
+            };
+        }
+    }
+    /**
+     * Execute a planned task with sub-agents
+     */
+    async orchestrate(task, callbacks, autoPlan = true) {
+        const startTime = Date.now();
+        const totalUsage = { inputTokens: 0, outputTokens: 0, cost: 0 };
+        const agentResults = new Map();
+        const execution = {
+            agentName: 'Orchestrator',
+            task,
+            startTime,
+            iterations: 0,
+            tokensUsed: 0,
+            status: 'running',
+        };
+        // Step 1: Create execution plan
+        let plan;
+        if (autoPlan) {
+            callbacks?.onThinking?.('🧠 Planning task decomposition...');
+            plan = await this.plan(task, callbacks);
+        }
+        else {
+            plan = {
+                reasoning: 'Direct execution without planning',
+                tasks: [{ agent: 'Coder', task }],
+            };
+        }
+        callbacks?.onThinking?.(`📋 Plan: ${plan.tasks.length} sub-tasks`);
+        callbacks?.onThinking?.(`💭 ${plan.reasoning}`);
+        // Step 2: Execute tasks respecting dependencies
+        const completedTasks = new Set();
+        let taskIndex = 0;
+        while (completedTasks.size < plan.tasks.length) {
+            // Find tasks whose dependencies are all completed
+            const readyTasks = plan.tasks.filter(t => {
+                if (completedTasks.has(t.agent + ':' + t.task))
+                    return false;
+                if (!t.dependsOn || t.dependsOn.length === 0)
+                    return true;
+                return t.dependsOn.every(dep => completedTasks.has(dep));
+            });
+            if (readyTasks.length === 0) {
+                // Deadlock or all tasks completed
+                break;
+            }
+            // Execute ready tasks (could be parallelized in future)
+            for (const subTask of readyTasks) {
+                const agent = this.agents.get(subTask.agent);
+                if (!agent) {
+                    callbacks?.onThinking?.(`⚠️ Agent not found: ${subTask.agent}`);
+                    completedTasks.add(subTask.agent + ':' + subTask.task);
+                    continue;
+                }
+                taskIndex++;
+                callbacks?.onThinking?.(`\n🤖 [${taskIndex}/${plan.tasks.length}] Running ${subTask.agent}: ${subTask.task.slice(0, 80)}...`);
+                // Build context from previous agent results
+                let fullTask = subTask.task;
+                if (subTask.context) {
+                    fullTask = `${subTask.context}\n\nTask: ${subTask.task}`;
+                }
+                // Add results from dependent tasks as context
+                if (subTask.dependsOn && subTask.dependsOn.length > 0) {
+                    const depResults = subTask.dependsOn
+                        .map(dep => agentResults.get(dep))
+                        .filter(Boolean)
+                        .map(r => `Previous agent result:\n${r.content}`)
+                        .join('\n\n');
+                    if (depResults) {
+                        fullTask = `${fullTask}\n\n## Context from previous agents:\n${depResults}`;
+                    }
+                }
+                const result = await agent.run(fullTask, {
+                    onToken: (token) => callbacks?.onToken?.(token),
+                    onToolCall: (name, args) => callbacks?.onToolCall?.(name, args),
+                    onToolResult: (name, result, isError) => callbacks?.onToolResult?.(name, result, isError),
+                    onApprovalNeeded: async (name, args, risk) => {
+                        return callbacks?.onApprovalNeeded?.(name, args, risk) ?? true;
+                    },
+                    onThinking: (thinking) => callbacks?.onThinking?.(thinking),
+                });
+                agentResults.set(subTask.agent + ':' + subTask.task, result);
+                totalUsage.inputTokens += result.usage.inputTokens;
+                totalUsage.outputTokens += result.usage.outputTokens;
+                totalUsage.cost += result.usage.cost;
+                completedTasks.add(subTask.agent + ':' + subTask.task);
+            }
+        }
+        execution.endTime = Date.now();
+        execution.iterations = taskIndex;
+        execution.tokensUsed = totalUsage.inputTokens + totalUsage.outputTokens;
+        execution.status = 'completed';
+        // Step 3: Synthesize final result
+        const resultSummary = Array.from(agentResults.entries())
+            .map(([key, result]) => `### ${key}\n${result.content}`)
+            .join('\n\n');
+        return {
+            content: resultSummary,
+            plan,
+            agentResults,
+            totalUsage,
+            execution,
+        };
+    }
+    /**
+     * Direct run - delegate to the most appropriate agent
+     */
+    async runDirect(task, agentName, callbacks) {
+        const agent = this.agents.get(agentName);
+        if (!agent) {
+            throw new Error(`Agent not found: ${agentName}. Available: ${Array.from(this.agents.keys()).join(', ')}`);
+        }
+        return agent.run(task, callbacks);
+    }
+}
+//# sourceMappingURL=orchestrator.js.map

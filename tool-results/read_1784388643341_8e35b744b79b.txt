@@ -1,0 +1,502 @@
+     1→     1→     1→#!/usr/bin/env node
+     2→     2→     2→// ============================================================
+     3→     3→     3→// NeuroCLI - Advanced AI Terminal Coding Assistant
+     4→     4→     4→// Main Entry Point - v3.0.0 with all new features
+     5→     5→     5→// ============================================================
+     6→     6→     6→
+     7→     7→     7→import { Command } from 'commander';
+     8→     8→     8→import { createInterface } from 'readline';
+     9→     9→     9→import { writeFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+    10→    10→    10→import { join } from 'path';
+    11→    11→    11→import { homedir } from 'os';
+    12→    12→    12→import { NeuroEngine } from './core/engine.js';
+    13→    13→    13→import { initConfig, saveConfig } from './config/config.js';
+    14→    14→    14→import { MODELS } from './api/models.js';
+    15→    15→    15→import { TerminalUI } from './ui/renderer.js';
+    16→    16→    16→import { getTheme } from './ui/theme.js';
+    17→    17→    17→import { CompletionEngine } from './core/completion.js';
+    18→    18→    18→import { HeadlessMode } from './core/headless.js';
+    19→    19→    19→import { ShellCompletionGenerator } from './core/shell-completion.js';
+    20→    20→    20→import chalk from 'chalk';
+    21→    21→    21→
+    22→    22→    22→const VERSION = '4.0.0';
+    23→    23→    23→
+    24→    24→    24→// ---- CLI Setup ----
+    25→    25→    25→const program = new Command();
+    26→    26→    26→
+    27→    27→    27→program
+    28→    28→    28→  .name('neuro')
+    29→    29→    29→  .description('NeuroCLI - Advanced AI Terminal Coding Assistant')
+    30→    30→    30→  .version(VERSION)
+    31→    31→    31→  .option('-k, --api-key <key>', 'OpenRouter API key')
+    32→    32→    32→  .option('-m, --model <model>', 'Default model to use')
+    33→    33→    33→  .option('-t, --theme <theme>', 'UI theme (dracula, dark, nord, light)')
+    34→    34→    34→  .option('--no-streaming', 'Disable streaming output')
+    35→    35→    35→  .option('--auto-approve', 'Auto-approve all tool calls')
+    36→    36→    36→  .option('-c, --continue', 'Continue most recent session')
+    37→    37→    37→  .option('-r, --resume <sessionId>', 'Resume specific session')
+    38→    38→    38→  .option('--fork', 'Fork the resumed session instead of continuing it')
+    39→    39→    39→  .option('--permission-mode <mode>', 'Permission mode: manual, auto, plan, yolo')
+    40→    40→    40→  .option('--diff-preview', 'Enable diff preview before applying changes')
+    41→    41→    41→  .option('--no-diff-preview', 'Disable diff preview')
+    42→    42→    42→  .option('--effort <level>', 'Effort level: low, medium, high, ultrathink')
+    43→    43→    43→  .option('--style <style>', 'Output style: concise, explanatory, learning, etc.')
+    44→    44→    44→  .option('--thinking', 'Enable extended thinking display')
+    45→    45→    45→  .option('--cache', 'Enable prompt caching')
+    46→    46→    46→  .option('--no-cache', 'Disable prompt caching')
+    47→    47→    47→  .option('--sandbox', 'Enable sandbox mode')
+    48→    48→    48→  .option('--spending-limit <usd>', 'Set daily spending limit in USD', parseFloat)
+    49→    49→    49→  .option('--ollama', 'Use Ollama local models instead of OpenRouter')
+    50→    50→    50→  .action(async (options: any) => {
+    51→    51→    51→    await startInteractive(options);
+    52→    52→    52→  });
+    53→    53→    53→
+    54→    54→    54→// ---- Headless/CI Mode ----
+    55→    55→    55→program
+    56→    56→    56→  .command('run <prompt>')
+    57→    57→    57→  .description('Run a task in headless/CI mode')
+    58→    58→    58→  .option('-m, --model <model>', 'Model to use')
+    59→    59→    59→  .option('-a, --agent <agent>', 'Agent to use')
+    60→    60→    60→  .option('--max-turns <n>', 'Max agent iterations', parseInt)
+    61→    61→    61→  .option('--allowed-tools <tools>', 'Comma-separated list of allowed tools')
+    62→    62→    62→  .option('-f, --format <format>', 'Output format: text, json, stream-json')
+    63→    63→    63→  .option('--auto', 'Auto-approve all tool calls')
+    64→    64→    64→  .option('--continue <sessionId>', 'Continue a specific session')
+    65→    65→    65→  .action(async (prompt: any, opts: any) => {
+    66→    66→    66→    const result = await HeadlessMode.run({
+    67→    67→    67→      prompt,
+    68→    68→    68→      model: opts.model,
+    69→    69→    69→      agent: opts.agent,
+    70→    70→    70→      maxTurns: opts.maxTurns,
+    71→    71→    71→      allowedTools: opts.allowedTools?.split(','),
+    72→    72→    72→      outputFormat: opts.format || 'text',
+    73→    73→    73→      autoApprove: opts.auto ?? true,
+    74→    74→    74→      continueSession: opts.continue,
+    75→    75→    75→    });
+    76→    76→    76→    process.exit(result.exitCode);
+    77→    77→    77→  });
+    78→    78→    78→
+    79→    79→    79→// ---- Non-interactive ask ----
+    80→    80→    80→program
+    81→    81→    81→  .command('ask <prompt>')
+    82→    82→    82→  .description('Ask a single question and exit')
+    83→    83→    83→  .option('-m, --model <model>', 'Model to use')
+    84→    84→    84→  .option('-a, --agent <agent>', 'Agent to use')
+    85→    85→    85→  .option('-f, --format <format>', 'Output format: text, json')
+    86→    86→    86→  .action(async (prompt: any, opts: any) => {
+    87→    87→    87→    const config = initConfig();
+    88→    88→    88→    if (opts.model) config.defaultModel = opts.model;
+    89→    89→    89→    const engine = new NeuroEngine(config);
+    90→    90→    90→    const result = await engine.processMessage(prompt, 'direct', opts.agent || 'Coder');
+    91→    91→    91→    if (opts.format === 'json') {
+    92→    92→    92→      console.log(JSON.stringify({ content: result.content, usage: result.usage }, null, 2));
+    93→    93→    93→    } else {
+    94→    94→    94→      console.log(result.content);
+    95→    95→    95→    }
+    96→    96→    96→    process.exit(0);
+    97→    97→    97→  });
+    98→    98→    98→
+    99→    99→    99→// ---- Models list ----
+   100→   100→   100→program
+   101→   101→   101→  .command('models')
+   102→   102→   102→  .description('List available models')
+   103→   103→   103→  .option('--ollama', 'List Ollama local models')
+   104→   104→   104→  .action(async (opts: any) => {
+   105→   105→   105→    if (opts.ollama) {
+   106→   106→   106→      const { OllamaProvider } = await import('./api/ollama.js');
+   107→   107→   107→      const provider = new OllamaProvider();
+   108→   108→   108→      try {
+   109→   109→   109→        const models = await provider.listModels();
+   110→   110→   110→        if (models.length === 0) { console.log(chalk.yellow('No local models found. Is Ollama running?')); return; }
+   111→   111→   111→        console.log(chalk.bold('\nOllama Local Models:\n'));
+   112→   112→   112→        for (const m of models) {
+   113→   113→   113→          console.log(`  ${chalk.cyan(m.name.padEnd(40))} ${chalk.gray(m.details.parameter_size || '')} ${chalk.gray(m.details.quantization_level || '')}`);
+   114→   114→   114→        }
+   115→   115→   115→      } catch {
+   116→   116→   116→        console.log(chalk.red('Could not connect to Ollama. Is it running?'));
+   117→   117→   117→      }
+   118→   118→   118→      return;
+   119→   119→   119→    }
+   120→   120→   120→    const config = initConfig();
+   121→   121→   121→    const ui = new TerminalUI(config.ui.theme);
+   122→   122→   122→    ui.modelList(config.defaultModel);
+   123→   123→   123→  });
+   124→   124→   124→
+   125→   125→   125→// ---- Agents list ----
+   126→   126→   126→program
+   127→   127→   127→  .command('agents')
+   128→   128→   128→  .description('List available agents')
+   129→   129→   129→  .action(() => {
+   130→   130→   130→    const config = initConfig();
+   131→   131→   131→    const ui = new TerminalUI(config.ui.theme);
+   132→   132→   132→    const agents = Object.values(config.agents).map(a => ({
+   133→   133→   133→      name: a.name,
+   134→   134→   134→      description: a.description,
+   135→   135→   135→      model: a.model || config.defaultModel,
+   136→   136→   136→    }));
+   137→   137→   137→    ui.agentList(agents);
+   138→   138→   138→  });
+   139→   139→   139→
+   140→   140→   140→// ---- Config ----
+   141→   141→   141→program
+   142→   142→   142→  .command('config')
+   143→   143→   143→  .description('Show or modify configuration')
+   144→   144→   144→  .option('--set-key <key>', 'Set API key')
+   145→   145→   145→  .option('--set-model <model>', 'Set default model')
+   146→   146→   146→  .option('--set-theme <theme>', 'Set UI theme')
+   147→   147→   147→  .option('--set-permission <mode>', 'Set permission mode (manual, auto, plan, yolo)')
+   148→   148→   148→  .option('--set-spending-limit <usd>', 'Set daily spending limit in USD', parseFloat)
+   149→   149→   149→  .option('--show', 'Show current config')
+   150→   150→   150→  .action(async (opts: any) => {
+   151→   151→   151→    const config = initConfig();
+   152→   152→   152→    const theme = getTheme(config.ui.theme);
+   153→   153→   153→
+   154→   154→   154→    if (opts.setKey) { config.apiKey = opts.setKey; saveConfig(config); console.log(chalk.green('API key updated')); }
+   155→   155→   155→    if (opts.setModel) { if (!MODELS[opts.setModel]) { console.log(chalk.red(`Unknown model: ${opts.setModel}`)); process.exit(1); } config.defaultModel = opts.setModel; saveConfig(config); console.log(chalk.green(`Default model set to ${MODELS[opts.setModel].name}`)); }
+   156→   156→   156→    if (opts.setTheme) { config.ui.theme = opts.setTheme; saveConfig(config); console.log(chalk.green(`Theme set to ${opts.setTheme}`)); }
+   157→   157→   157→    if (opts.setPermission) { config.permissionMode = opts.setPermission; saveConfig(config); console.log(chalk.green(`Permission mode set to ${opts.setPermission}`)); }
+   158→   158→   158→    if (opts.setSpendingLimit !== undefined) { config.spendingLimit = opts.setSpendingLimit; saveConfig(config); console.log(chalk.green(`Spending limit set to $${opts.setSpendingLimit}`)); }
+   159→   159→   159→    if (opts.show || (!opts.setKey && !opts.setModel && !opts.setTheme && !opts.setPermission && opts.setSpendingLimit === undefined)) {
+   160→   160→   160→      console.log(chalk.bold('\nCurrent Configuration:\n'));
+   161→   161→   161→      console.log(`  API Key: ${config.apiKey ? chalk.green('configured') : chalk.red('not set')}`);
+   162→   162→   162→      console.log(`  Base URL: ${config.baseUrl}`);
+   163→   163→   163→      console.log(`  Default Model: ${config.defaultModel}`);
+   164→   164→   164→      console.log(`  Theme: ${config.ui.theme}`);
+   165→   165→   165→      console.log(`  Permission Mode: ${config.permissionMode}`);
+   166→   166→   166→      console.log(`  Diff Preview: ${config.diffPreview ? 'enabled' : 'disabled'}`);
+   167→   167→   167→      console.log(`  Fallback Chain: ${config.fallbackChain.models.join(' -> ')}`);
+   168→   168→   168→      console.log(`  Doom Loop Protection: ${config.doomLoop.autoBreak ? 'enabled' : 'disabled'}`);
+   169→   169→   169→      console.log(`  MCP Auto-Connect: ${config.mcp.autoConnect ? 'enabled' : 'disabled'}`);
+   170→   170→   170→      console.log(`  Streaming: ${config.ui.streaming ? 'enabled' : 'disabled'}`);
+   171→   171→   171→      console.log(`  Prompt Cache: ${config.promptCache.enabled ? 'enabled' : 'disabled'}`);
+   172→   172→   172→      console.log(`  Spending Limit: ${config.spendingLimit > 0 ? '$' + config.spendingLimit.toFixed(2) : 'unlimited'}`);
+   173→   173→   173→      console.log();
+   174→   174→   174→    }
+   175→   175→   175→  });
+   176→   176→   176→
+   177→   177→   177→// ---- Sessions ----
+   178→   178→   178→program
+   179→   179→   179→  .command('sessions')
+   180→   180→   180→  .description('List or manage sessions')
+   181→   181→   181→  .option('--clear', 'Clear all sessions')
+   182→   182→   182→  .action(async (opts: any) => {
+   183→   183→   183→    const { SessionManager } = await import('./core/session.js');
+   184→   184→   184→    const sm = new SessionManager();
+   185→   185→   185→
+   186→   186→   186→    if (opts.clear) { console.log(chalk.yellow('Clearing all sessions...')); return; }
+   187→   187→   187→    const sessions = sm.list();
+   188→   188→   188→    if (sessions.length === 0) { console.log(chalk.gray('No sessions found.')); return; }
+   189→   189→   189→    console.log(chalk.bold('\nSessions:\n'));
+   190→   190→   190→    for (const session of sessions.slice(0, 20)) {
+   191→   191→   191→      const date = new Date(session.createdAt).toLocaleString();
+   192→   192→   192→      console.log(`  ${chalk.cyan(session.id.slice(0, 20))}  ${chalk.gray(date)}  ${chalk.gray(`${session.messageCount} msgs`)}  ${chalk.gray(`$${session.cost.toFixed(4)}`)}`);
+   193→   193→   193→    }
+   194→   194→   194→    console.log();
+   195→   195→   195→  });
+   196→   196→   196→
+   197→   197→   197→// ---- MCP Management ----
+   198→   198→   198→program
+   199→   199→   199→  .command('mcp')
+   200→   200→   200→  .description('Manage MCP (Model Context Protocol) servers')
+   201→   201→   201→  .addCommand(
+   202→   202→   202→    new Command('add')
+   203→   203→   203→      .description('Add an MCP server')
+   204→   204→   204→      .argument('<name>', 'Server name')
+   205→   205→   205→      .argument('<command>', 'Command to run (for stdio) or URL (for http/sse)')
+   206→   206→   206→      .option('-t, --transport <type>', 'Transport type: stdio, sse, http', 'stdio')
+   207→   207→   207→      .option('--headers <json>', 'HTTP headers as JSON string')
+   208→   208→   208→      .action(async (name: any, command: any, opts: any) => {
+   209→   209→   209→        const { MCPClient } = await import('./mcp/client.js');
+   210→   210→   210→        const client = new MCPClient();
+   211→   211→   211→        const isUrl = command.startsWith('http://') || command.startsWith('https://');
+   212→   212→   212→        const transport = isUrl ? (opts.transport === 'http' ? 'http' : 'sse') : 'stdio';
+   213→   213→   213→        
+   214→   214→   214→        client.addServer(name, {
+   215→   215→   215→          name,
+   216→   216→   216→          transport: transport as 'stdio' | 'sse' | 'http',
+   217→   217→   217→          command: transport === 'stdio' ? command : undefined,
+   218→   218→   218→          url: isUrl ? command : undefined,
+   219→   219→   219→          headers: opts.headers ? JSON.parse(opts.headers) : undefined,
+   220→   220→   220→        });
+   221→   221→   221→        console.log(chalk.green(`MCP server "${name}" added (${transport})`));
+   222→   222→   222→      })
+   223→   223→   223→  )
+   224→   224→   224→  .addCommand(
+   225→   225→   225→    new Command('list').description('List configured MCP servers').action(async () => {
+   226→   226→   226→      const { MCPClient } = await import('./mcp/client.js');
+   227→   227→   227→      const client = new MCPClient();
+   228→   228→   228→      const servers = client.listServers();
+   229→   229→   229→      if (servers.length === 0) { console.log(chalk.gray('No MCP servers configured.')); return; }
+   230→   230→   230→      console.log(chalk.bold('\nMCP Servers:\n'));
+   231→   231→   231→      for (const s of servers) {
+   232→   232→   232→        const status = s.connected ? chalk.green('connected') : chalk.gray('disconnected');
+   233→   233→   233→        console.log(`  ${chalk.cyan(s.name)}  ${status}  ${chalk.gray(`${s.toolCount} tools`)}  ${chalk.gray(s.config.transport)}`);
+   234→   234→   234→      }
+   235→   235→   235→      console.log();
+   236→   236→   236→    })
+   237→   237→   237→  )
+   238→   238→   238→  .addCommand(
+   239→   239→   239→    new Command('remove').description('Remove an MCP server').argument('<name>').action(async (name: any) => {
+   240→   240→   240→      const { MCPClient } = await import('./mcp/client.js');
+   241→   241→   241→      const client = new MCPClient();
+   242→   242→   242→      if (client.removeServer(name)) console.log(chalk.green(`MCP server "${name}" removed`));
+   243→   243→   243→      else console.log(chalk.red(`MCP server "${name}" not found`));
+   244→   244→   244→    })
+   245→   245→   245→  );
+   246→   246→   246→
+   247→   247→   247→// ---- Shell Completion ----
+   248→   248→   248→program
+   249→   249→   249→  .command('completion <shell>')
+   250→   250→   250→  .description('Generate shell completion script (bash, zsh, fish)')
+   251→   251→   251→  .action((shell: any) => {
+   252→   252→   252→    const generator = new ShellCompletionGenerator(ShellCompletionGenerator.getDefaultOptions());
+   253→   253→   253→    const script = generator.generate(shell as 'bash' | 'zsh' | 'fish');
+   254→   254→   254→    console.log(script);
+   255→   255→   255→  });
+   256→   256→   256→
+   257→   257→   257→// ---- Interactive Mode ----
+   258→   258→   258→async function startInteractive(options: any) {
+   259→   259→   259→  const config = initConfig(options.apiKey);
+   260→   260→   260→  if (options.model) config.defaultModel = options.model;
+   261→   261→   261→  if (options.theme) config.ui.theme = options.theme as 'dark' | 'light' | 'dracula' | 'nord';
+   262→   262→   262→  if (options.noStreaming) config.ui.streaming = false;
+   263→   263→   263→  if (options.permissionMode) config.permissionMode = options.permissionMode;
+   264→   264→   264→  if (options.diffPreview === true) config.diffPreview = true;
+   265→   265→   265→  if (options.diffPreview === false) config.diffPreview = false;
+   266→   266→   266→  if (options.cache === true) config.promptCache.enabled = true;
+   267→   267→   267→  if (options.cache === false) config.promptCache.enabled = false;
+   268→   268→   268→  if (options.spendingLimit) config.spendingLimit = options.spendingLimit;
+   269→   269→   269→  if (options.autoApprove) {
+   270→   270→   270→    config.tools.autoApprove = [...config.tools.autoApprove, ...config.tools.requireApproval];
+   271→   271→   271→    config.tools.requireApproval = [];
+   272→   272→   272→    config.permissionMode = 'yolo';
+   273→   273→   273→  }
+   274→   274→   274→
+   275→   275→   275→  // Check API key
+   276→   276→   276→  if (!config.apiKey && !options.ollama) {
+   277→   277→   277→    console.log(chalk.red('\nOpenRouter API key not configured!'));
+   278→   278→   278→    console.log(chalk.yellow('\nSet it with:'));
+   279→   279→   279→    console.log(`  ${chalk.cyan('neuro config --set-key YOUR_API_KEY')}`);
+   280→   280→   280→    console.log(`  ${chalk.cyan('export OPENROUTER_API_KEY=YOUR_API_KEY')}`);
+   281→   281→   281→    console.log(`  ${chalk.cyan('neuro -k YOUR_API_KEY')}`);
+   282→   282→   282→    console.log(chalk.gray('\nGet your key at: https://openrouter.ai/keys\n'));
+   283→   283→   283→    process.exit(1);
+   284→   284→   284→  }
+   285→   285→   285→
+   286→   286→   286→  // Initialize engine
+   287→   287→   287→  const engine = new NeuroEngine(config);
+   288→   288→   288→
+   289→   289→   289→  // Set effort level if specified
+   290→   290→   290→  if (options.effort) {
+   291→   291→   291→    engine.modelRouter.setEffort(options.effort);
+   292→   292→   292→  }
+   293→   293→   293→
+   294→   294→   294→  // Set output style if specified
+   295→   295→   295→  if (options.style) {
+   296→   296→   296→    engine.styleManager.setStyle(options.style);
+   297→   297→   297→  }
+   298→   298→   298→
+   299→   299→   299→  // Enable thinking if specified
+   300→   300→   300→  if (options.thinking) {
+   301→   301→   301→    engine.extendedThinking.setMode('full');
+   302→   302→   302→    engine.extendedThinking.toggleDisplay();
+   303→   303→   303→  }
+   304→   304→   304→
+   305→   305→   305→  // Enable sandbox if specified
+   306→   306→   306→  if (options.sandbox) {
+   307→   307→   307→    engine.sandbox.enable();
+   308→   308→   308→  }
+   309→   309→   309→
+   310→   310→   310→  // Enable prompt cache if specified
+   311→   311→   311→  if (options.cache) {
+   312→   312→   312→    config.promptCache.enabled = true;
+   313→   313→   313→  }
+   314→   314→   314→
+   315→   315→   315→  // Resume session if requested
+   316→   316→   316→  if (options.resume) {
+   317→   317→   317→    const session = engine.sessionManager.load(options.resume);
+   318→   318→   318→    if (session) {
+   319→   319→   319→      engine.ui.success(`Resumed session: ${session.id.slice(0, 20)}...`);
+   320→   320→   320→      if (options.fork) {
+   321→   321→   321→        const forked = engine.sessionManager.create(process.cwd(), config.defaultModel);
+   322→   322→   322→        forked.messages = [...session.messages];
+   323→   323→   323→        engine.sessionManager.save();
+   324→   324→   324→        engine.ui.success(`Forked to new session: ${forked.id.slice(0, 20)}...`);
+   325→   325→   325→      }
+   326→   326→   326→    } else {
+   327→   327→   327→      engine.ui.error(`Session not found: ${options.resume}`);
+   328→   328→   328→    }
+   329→   329→   329→  } else if (options.continue) {
+   330→   330→   330→    const sessions = engine.sessionManager.list();
+   331→   331→   331→    if (sessions.length > 0) {
+   332→   332→   332→      const session = engine.sessionManager.load(sessions[0].id);
+   333→   333→   333→      if (session) {
+   334→   334→   334→        engine.ui.success(`Continued session: ${session.id.slice(0, 20)}...`);
+   335→   335→   335→      }
+   336→   336→   336→    } else {
+   337→   337→   337→      engine.ui.warning('No sessions found to continue');
+   338→   338→   338→    }
+   339→   339→   339→  }
+   340→   340→   340→
+   341→   341→   341→  // Print banner
+   342→   342→   342→  engine.ui.banner();
+   343→   343→   343→  const theme = engine.ui.theme;
+   344→   344→   344→  const permMode = engine.approval.getMode();
+   345→   345→   345→  const permIcon = engine.approval.getModeIcon();
+   346→   346→   346→  const activeStyle = engine.styleManager.getStyle();
+   347→   347→   347→  console.log(theme.muted(`  Model: ${MODELS[config.defaultModel]?.name || config.defaultModel}`));
+   348→   348→   348→  console.log(theme.muted(`  Permission: ${permIcon} ${permMode}`));
+   349→   349→   349→  console.log(theme.muted(`  Style: ${activeStyle.name}`));
+   350→   350→   350→  console.log(theme.muted(`  Thinking: ${engine.extendedThinking.getMode()}`));
+   351→   351→   351→  console.log(theme.muted(`  Cache: ${config.promptCache.enabled ? 'on' : 'off'}`));
+   352→   352→   352→  console.log(theme.muted(`  Working Dir: ${process.cwd()}`));
+   353→   353→   353→  console.log(theme.muted(`  Type /help for commands, Tab for completion, Ctrl+C to exit\n`));
+   354→   354→   354→
+   355→   355→   355→  // Create readline with tab completion
+   356→   356→   356→  const completionEngine = new CompletionEngine(process.cwd());
+   357→   357→   357→  completionEngine.setAgentNames(Array.from(engine.agents.keys()));
+   358→   358→   358→
+   359→   359→   359→  const rl = createInterface({
+   360→   360→   360→    input: process.stdin,
+   361→   361→   361→    output: process.stdout,
+   362→   362→   362→    prompt: chalk.cyan('❯ '),
+   363→   363→   363→    historySize: 100,
+   364→   364→   364→    completer: completionEngine.complete,
+   365→   365→   365→  });
+   366→   366→   366→
+   367→   367→   367→  rl.prompt();
+   368→   368→   368→
+   369→   369→   369→  let currentMode: 'auto' | 'agent' | 'direct' = 'auto';
+   370→   370→   370→  let currentAgent: string | undefined;
+   371→   371→   371→
+   372→   372→   372→  rl.on('line', async (line) => {
+   373→   373→   373→    const input = line.trim();
+   374→   374→   374→    if (!input) { rl.prompt(); return; }
+   375→   375→   375→
+   376→   376→   376→    // Add to history
+   377→   377→   377→    completionEngine.addHistory(input);
+   378→   378→   378→
+   379→   379→   379→    // Handle slash commands
+   380→   380→   380→    if (input.startsWith('/')) {
+   381→   381→   381→      const [cmd, ...args] = input.slice(1).split(' ');
+   382→   382→   382→
+   383→   383→   383→      switch (cmd) {
+   384→   384→   384→        case 'help':
+   385→   385→   385→          printHelp(engine);
+   386→   386→   386→          break;
+   387→   387→   387→
+   388→   388→   388→        case 'model':
+   389→   389→   389→          if (args[0]) {
+   390→   390→   390→            engine.switchModel(args[0]);
+   391→   391→   391→            engine.fallback.addFallbackModel(config.defaultModel);
+   392→   392→   392→          } else {
+   393→   393→   393→            engine.ui.modelList(config.defaultModel);
+   394→   394→   394→          }
+   395→   395→   395→          break;
+   396→   396→   396→
+   397→   397→   397→        case 'agent':
+   398→   398→   398→          if (args[0]) {
+   399→   399→   399→            const agentNames = Array.from(engine.agents.keys());
+   400→   400→   400→            const found = agentNames.find(n => n.toLowerCase() === args[0].toLowerCase());
+   401→   401→   401→            if (found) { currentAgent = found; currentMode = 'direct'; engine.ui.success(`Switched to agent: ${found}`); }
+   402→   402→   402→            else { engine.ui.error(`Agent not found. Available: ${agentNames.join(', ')}`); }
+   403→   403→   403→          } else {
+   404→   404→   404→            const agents = Array.from(engine.agents.entries()).map(([name]) => ({ name, description: '', model: config.defaultModel }));
+   405→   405→   405→            engine.ui.agentList(agents);
+   406→   406→   406→          }
+   407→   407→   407→          break;
+   408→   408→   408→
+   409→   409→   409→        case 'auto':
+   410→   410→   410→          currentMode = 'auto'; currentAgent = undefined;
+   411→   411→   411→          engine.ui.success('Mode: Auto (smart orchestration)');
+   412→   412→   412→          break;
+   413→   413→   413→
+   414→   414→   414→        case 'orchestrate':
+   415→   415→   415→        case 'plan':
+   416→   416→   416→          currentMode = 'agent'; currentAgent = undefined;
+   417→   417→   417→          engine.ui.success('Mode: Multi-agent orchestration');
+   418→   418→   418→          break;
+   419→   419→   419→
+   420→   420→   420→        case 'direct':
+   421→   421→   421→          currentMode = 'direct';
+   422→   422→   422→          engine.ui.success('Mode: Direct (single agent)');
+   423→   423→   423→          break;
+   424→   424→   424→
+   425→   425→   425→        case 'plan-mode':
+   426→   426→   426→          engine.approval.setMode('plan');
+   427→   427→   427→          engine.ui.success(`${engine.approval.getModeIcon()} Permission: plan (read-only)`);
+   428→   428→   428→          break;
+   429→   429→   429→
+   430→   430→   430→        case 'stats':
+   431→   431→   431→          const stats = engine.getSessionStats();
+   432→   432→   432→          engine.ui.sessionStats(stats.inputTokens, stats.outputTokens, stats.cost);
+   433→   433→   433→          break;
+   434→   434→   434→
+   435→   435→   435→        case 'clear':
+   436→   436→   436→          console.clear(); engine.ui.banner();
+   437→   437→   437→          break;
+   438→   438→   438→
+   439→   439→   439→        case 'theme':
+   440→   440→   440→          if (args[0]) {
+   441→   441→   441→            config.ui.theme = args[0] as 'dark' | 'light' | 'dracula' | 'nord';
+   442→   442→   442→            engine.ui = new TerminalUI(config.ui.theme, config.ui.showTokenCount, config.ui.showCost);
+   443→   443→   443→            engine.ui.success(`Theme: ${args[0]}`);
+   444→   444→   444→          } else { console.log('Available themes: dracula, dark, nord, light'); }
+   445→   445→   445→          break;
+   446→   446→   446→
+   447→   447→   447→        case 'resume':
+   448→   448→   448→          if (args[0]) {
+   449→   449→   449→            const sessionId = args[0] === 'latest' ? engine.sessionManager.list()[0]?.id : args[0];
+   450→   450→   450→            if (sessionId) {
+   451→   451→   451→              const session = engine.sessionManager.load(sessionId);
+   452→   452→   452→              if (session) engine.ui.success(`Resumed session: ${sessionId.slice(0, 20)}...`);
+   453→   453→   453→              else engine.ui.error(`Session not found: ${sessionId}`);
+   454→   454→   454→            } else { engine.ui.error('No sessions found'); }
+   455→   455→   455→          } else {
+   456→   456→   456→            const sessions = engine.sessionManager.list();
+   457→   457→   457→            if (sessions.length === 0) { engine.ui.info('No sessions found'); break; }
+   458→   458→   458→            console.log(chalk.bold('\nRecent sessions:\n'));
+   459→   459→   459→            for (const s of sessions.slice(0, 10)) {
+   460→   460→   460→              const date = new Date(s.createdAt).toLocaleString();
+   461→   461→   461→              console.log(`  ${chalk.cyan(s.id.slice(0, 20))}  ${chalk.gray(date)}  ${chalk.gray(`${s.messageCount} msgs`)}`);
+   462→   462→   462→            }
+   463→   463→   463→            console.log(chalk.gray('\nUse /resume <id> to resume a session'));
+   464→   464→   464→          }
+   465→   465→   465→          break;
+   466→   466→   466→
+   467→   467→   467→        case 'compact':
+   468→   468→   468→          engine.ui.info('Compacting conversation context...');
+   469→   469→   469→          engine.contextManager.manage(engine.sessionManager.getCurrent()?.messages || []);
+   470→   470→   470→          engine.ui.success('Context compacted');
+   471→   471→   471→          break;
+   472→   472→   472→
+   473→   473→   473→        case 'undo':
+   474→   474→   474→          engine.ui.info('Undoing last change...');
+   475→   475→   475→          const undoAction = engine.undoRedo.undo();
+   476→   476→   476→          if (undoAction) {
+   477→   477→   477→            engine.ui.success(`Undone: ${undoAction.description}`);
+   478→   478→   478→          } else {
+   479→   479→   479→            engine.ui.warning('Nothing to undo');
+   480→   480→   480→          }
+   481→   481→   481→          break;
+   482→   482→   482→
+   483→   483→   483→        case 'redo':
+   484→   484→   484→          engine.ui.info('Redoing...');
+   485→   485→   485→          const redoAction = engine.undoRedo.redo();
+   486→   486→   486→          if (redoAction) {
+   487→   487→   487→            engine.ui.success(`Redone: ${redoAction.description}`);
+   488→   488→   488→          } else {
+   489→   489→   489→            engine.ui.warning('Nothing to redo');
+   490→   490→   490→          }
+   491→   491→   491→          break;
+   492→   492→   492→
+   493→   493→   493→        case 'rewind':
+   494→   494→   494→          const rewindN = args[0] ? parseInt(args[0]) : 1;
+   495→   495→   495→          if (isNaN(rewindN) || rewindN < 1) { engine.ui.error('Usage: /rewind <n>'); break; }
+   496→   496→   496→          const undone = engine.undoRedo.undoN(rewindN);
+   497→   497→   497→          engine.ui.success(`Rewound ${undone.length} action(s)`);
+   498→   498→   498→          break;
+   499→   499→   499→
+   500→   500→   500→        case 'fork':
+
+[showing lines 1-500 of 981; use offset=501 with limit to continue reading]
