@@ -6,6 +6,7 @@
 import { join, resolve, relative, normalize } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'fs';
 import chalk from 'chalk';
+import { normalizeCrossPlatformPath, isWindowsAbsolutePath } from '../utils/crosspath.js';
 export const DEFAULT_SANDBOX_CONFIG = {
     enabled: false,
     rootDir: process.cwd(),
@@ -312,11 +313,21 @@ export class Sandbox {
     }
     // --- Private Helpers ---
     resolvePath(filePath) {
+        // Expand home directory
+        if (filePath.startsWith('~/') || filePath === '~') {
+            const homeDir = process.env.HOME || process.env.USERPROFILE || require('os').homedir();
+            const expanded = filePath === '~' ? homeDir : join(homeDir, filePath.slice(2));
+            return normalize(expanded);
+        }
+        // Windows absolute path (C:\... or C:/...)
+        if (isWindowsAbsolutePath(filePath)) {
+            return normalizeCrossPlatformPath(filePath);
+        }
+        // POSIX absolute path
         if (filePath.startsWith('/'))
             return normalize(filePath);
-        if (filePath.startsWith('~/'))
-            return normalize(join(require('os').homedir(), filePath.slice(2)));
-        return normalize(resolve(this.config.rootDir, filePath));
+        // Relative path - resolve against rootDir
+        return normalize(resolve(this.config.rootDir, normalizeCrossPlatformPath(filePath)));
     }
     isUnderRootDir(absPath) {
         const relativePath = relative(this.config.rootDir, absPath);

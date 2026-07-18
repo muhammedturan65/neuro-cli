@@ -5,6 +5,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, statSync, readdirSync } from 'fs';
 import { join, relative, extname } from 'path';
 import { execSync } from 'child_process';
+import { resolvePath } from '../utils/crosspath.js';
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB
 const MAX_OUTPUT_LENGTH = 50000;
 function truncateOutput(output, maxLength = MAX_OUTPUT_LENGTH) {
@@ -32,7 +33,7 @@ export const readFileTool = {
     definition: readFileDef,
     risk: 'low',
     async execute(args, context) {
-        const filePath = join(context.workingDirectory, args.path);
+        const filePath = resolvePath(context.workingDirectory, args.path);
         if (!existsSync(filePath))
             return `Error: File not found: ${args.path}`;
         const stat = statSync(filePath);
@@ -78,7 +79,7 @@ export const writeFileTool = {
         };
     },
     async execute(args, context) {
-        const filePath = join(context.workingDirectory, args.path);
+        const filePath = resolvePath(context.workingDirectory, args.path);
         const dir = join(filePath, '..');
         if (!existsSync(dir)) {
             mkdirSync(dir, { recursive: true });
@@ -114,7 +115,7 @@ export const editFileTool = {
         };
     },
     async execute(args, context) {
-        const filePath = join(context.workingDirectory, args.path);
+        const filePath = resolvePath(context.workingDirectory, args.path);
         if (!existsSync(filePath))
             return `Error: File not found: ${args.path}`;
         let content = readFileSync(filePath, 'utf-8');
@@ -157,7 +158,7 @@ export const deleteFileTool = {
         };
     },
     async execute(args, context) {
-        const filePath = join(context.workingDirectory, args.path);
+        const filePath = resolvePath(context.workingDirectory, args.path);
         if (!existsSync(filePath))
             return `Error: File not found: ${args.path}`;
         unlinkSync(filePath);
@@ -183,7 +184,7 @@ export const listDirectoryTool = {
     definition: listDirDef,
     risk: 'low',
     async execute(args, context) {
-        const dirPath = join(context.workingDirectory, args.path || '.');
+        const dirPath = resolvePath(context.workingDirectory, args.path || '.');
         if (!existsSync(dirPath))
             return `Error: Directory not found: ${args.path}`;
         const stat = statSync(dirPath);
@@ -259,7 +260,7 @@ export const searchFilesTool = {
     risk: 'low',
     async execute(args, context) {
         const pattern = args.pattern;
-        const searchPath = join(context.workingDirectory, args.path || '.');
+        const searchPath = resolvePath(context.workingDirectory, args.path || '.');
         const fileType = args.file_type;
         const maxResults = args.max_results || 50;
         const caseInsensitive = args.case_insensitive || false;
@@ -332,7 +333,7 @@ export const applyDiffTool = {
         };
     },
     async execute(args, context) {
-        const filePath = join(context.workingDirectory, args.path);
+        const filePath = resolvePath(context.workingDirectory, args.path);
         if (!existsSync(filePath))
             return `Error: File not found: ${args.path}`;
         try {

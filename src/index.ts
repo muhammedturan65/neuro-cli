@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ============================================================
 // NeuroCLI - Advanced AI Terminal Coding Assistant
-// Main Entry Point - v4.1.0 with auto-updater
+// Main Entry Point - v4.1.1 with cross-platform path fix
 // ============================================================
 
 import { Command } from 'commander';
@@ -20,7 +20,7 @@ import { ShellCompletionGenerator } from './core/shell-completion.js';
 import chalk from 'chalk';
 import { AutoUpdater } from './core/updater.js';
 
-const VERSION = '4.1.0';
+const VERSION = '4.1.1';
 
 // ---- CLI Setup ----
 const program = new Command();
@@ -832,7 +832,7 @@ async function startInteractive(options: any) {
           break;
 
         case 'doctor':
-          console.log(chalk.bold('\nNeuroCLI v4.1.0 Health Check:\n'));
+          console.log(chalk.bold('\nNeuroCLI v4.1.1 Health Check:\n'));
           console.log(`  API Key: ${config.apiKey ? chalk.green('configured') : chalk.red('MISSING')}`);
           console.log(`  Default Model: ${chalk.cyan(config.defaultModel)} ${MODELS[config.defaultModel] ? chalk.green('valid') : chalk.red('INVALID')}`);
           console.log(`  MCP Servers: ${chalk.cyan(String(engine.mcpClient.listServers().length))}`);
@@ -1034,7 +1034,7 @@ async function startInteractive(options: any) {
 
 function printHelp(engine: NeuroEngine): void {
   const t = engine.ui.theme;
-  console.log(`\n  ${t.bold('NeuroCLI v4.1.0 Commands:')}\n`);
+  console.log(`\n  ${t.bold('NeuroCLI v4.1.1 Commands:')}\n`);
   console.log(`  ${t.tool('/help')}            Show this help message`);
   console.log(`  ${t.tool('/model [id]')}      Switch or list models`);
   console.log(`  ${t.tool('/agent [name]')}    Switch or list agents`);
