@@ -173,13 +173,26 @@ export class OpenRouterClient {
                 const { done, value } = await reader.read();
                 if (done)
                     break;
-                const chunk = decoder.decode(value, { stream: true });
-                parser.feed(chunk);
+                try {
+                    const chunk = decoder.decode(value, { stream: true });
+                    parser.feed(chunk);
+                }
+                catch {
+                    // Skip malformed SSE chunks
+                }
             }
         }
         catch (error) {
             callbacks.onError?.(error);
-            throw error;
+            // Return partial result instead of crashing the agent
+            const content = fullContent.join('');
+            const toolCallList = Array.from(toolCalls.values());
+            const cost = calculateCost(modelId, inputTokens, outputTokens);
+            const usage = { inputTokens, outputTokens, cost };
+            this.totalUsage.inputTokens += inputTokens;
+            this.totalUsage.outputTokens += outputTokens;
+            this.totalUsage.cost += cost;
+            return { content, toolCalls: toolCallList, usage };
         }
         const content = fullContent.join('');
         const toolCallList = Array.from(toolCalls.values());
@@ -195,7 +208,13 @@ export class OpenRouterClient {
      * Handle non-streaming response
      */
     async handleNonStreamingResponse(response, modelId) {
-        const data = await response.json();
+        let data;
+        try {
+            data = await response.json();
+        }
+        catch {
+            throw new Error('Invalid JSON response from OpenRouter API');
+        }
         const content = data.choices?.[0]?.message?.content || '';
         const toolCalls = data.choices?.[0]?.message?.tool_calls || [];
         const inputTokens = data.usage?.prompt_tokens || 0;

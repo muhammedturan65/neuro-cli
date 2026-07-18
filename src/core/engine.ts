@@ -1,5 +1,5 @@
 // ============================================================
-// NeuroCLI - NeuroEngine v4.1.2
+// NeuroCLI - NeuroEngine v4.1.3
 // The main engine that ties everything together
 // Now with: Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval,
 // Model Router, Prompt Cache, Undo/Redo, Output Styles,
@@ -571,7 +571,7 @@ export class NeuroEngine {
 
     // Auto-Updater
     this.updater = new AutoUpdater({
-      currentVersion: '4.1.2',
+      currentVersion: '4.1.3',
       autoCheck: true,
       autoUpdate: false,
     });
@@ -870,8 +870,11 @@ Always consider the strengths of each agent when delegating:
         agent.configModel = this.config.defaultModel;
       }
       this.ui.startStreaming();
-      result = await agent.run(message, callbacks);
-      this.ui.endStreaming();
+      try {
+        result = await agent.run(message, callbacks);
+      } finally {
+        this.ui.endStreaming();
+      }
       // Restore original model
       agent.configModel = originalModel;
     } else if (mode === 'agent') {
@@ -889,10 +892,22 @@ Always consider the strengths of each agent when delegating:
         const agent = this.agents.get('Coder');
         if (agent) {
           this.ui.startStreaming();
-          result = await agent.run(message, callbacks);
-          this.ui.endStreaming();
+          try {
+            result = await agent.run(message, callbacks);
+          } finally {
+            this.ui.endStreaming();
+          }
         } else {
-          throw new Error('Coder agent not initialized');
+          // Fallback to orchestration instead of crashing
+          this.ui.warning('Coder agent not initialized, using orchestration mode');
+          const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
+          result = {
+            content: orchestrateResult.content,
+            toolCallsMade: 0,
+            iterations: orchestrateResult.execution.iterations,
+            usage: orchestrateResult.totalUsage,
+            execution: orchestrateResult.execution,
+          };
         }
       } else {
         this.ui.thinking('Analyzing task complexity... Using multi-agent orchestration');

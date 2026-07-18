@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ============================================================
 // NeuroCLI - Advanced AI Terminal Coding Assistant
-// Main Entry Point - v4.1.2 with cross-platform path fix
+// Main Entry Point - v4.1.3 with robust error handling
 // ============================================================
 
 import { Command } from 'commander';
@@ -20,7 +20,22 @@ import { ShellCompletionGenerator } from './core/shell-completion.js';
 import chalk from 'chalk';
 import { AutoUpdater } from './core/updater.js';
 
-const VERSION = '4.1.2';
+const VERSION = '4.1.3';
+
+// ---- Global Error Handlers (prevent crashes) ----
+process.on('unhandledRejection', (reason) => {
+  console.error(chalk.red('\n⚠️ Unhandled promise rejection:'), reason);
+  // Don't exit — log and continue
+});
+
+process.on('uncaughtException', (error) => {
+  console.error(chalk.red('\n⚠️ Uncaught exception:'), error.message);
+  // Only exit for truly fatal errors
+  if (error.message.includes('ENOMEM') || error.message.includes('EADDRINUSE') || error.message.includes('EPERM')) {
+    process.exit(1);
+  }
+  // Otherwise, try to continue
+});
 
 // ---- CLI Setup ----
 const program = new Command();
@@ -217,7 +232,7 @@ program
           transport: transport as 'stdio' | 'sse' | 'http',
           command: transport === 'stdio' ? command : undefined,
           url: isUrl ? command : undefined,
-          headers: opts.headers ? JSON.parse(opts.headers) : undefined,
+          headers: opts.headers ? (() => { try { return JSON.parse(opts.headers); } catch { console.log(chalk.red('Invalid JSON for --headers')); return undefined; } })() : undefined,
         });
         console.log(chalk.green(`MCP server "${name}" added (${transport})`));
       })
@@ -428,6 +443,7 @@ async function startInteractive(options: any) {
   let isProcessing = false;
 
   rl.on('line', async (line) => {
+    try {
     const input = line.trim();
     if (!input) { rl.prompt(); return; }
 
@@ -1035,11 +1051,18 @@ async function startInteractive(options: any) {
     }
 
     rl.prompt();
+    } catch (error) {
+      // Catch-all for any unhandled error in the line handler
+      console.error(chalk.red(`\n⚠️ Error: ${error instanceof Error ? error.message : String(error)}`));
+      isProcessing = false;
+      rl.prompt();
+    }
   });
 
-  rl.on('close', () => {
-    engine.mcpClient.disconnectAll().catch(() => {});
-    engine.approval.close();
+  rl.on('close', async () => {
+    try { await engine.mcpClient.disconnectAll(); } catch {}
+    try { engine.approval.close(); } catch {}
+    try { engine.sessionManager.save(); } catch {}
     engine.ui.info('Goodbye!');
     process.exit(0);
   });

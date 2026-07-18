@@ -170,7 +170,11 @@ export class BaseAgent {
       const streamCallbacks: StreamCallbacks = {
         onToken: (token) => callbacks?.onToken?.(token),
         onThinking: (thinking) => callbacks?.onThinking?.(thinking),
-        onToolCall: (tc) => callbacks?.onToolCall?.(tc.function.name, JSON.parse(tc.function.arguments)),
+        onToolCall: (tc) => {
+          let args: Record<string, unknown> = {};
+          try { args = JSON.parse(tc.function.arguments); } catch { /* malformed LLM args */ }
+          callbacks?.onToolCall?.(tc.function.name, args);
+        },
       };
 
       // Call LLM
@@ -248,7 +252,7 @@ export class BaseAgent {
       }
     }
 
-    if (iteration > maxIter) {
+    if (iteration > maxIter && execution.status === 'running') {
       execution.status = 'completed';
       execution.result = 'Max iterations reached';
     }
@@ -273,6 +277,7 @@ export class BaseAgent {
    * Quick single-turn query (no tool loop)
    */
   async query(prompt: string): Promise<string> {
+    try {
     const messages: Message[] = [
       { role: 'system', content: this.config.systemPrompt, timestamp: Date.now() },
       { role: 'user', content: prompt, timestamp: Date.now() },
@@ -284,5 +289,8 @@ export class BaseAgent {
     );
 
     return response.content;
+    } catch (error) {
+      return `Error: ${error instanceof Error ? error.message : String(error)}`;
+    }
   }
 }

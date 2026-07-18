@@ -98,10 +98,19 @@ Respond with a JSON plan in this exact format:
       { role: 'user', content: planPrompt, timestamp: Date.now() },
     ];
 
-    const response = await this.client.quickChat(
-      this.config.model || 'anthropic/claude-sonnet-4',
-      messages,
-    );
+    let response;
+    try {
+      response = await this.client.quickChat(
+        this.config.model || 'anthropic/claude-sonnet-4',
+        messages,
+      );
+    } catch {
+      // API error during planning, fallback to direct approach
+      return {
+        reasoning: 'API error during planning, falling back to direct approach',
+        tasks: [{ agent: 'Coder', task, dependsOn: [] }],
+      };
+    }
 
     try {
       // Extract JSON from response
@@ -167,7 +176,11 @@ Respond with a JSON plan in this exact format:
       });
 
       if (readyTasks.length === 0) {
-        // Deadlock or all tasks completed
+        // Deadlock detection - log unresolved tasks
+        const unresolved = plan.tasks.filter(t => !completedTasks.has(t.agent + ':' + t.task));
+        if (unresolved.length > 0) {
+          callbacks?.onThinking?.(`⚠️ Deadlock detected. Unresolved tasks: ${unresolved.map(t => t.agent + ':' + t.task).join(', ')}`);
+        }
         break;
       }
 
@@ -201,15 +214,26 @@ Respond with a JSON plan in this exact format:
           }
         }
 
-        const result = await agent.run(fullTask, {
-          onToken: (token) => callbacks?.onToken?.(token),
-          onToolCall: (name, args) => callbacks?.onToolCall?.(name, args),
-          onToolResult: (name, result, isError) => callbacks?.onToolResult?.(name, result, isError),
-          onApprovalNeeded: async (name, args, risk) => {
-            return callbacks?.onApprovalNeeded?.(name, args, risk) ?? true;
-          },
-          onThinking: (thinking) => callbacks?.onThinking?.(thinking),
-        });
+        let result: AgentRunResult;
+        try {
+          result = await agent.run(fullTask, {
+            onToken: (token) => callbacks?.onToken?.(token),
+            onToolCall: (name, args) => callbacks?.onToolCall?.(name, args),
+            onToolResult: (name, result, isError) => callbacks?.onToolResult?.(name, result, isError),
+            onApprovalNeeded: async (name, args, risk) => {
+              return callbacks?.onApprovalNeeded?.(name, args, risk) ?? true;
+            },
+            onThinking: (thinking) => callbacks?.onThinking?.(thinking),
+          });
+        } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          result = {
+            content: `Agent ${subTask.agent} failed: ${errMsg}`,
+            toolCallsMade: 0, iterations: 0,
+            usage: { inputTokens: 0, outputTokens: 0, cost: 0 },
+            execution: { agentName: subTask.agent, task: subTask.task, startTime: Date.now(), iterations: 0, tokensUsed: 0, status: 'failed' },
+          };
+        }
 
         agentResults.set(subTask.agent + ':' + subTask.task, result);
         totalUsage.inputTokens += result.usage.inputTokens;

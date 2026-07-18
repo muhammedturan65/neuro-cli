@@ -117,7 +117,14 @@ export class BaseAgent {
             const streamCallbacks = {
                 onToken: (token) => callbacks?.onToken?.(token),
                 onThinking: (thinking) => callbacks?.onThinking?.(thinking),
-                onToolCall: (tc) => callbacks?.onToolCall?.(tc.function.name, JSON.parse(tc.function.arguments)),
+                onToolCall: (tc) => {
+                    let args = {};
+                    try {
+                        args = JSON.parse(tc.function.arguments);
+                    }
+                    catch { /* malformed LLM args */ }
+                    callbacks?.onToolCall?.(tc.function.name, args);
+                },
             };
             // Call LLM
             try {
@@ -183,7 +190,7 @@ export class BaseAgent {
                 break;
             }
         }
-        if (iteration > maxIter) {
+        if (iteration > maxIter && execution.status === 'running') {
             execution.status = 'completed';
             execution.result = 'Max iterations reached';
         }
@@ -204,12 +211,17 @@ export class BaseAgent {
      * Quick single-turn query (no tool loop)
      */
     async query(prompt) {
-        const messages = [
-            { role: 'system', content: this.config.systemPrompt, timestamp: Date.now() },
-            { role: 'user', content: prompt, timestamp: Date.now() },
-        ];
-        const response = await this.client.quickChat(this.config.model || 'anthropic/claude-sonnet-4', messages);
-        return response.content;
+        try {
+            const messages = [
+                { role: 'system', content: this.config.systemPrompt, timestamp: Date.now() },
+                { role: 'user', content: prompt, timestamp: Date.now() },
+            ];
+            const response = await this.client.quickChat(this.config.model || 'anthropic/claude-sonnet-4', messages);
+            return response.content;
+        }
+        catch (error) {
+            return `Error: ${error instanceof Error ? error.message : String(error)}`;
+        }
     }
 }
 //# sourceMappingURL=base.js.map
