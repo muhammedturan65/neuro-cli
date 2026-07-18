@@ -1,6 +1,6 @@
 // ============================================================
 // NeuroCLI - Advanced AI Terminal Coding Assistant
-// Core Types & Interfaces - v2.0 with all new features
+// Core Types & Interfaces - v3.0 with all new features
 // ============================================================
 
 export interface Message {
@@ -111,6 +111,22 @@ export interface NeuroConfig {
   promptCache: PromptCacheConfig;
   /** Custom agents defined by the user */
   customAgents: Record<string, AgentConfig>;
+  /** Telemetry configuration */
+  telemetry: TelemetryConfigType;
+  /** Vim mode configuration */
+  vimMode: VimModeConfigType;
+  /** i18n / language configuration */
+  i18n: I18nConfigType;
+  /** Multimodal / image support configuration */
+  multimodal: MultimodalConfigType;
+  /** Voice I/O configuration */
+  voice: VoiceConfigType;
+  /** API server configuration */
+  apiServer: APIServerConfigType;
+  /** Cloud sync configuration */
+  cloudSync: CloudSyncConfigType;
+  /** Web dashboard configuration */
+  dashboard: DashboardConfigType;
 }
 
 export interface Session {
@@ -262,4 +278,104 @@ export interface SessionExport {
   exportedAt: number;
   session: Session;
   neuroVersion: string;
+}
+
+// ---- P2/P3 New Config Types ----
+
+// Telemetry configuration
+export interface TelemetryConfigType {
+  /** Whether telemetry is enabled (opt-in) */
+  enabled: boolean;
+  /** Whether to track model performance */
+  trackModelPerformance: boolean;
+  /** Whether to track tool usage */
+  trackToolUsage: boolean;
+  /** Whether to track session metrics */
+  trackSessionMetrics: boolean;
+  /** Retention period in days */
+  retentionDays: number;
+}
+
+// Vim mode configuration
+export interface VimModeConfigType {
+  /** Whether vim keybindings are enabled */
+  enabled: boolean;
+  /** Show mode indicator in prompt */
+  showModeIndicator: boolean;
+  /** Bell on error in normal mode */
+  bellOnError: boolean;
+}
+
+// i18n configuration
+export interface I18nConfigType {
+  /** Current locale code */
+  locale: string;
+  /** Fallback locale when key is missing */
+  fallbackLocale: string;
+  /** Auto-detect system language */
+  autoDetect: boolean;
+}
+
+// Multimodal / image support configuration
+export interface MultimodalConfigType {
+  /** Whether multimodal support is enabled */
+  enabled: boolean;
+  /** Max image file size in bytes */
+  maxImageSize: number;
+  /** Auto-detect image references in prompts */
+  autoDetectImages: boolean;
+}
+
+// Voice I/O configuration
+export interface VoiceConfigType {
+  /** Whether voice I/O is enabled */
+  enabled: boolean;
+  /** TTS engine */
+  ttsEngine: 'system' | 'espeak' | 'say' | 'auto';
+  /** STT engine */
+  sttEngine: 'system' | 'whisper' | 'auto';
+  /** Auto-speak assistant responses */
+  autoSpeak: boolean;
+  /** Language for TTS/STT */
+  language: string;
+}
+
+// API server configuration
+export interface APIServerConfigType {
+  /** Whether the API server is enabled */
+  enabled: boolean;
+  /** Host to bind to */
+  host: string;
+  /** Port to listen on */
+  port: number;
+  /** Whether authentication is required */
+  requireAuth: boolean;
+  /** Enable WebSocket support */
+  enableWebSocket: boolean;
+}
+
+// Cloud sync configuration
+export interface CloudSyncConfigType {
+  /** Whether cloud sync is enabled */
+  enabled: boolean;
+  /** Storage backend */
+  backend: 'gist' | 'local';
+  /** Auto-sync on session end */
+  autoSync: boolean;
+  /** Include session content in sync */
+  includeContent: boolean;
+}
+
+// Web dashboard configuration
+export interface DashboardConfigType {
+  /** Whether the web dashboard is enabled */
+  enabled: boolean;
+  /** Host to bind to */
+  host: string;
+  /** Port for dashboard server */
+  port: number;
+  /** Auto-open browser on start */
+  autoOpen: boolean;
+  /** Refresh interval for real-time updates (ms) */
+  refreshInterval: number;
 }

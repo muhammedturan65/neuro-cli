@@ -44,6 +44,33 @@ export declare class SessionManager {
      */
     delete(sessionId: string): boolean;
     /**
+     * Fork a session (create a copy with new ID)
+     */
+    fork(sessionId: string): Session | null;
+    /**
+     * Get the most recent session
+     */
+    getMostRecent(): Session | null;
+    /**
+     * Search sessions by content
+     */
+    search(query: string): Array<{
+        id: string;
+        createdAt: number;
+        messageCount: number;
+        model: string;
+        cost: number;
+        matchPreview: string;
+    }>;
+    /**
+     * Export a session to a portable JSON format
+     */
+    exportSession(sessionId: string, outputPath: string): boolean;
+    /**
+     * Import a session from a JSON file
+     */
+    importSession(filePath: string): Session | null;
+    /**
      * Get session statistics
      */
     getStats(): {

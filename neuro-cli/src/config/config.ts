@@ -158,6 +158,56 @@ export const DEFAULT_CONFIG: NeuroConfig = {
     similarityThreshold: 0.9,
   },
   customAgents: {},
+  // P2/P3 new config sections
+  telemetry: {
+    enabled: false,
+    trackModelPerformance: true,
+    trackToolUsage: true,
+    trackSessionMetrics: true,
+    retentionDays: 90,
+  },
+  vimMode: {
+    enabled: false,
+    showModeIndicator: true,
+    bellOnError: true,
+  },
+  i18n: {
+    locale: 'en',
+    fallbackLocale: 'en',
+    autoDetect: true,
+  },
+  multimodal: {
+    enabled: true,
+    maxImageSize: 20 * 1024 * 1024,
+    autoDetectImages: true,
+  },
+  voice: {
+    enabled: false,
+    ttsEngine: 'auto',
+    sttEngine: 'auto',
+    autoSpeak: false,
+    language: 'en',
+  },
+  apiServer: {
+    enabled: false,
+    host: '127.0.0.1',
+    port: 3141,
+    requireAuth: true,
+    enableWebSocket: true,
+  },
+  cloudSync: {
+    enabled: false,
+    backend: 'gist',
+    autoSync: false,
+    includeContent: true,
+  },
+  dashboard: {
+    enabled: false,
+    host: '127.0.0.1',
+    port: 3142,
+    autoOpen: true,
+    refreshInterval: 5000,
+  },
 };
 
 export function loadConfig(): NeuroConfig {

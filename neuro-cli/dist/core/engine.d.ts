@@ -6,6 +6,31 @@ import { Orchestrator } from '../agents/orchestrator.js';
 import { ContextManager } from '../core/context.js';
 import { SessionManager } from '../core/session.js';
 import { TerminalUI } from '../ui/renderer.js';
+import { ApprovalSystem } from '../core/approval.js';
+import { MCPClient } from '../mcp/client.js';
+import { DoomLoopProtection } from '../core/doom-loop.js';
+import { FallbackChain } from '../core/fallback.js';
+import { Sandbox } from '../core/sandbox.js';
+import { PluginManager } from '../core/plugin-sdk.js';
+import { UndoRedoSystem } from './undo-redo.js';
+import { PromptCache } from './prompt-cache.js';
+import { ModelRouter } from './model-router.js';
+import { StyleManager } from './output-styles.js';
+import { ExtendedThinking } from './extended-thinking.js';
+import { SpendingMonitor } from './spending-warnings.js';
+import { SkillSystem } from '../context/skill-system.js';
+import { CustomAgentLoader } from '../context/custom-agents.js';
+import { CustomToolLoader } from '../context/custom-tools.js';
+import { NeuroIgnore } from '../context/neuroignore.js';
+import { OllamaProvider } from '../api/ollama.js';
+import { TelemetrySystem } from './telemetry.js';
+import { VimModeManager } from './vim-mode.js';
+import { I18nSystem } from './i18n.js';
+import { MultimodalSupport } from './multimodal.js';
+import { VoiceIO } from './voice.js';
+import { APIServer } from './api-server.js';
+import { CloudSync } from './cloud-sync.js';
+import { WebDashboard } from './web-dashboard.js';
 export declare class NeuroEngine {
     config: NeuroConfig;
     client: OpenRouterClient;
@@ -15,9 +40,46 @@ export declare class NeuroEngine {
     sessionManager: SessionManager;
     ui: TerminalUI;
     agents: Map<string, BaseAgent>;
+    mcpClient: MCPClient;
+    approval: ApprovalSystem;
+    doomLoop: DoomLoopProtection;
+    fallback: FallbackChain;
+    sandbox: Sandbox;
+    pluginManager: PluginManager;
+    undoRedo: UndoRedoSystem;
+    promptCache: PromptCache;
+    modelRouter: ModelRouter;
+    styleManager: StyleManager;
+    extendedThinking: ExtendedThinking;
+    spendingMonitor: SpendingMonitor;
+    skillSystem: SkillSystem;
+    customAgentLoader: CustomAgentLoader;
+    customToolLoader: CustomToolLoader;
+    neuroIgnore: NeuroIgnore;
+    ollamaProvider: OllamaProvider;
+    telemetry: TelemetrySystem;
+    vimMode: VimModeManager;
+    i18n: I18nSystem;
+    multimodal: MultimodalSupport;
+    voice: VoiceIO;
+    apiServer: APIServer;
+    cloudSync: CloudSync;
+    dashboard: WebDashboard;
     private autoApproveSet;
     private requireApprovalSet;
     constructor(config: NeuroConfig);
+    /**
+     * Register plugin tools with the tool registry
+     */
+    private registerPluginTools;
+    /**
+     * Register custom tools from .neuro/tools/
+     */
+    private registerCustomTools;
+    /**
+     * Load custom agents from .neuro/agents/
+     */
+    private loadCustomAgents;
     /**
      * Initialize all agents from config
      */
@@ -31,11 +93,16 @@ export declare class NeuroEngine {
         execution?: AgentExecution;
     }>;
     /**
-     * Handle tool approval
+     * Check sandbox permissions for a tool call
+     */
+    private checkSandboxForTool;
+    /**
+     * Handle tool approval using the enhanced ApprovalSystem
      */
     private handleApproval;
     /**
      * Assess task complexity to decide execution mode
+     * Now delegates to ModelRouter for more sophisticated analysis
      */
     private assessComplexity;
     /**
@@ -51,5 +118,14 @@ export declare class NeuroEngine {
         cost: number;
         messages: number;
     };
+    /**
+     * Register a custom agent
+     */
+    registerCustomAgent(name: string, config: {
+        description: string;
+        systemPrompt: string;
+        tools?: string[];
+        maxIterations?: number;
+    }): void;
 }
 //# sourceMappingURL=engine.d.ts.map

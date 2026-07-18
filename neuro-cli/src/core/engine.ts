@@ -4,7 +4,9 @@
 // Now with: Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval,
 // Model Router, Prompt Cache, Undo/Redo, Output Styles,
 // Skill System, Custom Agents, Custom Tools, Ollama,
-// Extended Thinking, Spending Monitor, NeuroIgnore
+// Extended Thinking, Spending Monitor, NeuroIgnore,
+// Telemetry, Vim Mode, i18n, Multimodal, Voice I/O,
+// API Server, Cloud Sync, Web Dashboard
 // ============================================================
 
 import { NeuroConfig, Message, AgentExecution, PermissionMode } from '../core/types.js';
@@ -34,6 +36,14 @@ import { CustomAgentLoader, CustomAgentDefinition } from '../context/custom-agen
 import { CustomToolLoader, CustomToolDefinition } from '../context/custom-tools.js';
 import { NeuroIgnore } from '../context/neuroignore.js';
 import { OllamaProvider, OllamaConfig } from '../api/ollama.js';
+import { TelemetrySystem, TelemetryConfig } from './telemetry.js';
+import { VimModeManager, VimModeConfig } from './vim-mode.js';
+import { I18nSystem, SupportedLocale } from './i18n.js';
+import { MultimodalSupport, MultimodalConfig } from './multimodal.js';
+import { VoiceIO, VoiceConfig } from './voice.js';
+import { APIServer, APIServerConfig } from './api-server.js';
+import { CloudSync, CloudSyncConfig } from './cloud-sync.js';
+import { WebDashboard, DashboardConfig } from './web-dashboard.js';
 
 export class NeuroEngine {
   public config: NeuroConfig;
@@ -63,6 +73,16 @@ export class NeuroEngine {
   public customToolLoader: CustomToolLoader;
   public neuroIgnore: NeuroIgnore;
   public ollamaProvider: OllamaProvider;
+
+  // P2/P3 new systems
+  public telemetry: TelemetrySystem;
+  public vimMode: VimModeManager;
+  public i18n: I18nSystem;
+  public multimodal: MultimodalSupport;
+  public voice: VoiceIO;
+  public apiServer: APIServer;
+  public cloudSync: CloudSync;
+  public dashboard: WebDashboard;
 
   private autoApproveSet: Set<string>;
   private requireApprovalSet: Set<string>;
@@ -173,6 +193,48 @@ export class NeuroEngine {
       baseUrl: process.env.OLLAMA_HOST || 'http://localhost:11434',
       defaultModel: 'llama3',
     });
+
+    // --- P2/P3 New Systems ---
+
+    // Telemetry (opt-in, disabled by default)
+    this.telemetry = new TelemetrySystem({
+      enabled: false,
+    });
+
+    // Vim mode
+    this.vimMode = new VimModeManager({
+      enabled: false,
+    });
+
+    // i18n
+    this.i18n = new I18nSystem();
+
+    // Multimodal support
+    this.multimodal = new MultimodalSupport();
+
+    // Voice I/O
+    this.voice = new VoiceIO({
+      enabled: false,
+    });
+
+    // API server
+    this.apiServer = new APIServer({
+      enabled: false,
+    });
+    this.apiServer.setEngine(this);
+
+    // Cloud sync
+    this.cloudSync = new CloudSync({
+      enabled: false,
+    });
+
+    // Web dashboard
+    this.dashboard = new WebDashboard({
+      enabled: false,
+    });
+    this.dashboard.setEngine(this);
+
+    // --- End P2/P3 ---
 
     // --- End v3.0 ---
 

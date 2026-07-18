@@ -1,0 +1,1058 @@
+     1→// ============================================================
+     2→// NeuroCLI - Ollama (Local Model) Provider
+     3→// Supports Ollama API + OpenAI-compatible endpoints
+     4→// Streaming, Tool Use, Embeddings, Model Management
+     5→// ============================================================
+     6→
+     7→import { Message, ToolCall, ToolDefinition } from '../core/types.js';
+     8→
+     9→// ----------------------------------------------------------------
+    10→// Configuration
+    11→// ----------------------------------------------------------------
+    12→
+    13→export interface OllamaConfig {
+    14→  baseUrl: string;        // default: http://localhost:11434
+    15→  defaultModel: string;   // default: llama3
+    16→  timeout: number;        // default: 120000 (2 min for local models)
+    17→  maxRetries: number;     // default: 1
+    18→  temperature?: number;
+    19→  maxTokens?: number;
+    20→}
+    21→
+    22→export const DEFAULT_OLLAMA_CONFIG: OllamaConfig = {
+    23→  baseUrl: 'http://localhost:11434',
+    24→  defaultModel: 'llama3',
+    25→  timeout: 120000,
+    26→  maxRetries: 1,
+    27→};
+    28→
+    29→// ----------------------------------------------------------------
+    30→// Model Info
+    31→// ----------------------------------------------------------------
+    32→
+    33→export interface OllamaModel {
+    34→  name: string;
+    35→  size: number;
+    36→  modified_at: string;
+    37→  details: {
+    38→    format: string;
+    39→    family: string;
+    40→    parameter_size: string;
+    41→    quantization_level: string;
+    42→  };
+    43→}
+    44→
+    45→// ----------------------------------------------------------------
+    46→// Chat Response
+    47→// ----------------------------------------------------------------
+    48→
+    49→export interface OllamaChatResponse {
+    50→  content: string;
+    51→  model: string;
+    52→  totalDuration: number;
+    53→  evalCount: number;
+    54→  evalDuration: number;
+    55→}
+    56→
+    57→// ----------------------------------------------------------------
+    58→// Stream Callbacks
+    59→// ----------------------------------------------------------------
+    60→
+    61→export interface OllamaStreamCallbacks {
+    62→  onToken?: (token: string) => void;
+    63→  onToolCall?: (toolCall: ToolCall) => void;
+    64→  onComplete?: (response: OllamaChatResponse) => void;
+    65→  onError?: (error: Error) => void;
+    66→}
+    67→
+    68→// ----------------------------------------------------------------
+    69→// Internal Types
+    70→// ----------------------------------------------------------------
+    71→
+    72→interface OllamaChatMessage {
+    73→  role: string;
+    74→  content: string;
+    75→  tool_calls?: OllamaToolCall[];
+    76→  tool_call_id?: string;
+    77→  images?: string[];
+    78→}
+    79→
+    80→interface OllamaToolCall {
+    81→  function: {
+    82→    name: string;
+    83→    arguments: Record<string, unknown>;
+    84→  };
+    85→}
+    86→
+    87→interface OllamaToolDefinition {
+    88→  type: 'function';
+    89→  function: {
+    90→    name: string;
+    91→    description: string;
+    92→    parameters: Record<string, unknown>;
+    93→  };
+    94→}
+    95→
+    96→interface OllamaChatRequestBody {
+    97→  model: string;
+    98→  messages: OllamaChatMessage[];
+    99→  stream?: boolean;
+   100→  tools?: OllamaToolDefinition[];
+   101→  options?: {
+   102→    temperature?: number;
+   103→    num_predict?: number;
+   104→    num_ctx?: number;
+   105→    top_p?: number;
+   106→    top_k?: number;
+   107→  };
+   108→}
+   109→
+   110→interface OllamaNativeResponse {
+   111→  model: string;
+   112→  message: {
+   113→    role: string;
+   114→    content: string;
+   115→    tool_calls?: OllamaToolCall[];
+   116→  };
+   117→  done: boolean;
+   118→  total_duration?: number;
+   119→  eval_count?: number;
+   120→  eval_duration?: number;
+   121→  done_reason?: string;
+   122→}
+   123→
+   124→interface OllamaTagsResponse {
+   125→  models: OllamaModel[];
+   126→}
+   127→
+   128→interface OllamaEmbeddingResponse {
+   129→  embedding: number[];
+   130→}
+   131→
+   132→interface OllamaPullResponse {
+   133→  status: string;
+   134→  completed?: number;
+   135→  total?: number;
+   136→}
+   137→
+   138→interface OllamaVersionResponse {
+   139→  version: string;
+   140→}
+   141→
+   142→// ----------------------------------------------------------------
+   143→// Provider Mode Detection
+   144→// ----------------------------------------------------------------
+   145→
+   146→type ProviderMode = 'ollama' | 'openai-compatible';
+   147→
+   148→// ----------------------------------------------------------------
+   149→// Error Classes
+   150→// ----------------------------------------------------------------
+   151→
+   152→export class OllamaProviderError extends Error {
+   153→  constructor(
+   154→    message: string,
+   155→    public readonly statusCode?: number,
+   156→    public readonly body?: string,
+   157→  ) {
+   158→    super(message);
+   159→    this.name = 'OllamaProviderError';
+   160→  }
+   161→}
+   162→
+   163→export class OllamaTimeoutError extends OllamaProviderError {
+   164→  constructor(timeout: number) {
+   165→    super(`Request timed out after ${timeout}ms`);
+   166→    this.name = 'OllamaTimeoutError';
+   167→  }
+   168→}
+   169→
+   170→export class OllamaConnectionError extends OllamaProviderError {
+   171→  constructor(baseUrl: string, cause?: unknown) {
+   172→    super(`Cannot connect to Ollama at ${baseUrl}: ${cause instanceof Error ? cause.message : String(cause)}`);
+   173→    this.name = 'OllamaConnectionError';
+   174→  }
+   175→}
+   176→
+   177→// ----------------------------------------------------------------
+   178→// OllamaProvider
+   179→// ----------------------------------------------------------------
+   180→
+   181→export class OllamaProvider {
+   182→  private config: OllamaConfig;
+   183→  private mode: ProviderMode = 'ollama';
+   184→
+   185→  constructor(config?: Partial<OllamaConfig>) {
+   186→    this.config = { ...DEFAULT_OLLAMA_CONFIG, ...config };
+   187→    this.detectMode();
+   188→  }
+   189→
+   190→  // ==============================================================
+   191→  // Public API
+   192→  // ==============================================================
+   193→
+   194→  /**
+   195→   * Chat completion with optional streaming.
+   196→   *
+   197→   * When callbacks are provided and stream is not explicitly false,
+   198→   * the response is streamed token-by-token via the callbacks.
+   199→   */
+   200→  async chat(
+   201→    messages: Array<{ role: string; content: string; toolCalls?: any[]; toolCallId?: string }>,
+   202→    options?: {
+   203→      model?: string;
+   204→      tools?: ToolDefinition[];
+   205→      stream?: boolean;
+   206→      temperature?: number;
+   207→      maxTokens?: number;
+   208→    },
+   209→    callbacks?: OllamaStreamCallbacks,
+   210→  ): Promise<OllamaChatResponse> {
+   211→    const model = options?.model ?? this.config.defaultModel;
+   212→    const shouldStream = options?.stream !== false;
+   213→
+   214→    if (this.mode === 'ollama') {
+   215→      return this.chatOllama(model, messages, options, shouldStream, callbacks);
+   216→    }
+   217→
+   218→    return this.chatOpenAICompatible(model, messages, options, shouldStream, callbacks);
+   219→  }
+   220→
+   221→  /**
+   222→   * List locally available models.
+   223→   */
+   224→  async listModels(): Promise<OllamaModel[]> {
+   225→    if (this.mode === 'ollama') {
+   226→      return this.listModelsOllama();
+   227→    }
+   228→    return this.listModelsOpenAICompatible();
+   229→  }
+   230→
+   231→  /**
+   232→   * Health check -- returns true if the endpoint is reachable.
+   233→   */
+   234→  async isAvailable(): Promise<boolean> {
+   235→    try {
+   236→      if (this.mode === 'ollama') {
+   237→        const response = await this.fetch(`${this.config.baseUrl}`, {
+   238→          method: 'GET',
+   239→          signal: AbortSignal.timeout(5000),
+   240→        });
+   241→        return response.ok;
+   242→      }
+   243→
+   244→      // OpenAI-compatible: try /v1/models
+   245→      const response = await this.fetch(`${this.config.baseUrl}/v1/models`, {
+   246→        method: 'GET',
+   247→        signal: AbortSignal.timeout(5000),
+   248→      });
+   249→      return response.ok;
+   250→    } catch {
+   251→      return false;
+   252→    }
+   253→  }
+   254→
+   255→  /**
+   256→   * Generate embeddings for a prompt using the Ollama native API.
+   257→   * Not supported on OpenAI-compatible endpoints through this method.
+   258→   */
+   259→  async generateEmbeddings(prompt: string, model?: string): Promise<number[]> {
+   260→    if (this.mode !== 'ollama') {
+   261→      throw new OllamaProviderError(
+   262→        'Embeddings are only supported when using the native Ollama API. ' +
+   263→        'Switch baseUrl to an Ollama endpoint to use embeddings.',
+   264→      );
+   265→    }
+   266→
+   267→    const body = {
+   268→      model: model ?? this.config.defaultModel,
+   269→      prompt,
+   270→    };
+   271→
+   272→    const data = await this.request<OllamaEmbeddingResponse>('/api/embeddings', 'POST', body);
+   273→    return data.embedding;
+   274→  }
+   275→
+   276→  /**
+   277→   * Pull a model from the Ollama registry.
+   278→   * Returns true on success.
+   279→   */
+   280→  async pullModel(name: string): Promise<boolean> {
+   281→    if (this.mode !== 'ollama') {
+   282→      throw new OllamaProviderError(
+   283→        'Model pulling is only supported when using the native Ollama API.',
+   284→      );
+   285→    }
+   286→
+   287→    try {
+   288→      const response = await this.fetch(`${this.config.baseUrl}/api/pull`, {
+   289→        method: 'POST',
+   290→        headers: { 'Content-Type': 'application/json' },
+   291→        body: JSON.stringify({ name, stream: false }),
+   292→        signal: AbortSignal.timeout(Math.max(this.config.timeout, 600000)), // 10 min floor for pulls
+   293→      });
+   294→
+   295→      if (!response.ok) {
+   296→        const body = await response.text();
+   297→        throw new OllamaProviderError(
+   298→          `Failed to pull model "${name}": ${response.status} ${body}`,
+   299→          response.status,
+   300→          body,
+   301→        );
+   302→      }
+   303→
+   304→      return true;
+   305→    } catch (error) {
+   306→      if (error instanceof OllamaProviderError) throw error;
+   307→      throw new OllamaConnectionError(this.config.baseUrl, error);
+   308→    }
+   309→  }
+   310→
+   311→  /**
+   312→   * Estimate token count for a text string.
+   313→   *
+   314→   * Uses a heuristic based on the model family. Ollama does not expose
+   315→   * a tokenization endpoint, so this is an approximation:
+   316→   *   - For most models: ~4 characters per token (GPT-style)
+   317→   *   - For CJK-heavy text: ~2 characters per token
+   318→   *   - A slight overhead is added for special tokens / formatting.
+   319→   */
+   320→  estimateTokens(text: string): number {
+   321→    if (!text) return 0;
+   322→
+   323→    // Detect proportion of CJK characters
+   324→    const cjkPattern = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g;
+   325→    const cjkMatches = text.match(cjkPattern);
+   326→    const cjkRatio = cjkMatches ? cjkMatches.length / text.length : 0;
+   327→
+   328→    // Blend between the two heuristics
+   329→    const charsPerToken = 4 - 2 * cjkRatio; // 4 for pure ASCII, 2 for pure CJK
+   330→    const baseEstimate = Math.ceil(text.length / charsPerToken);
+   331→
+   332→    // Add ~5% overhead for special tokens, formatting, etc.
+   333→    return Math.ceil(baseEstimate * 1.05);
+   334→  }
+   335→
+   336→  /**
+   337→   * Get the current configuration (read-only copy).
+   338→   */
+   339→  getConfig(): OllamaConfig {
+   340→    return { ...this.config };
+   341→  }
+   342→
+   343→  /**
+   344→   * Update configuration. Merges with existing config.
+   345→   * Re-detects provider mode if baseUrl changes.
+   346→   */
+   347→  updateConfig(updates: Partial<OllamaConfig>): void {
+   348→    const oldBaseUrl = this.config.baseUrl;
+   349→    this.config = { ...this.config, ...updates };
+   350→
+   351→    if (updates.baseUrl && updates.baseUrl !== oldBaseUrl) {
+   352→      this.detectMode();
+   353→    }
+   354→  }
+   355→
+   356→  // ==============================================================
+   357→  // Ollama Native Chat
+   358→  // ==============================================================
+   359→
+   360→  private async chatOllama(
+   361→    model: string,
+   362→    messages: Array<{ role: string; content: string; toolCalls?: any[]; toolCallId?: string }>,
+   363→    options: {
+   364→      model?: string;
+   365→      tools?: ToolDefinition[];
+   366→      stream?: boolean;
+   367→      temperature?: number;
+   368→      maxTokens?: number;
+   369→    } | undefined,
+   370→    shouldStream: boolean,
+   371→    callbacks: OllamaStreamCallbacks | undefined,
+   372→  ): Promise<OllamaChatResponse> {
+   373→    const ollamaMessages = this.convertMessages(messages);
+   374→
+   375→    const body: OllamaChatRequestBody = {
+   376→      model,
+   377→      messages: ollamaMessages,
+   378→      stream: shouldStream,
+   379→      options: {
+   380→        temperature: options?.temperature ?? this.config.temperature,
+   381→        num_predict: options?.maxTokens ?? this.config.maxTokens,
+   382→      },
+   383→    };
+   384→
+   385→    // Add tools if provided and supported
+   386→    if (options?.tools && options.tools.length > 0) {
+   387→      body.tools = this.convertTools(options.tools);
+   388→    }
+   389→
+   390→    let lastError: Error | null = null;
+   391→
+   392→    for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
+   393→      if (attempt > 0) {
+   394→        const waitTime = Math.min(2000 * Math.pow(2, attempt - 1), 10000);
+   395→        await this.sleep(waitTime);
+   396→      }
+   397→
+   398→      try {
+   399→        if (shouldStream && callbacks) {
+   400→          return await this.streamOllamaChat(body, callbacks);
+   401→        }
+   402→
+   403→        const data = await this.request<OllamaNativeResponse>('/api/chat', 'POST', body);
+   404→        return this.normalizeOllamaResponse(data, callbacks);
+   405→      } catch (error) {
+   406→        lastError = error as Error;
+   407→        if (!this.isRetryable(error)) break;
+   408→      }
+   409→    }
+   410→
+   411→    throw lastError ?? new OllamaProviderError('Max retries exceeded');
+   412→  }
+   413→
+   414→  /**
+   415→   * Stream an Ollama native /api/chat response (NDJSON).
+   416→   */
+   417→  private async streamOllamaChat(
+   418→    body: OllamaChatRequestBody,
+   419→    callbacks: OllamaStreamCallbacks,
+   420→  ): Promise<OllamaChatResponse> {
+   421→    const response = await this.fetch(`${this.config.baseUrl}/api/chat`, {
+   422→      method: 'POST',
+   423→      headers: { 'Content-Type': 'application/json' },
+   424→      body: JSON.stringify(body),
+   425→      signal: AbortSignal.timeout(this.config.timeout),
+   426→    });
+   427→
+   428→    if (!response.ok) {
+   429→      const text = await response.text();
+   430→      throw new OllamaProviderError(
+   431→        `Ollama chat error (${response.status}): ${text}`,
+   432→        response.status,
+   433→        text,
+   434→      );
+   435→    }
+   436→
+   437→    const reader = response.body?.getReader();
+   438→    if (!reader) throw new OllamaProviderError('No response body for streaming');
+   439→
+   440→    const decoder = new TextDecoder();
+   441→    let fullContent = '';
+   442→    let model = '';
+   443→    let totalDuration = 0;
+   444→    let evalCount = 0;
+   445→    let evalDuration = 0;
+   446→    const toolCalls: ToolCall[] = [];
+   447→    let buffer = '';
+   448→
+   449→    try {
+   450→      while (true) {
+   451→        const { done, value } = await reader.read();
+   452→        if (done) break;
+   453→
+   454→        buffer += decoder.decode(value, { stream: true });
+   455→
+   456→        // NDJSON: each line is a JSON object
+   457→        const lines = buffer.split('\n');
+   458→        buffer = lines.pop() ?? ''; // keep incomplete line in buffer
+   459→
+   460→        for (const line of lines) {
+   461→          const trimmed = line.trim();
+   462→          if (!trimmed) continue;
+   463→
+   464→          try {
+   465→            const chunk: OllamaNativeResponse = JSON.parse(trimmed);
+   466→
+   467→            // Accumulate metadata from all chunks
+   468→            model = chunk.model || model;
+   469→
+   470→            // Stream content tokens
+   471→            if (chunk.message?.content) {
+   472→              fullContent += chunk.message.content;
+   473→              callbacks.onToken?.(chunk.message.content);
+   474→            }
+   475→
+   476→            // Handle tool calls
+   477→            if (chunk.message?.tool_calls) {
+   478→              for (const tc of chunk.message.tool_calls) {
+   479→                const toolCall: ToolCall = {
+   480→                  id: `tc_${toolCalls.length}`,
+   481→                  type: 'function',
+   482→                  function: {
+   483→                    name: tc.function.name,
+   484→                    arguments: typeof tc.function.arguments === 'string'
+   485→                      ? tc.function.arguments
+   486→                      : JSON.stringify(tc.function.arguments),
+   487→                  },
+   488→                };
+   489→                toolCalls.push(toolCall);
+   490→                callbacks.onToolCall?.(toolCall);
+   491→              }
+   492→            }
+   493→
+   494→            // Final chunk has stats
+   495→            if (chunk.done) {
+   496→              totalDuration = chunk.total_duration ?? 0;
+   497→              evalCount = chunk.eval_count ?? 0;
+   498→              evalDuration = chunk.eval_duration ?? 0;
+   499→            }
+   500→          } catch {
+   501→            // Skip malformed NDJSON lines
+   502→          }
+   503→        }
+   504→      }
+   505→
+   506→      // Process any remaining buffer
+   507→      if (buffer.trim()) {
+   508→        try {
+   509→          const chunk: OllamaNativeResponse = JSON.parse(buffer.trim());
+   510→          if (chunk.message?.content) {
+   511→            fullContent += chunk.message.content;
+   512→            callbacks.onToken?.(chunk.message.content);
+   513→          }
+   514→          if (chunk.done) {
+   515→            totalDuration = chunk.total_duration ?? 0;
+   516→            evalCount = chunk.eval_count ?? 0;
+   517→            evalDuration = chunk.eval_duration ?? 0;
+   518→          }
+   519→        } catch {
+   520→          // Ignore trailing malformed data
+   521→        }
+   522→      }
+   523→    } catch (error) {
+   524→      callbacks.onError?.(error as Error);
+   525→      throw error;
+   526→    }
+   527→
+   528→    // Append tool calls information to content if any
+   529→    let finalContent = fullContent;
+   530→    if (toolCalls.length > 0 && !fullContent) {
+   531→      finalContent = JSON.stringify(toolCalls.map(tc => ({
+   532→        name: tc.function.name,
+   533→        arguments: tc.function.arguments,
+   534→      })));
+   535→    }
+   536→
+   537→    const result: OllamaChatResponse = {
+   538→      content: finalContent,
+   539→      model,
+   540→      totalDuration,
+   541→      evalCount,
+   542→      evalDuration,
+   543→    };
+   544→
+   545→    callbacks.onComplete?.(result);
+   546→    return result;
+   547→  }
+   548→
+   549→  /**
+   550→   * Normalize a non-streaming Ollama /api/chat response.
+   551→   */
+   552→  private normalizeOllamaResponse(
+   553→    data: OllamaNativeResponse,
+   554→    callbacks: OllamaStreamCallbacks | undefined,
+   555→  ): OllamaChatResponse {
+   556→    let content = data.message?.content ?? '';
+   557→
+   558→    // If there are tool calls and no text content, serialize the tool calls
+   559→    if (data.message?.tool_calls && data.message.tool_calls.length > 0 && !content) {
+   560→      content = JSON.stringify(data.message.tool_calls.map((tc: OllamaToolCall) => ({
+   561→        name: tc.function.name,
+   562→        arguments: tc.function.arguments,
+   563→      })));
+   564→    }
+   565→
+   566→    const result: OllamaChatResponse = {
+   567→      content,
+   568→      model: data.model,
+   569→      totalDuration: data.total_duration ?? 0,
+   570→      evalCount: data.eval_count ?? 0,
+   571→      evalDuration: data.eval_duration ?? 0,
+   572→    };
+   573→
+   574→    callbacks?.onComplete?.(result);
+   575→    return result;
+   576→  }
+   577→
+   578→  // ==============================================================
+   579→  // OpenAI-Compatible Chat
+   580→  // ==============================================================
+   581→
+   582→  private async chatOpenAICompatible(
+   583→    model: string,
+   584→    messages: Array<{ role: string; content: string; toolCalls?: any[]; toolCallId?: string }>,
+   585→    options: {
+   586→      model?: string;
+   587→      tools?: ToolDefinition[];
+   588→      stream?: boolean;
+   589→      temperature?: number;
+   590→      maxTokens?: number;
+   591→    } | undefined,
+   592→    shouldStream: boolean,
+   593→    callbacks: OllamaStreamCallbacks | undefined,
+   594→  ): Promise<OllamaChatResponse> {
+   595→    const openaiMessages = messages.map(m => {
+   596→      const msg: Record<string, unknown> = {
+   597→        role: m.role,
+   598→        content: m.content,
+   599→      };
+   600→      if (m.toolCalls) {
+   601→        msg.tool_calls = m.toolCalls;
+   602→      }
+   603→      if (m.toolCallId) {
+   604→        msg.tool_call_id = m.toolCallId;
+   605→      }
+   606→      return msg;
+   607→    });
+   608→
+   609→    const body: Record<string, unknown> = {
+   610→      model,
+   611→      messages: openaiMessages,
+   612→      stream: shouldStream,
+   613→      temperature: options?.temperature ?? this.config.temperature ?? 0.7,
+   614→      max_tokens: options?.maxTokens ?? this.config.maxTokens,
+   615→    };
+   616→
+   617→    // Add tools in OpenAI format
+   618→    if (options?.tools && options.tools.length > 0) {
+   619→      body.tools = options.tools.map(t => ({
+   620→        type: 'function',
+   621→        function: {
+   622→          name: t.name,
+   623→          description: t.description,
+   624→          parameters: t.parameters,
+   625→        },
+   626→      }));
+   627→    }
+   628→
+   629→    let lastError: Error | null = null;
+   630→
+   631→    for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
+   632→      if (attempt > 0) {
+   633→        const waitTime = Math.min(2000 * Math.pow(2, attempt - 1), 10000);
+   634→        await this.sleep(waitTime);
+   635→      }
+   636→
+   637→      try {
+   638→        if (shouldStream && callbacks) {
+   639→          return await this.streamOpenAIChat(body, callbacks);
+   640→        }
+   641→
+   642→        return await this.nonStreamOpenAIChat(body, callbacks);
+   643→      } catch (error) {
+   644→        lastError = error as Error;
+   645→        if (!this.isRetryable(error)) break;
+   646→      }
+   647→    }
+   648→
+   649→    throw lastError ?? new OllamaProviderError('Max retries exceeded');
+   650→  }
+   651→
+   652→  /**
+   653→   * Stream an OpenAI-compatible /v1/chat/completions response (SSE).
+   654→   */
+   655→  private async streamOpenAIChat(
+   656→    body: Record<string, unknown>,
+   657→    callbacks: OllamaStreamCallbacks,
+   658→  ): Promise<OllamaChatResponse> {
+   659→    const response = await this.fetch(`${this.config.baseUrl}/v1/chat/completions`, {
+   660→      method: 'POST',
+   661→      headers: { 'Content-Type': 'application/json' },
+   662→      body: JSON.stringify(body),
+   663→      signal: AbortSignal.timeout(this.config.timeout),
+   664→    });
+   665→
+   666→    if (!response.ok) {
+   667→      const text = await response.text();
+   668→      throw new OllamaProviderError(
+   669→        `OpenAI-compatible chat error (${response.status}): ${text}`,
+   670→        response.status,
+   671→        text,
+   672→      );
+   673→    }
+   674→
+   675→    const reader = response.body?.getReader();
+   676→    if (!reader) throw new OllamaProviderError('No response body for streaming');
+   677→
+   678→    const decoder = new TextDecoder();
+   679→    let fullContent = '';
+   680→    let model = '';
+   681→    const toolCalls: Map<number, ToolCall> = new Map();
+   682→    let buffer = '';
+   683→    const startTime = Date.now();
+   684→
+   685→    try {
+   686→      while (true) {
+   687→        const { done, value } = await reader.read();
+   688→        if (done) break;
+   689→
+   690→        buffer += decoder.decode(value, { stream: true });
+   691→
+   692→        // SSE format: lines starting with "data: "
+   693→        const lines = buffer.split('\n');
+   694→        buffer = lines.pop() ?? '';
+   695→
+   696→        for (const line of lines) {
+   697→          const trimmed = line.trim();
+   698→          if (!trimmed.startsWith('data: ')) continue;
+   699→
+   700→          const data = trimmed.slice(6); // strip "data: "
+   701→          if (data === '[DONE]') continue;
+   702→
+   703→          try {
+   704→            const parsed = JSON.parse(data) as any;
+   705→
+   706→            model = parsed.model || model;
+   707→
+   708→            const delta = parsed.choices?.[0]?.delta;
+   709→            if (!delta) continue;
+   710→
+   711→            if (delta.content) {
+   712→              fullContent += delta.content;
+   713→              callbacks.onToken?.(delta.content);
+   714→            }
+   715→
+   716→            // Handle tool calls in streaming
+   717→            if (delta.tool_calls) {
+   718→              for (const tc of delta.tool_calls) {
+   719→                const existing = toolCalls.get(tc.index);
+   720→                if (existing) {
+   721→                  if (tc.function?.arguments) {
+   722→                    existing.function.arguments += tc.function.arguments;
+   723→                  }
+   724→                } else {
+   725→                  const toolCall: ToolCall = {
+   726→                    id: tc.id || `tc_${tc.index}`,
+   727→                    type: 'function',
+   728→                    function: {
+   729→                      name: tc.function?.name || '',
+   730→                      arguments: tc.function?.arguments || '',
+   731→                    },
+   732→                  };
+   733→                  toolCalls.set(tc.index, toolCall);
+   734→                }
+   735→              }
+   736→            }
+   737→
+   738→            // Check for tool_calls finish
+   739→            if (parsed.choices?.[0]?.finish_reason === 'tool_calls') {
+   740→              for (const tc of Array.from(toolCalls.values())) {
+   741→                callbacks.onToolCall?.(tc);
+   742→              }
+   743→            }
+   744→          } catch {
+   745→            // Skip malformed SSE data
+   746→          }
+   747→        }
+   748→      }
+   749→    } catch (error) {
+   750→      callbacks.onError?.(error as Error);
+   751→      throw error;
+   752→    }
+   753→
+   754→    // Notify tool calls
+   755→    if (toolCalls.size > 0) {
+   756→      for (const tc of Array.from(toolCalls.values())) {
+   757→        callbacks.onToolCall?.(tc);
+   758→      }
+   759→    }
+   760→
+   761→    const elapsed = Date.now() - startTime;
+   762→
+   763→    const result: OllamaChatResponse = {
+   764→      content: fullContent,
+   765→      model,
+   766→      totalDuration: elapsed * 1_000_000, // convert ms to ns for consistency
+   767→      evalCount: this.estimateTokens(fullContent),
+   768→      evalDuration: elapsed * 1_000_000,
+   769→    };
+   770→
+   771→    callbacks.onComplete?.(result);
+   772→    return result;
+   773→  }
+   774→
+   775→  /**
+   776→   * Non-streaming OpenAI-compatible /v1/chat/completions response.
+   777→   */
+   778→  private async nonStreamOpenAIChat(
+   779→    body: Record<string, unknown>,
+   780→    callbacks: OllamaStreamCallbacks | undefined,
+   781→  ): Promise<OllamaChatResponse> {
+   782→    const response = await this.fetch(`${this.config.baseUrl}/v1/chat/completions`, {
+   783→      method: 'POST',
+   784→      headers: { 'Content-Type': 'application/json' },
+   785→      body: JSON.stringify({ ...body, stream: false }),
+   786→      signal: AbortSignal.timeout(this.config.timeout),
+   787→    });
+   788→
+   789→    if (!response.ok) {
+   790→      const text = await response.text();
+   791→      throw new OllamaProviderError(
+   792→        `OpenAI-compatible chat error (${response.status}): ${text}`,
+   793→        response.status,
+   794→        text,
+   795→      );
+   796→    }
+   797→
+   798→    const data = await response.json() as any;
+   799→    const content = data.choices?.[0]?.message?.content ?? '';
+   800→    const model = data.model ?? '';
+   801→
+   802→    const result: OllamaChatResponse = {
+   803→      content,
+   804→      model,
+   805→      totalDuration: (data.usage?.total_tokens ?? 0) * 50_000_000, // rough ns estimate
+   806→      evalCount: data.usage?.completion_tokens ?? this.estimateTokens(content),
+   807→      evalDuration: (data.usage?.completion_tokens ?? 0) * 50_000_000,
+   808→    };
+   809→
+   810→    callbacks?.onComplete?.(result);
+   811→    return result;
+   812→  }
+   813→
+   814→  // ==============================================================
+   815→  // Model Listing
+   816→  // ==============================================================
+   817→
+   818→  private async listModelsOllama(): Promise<OllamaModel[]> {
+   819→    const data = await this.request<OllamaTagsResponse>('/api/tags', 'GET');
+   820→    return data.models ?? [];
+   821→  }
+   822→
+   823→  private async listModelsOpenAICompatible(): Promise<OllamaModel[]> {
+   824→    const response = await this.fetch(`${this.config.baseUrl}/v1/models`, {
+   825→      method: 'GET',
+   826→      signal: AbortSignal.timeout(this.config.timeout),
+   827→    });
+   828→
+   829→    if (!response.ok) {
+   830→      const text = await response.text();
+   831→      throw new OllamaProviderError(
+   832→        `Failed to list models (${response.status}): ${text}`,
+   833→        response.status,
+   834→        text,
+   835→      );
+   836→    }
+   837→
+   838→    const data = await response.json() as any;
+   839→    const models: OllamaModel[] = (data.data ?? []).map((m: any) => ({
+   840→      name: m.id ?? m.name,
+   841→      size: 0,
+   842→      modified_at: m.created ? new Date(m.created * 1000).toISOString() : new Date().toISOString(),
+   843→      details: {
+   844→        format: 'unknown',
+   845→        family: 'unknown',
+   846→        parameter_size: 'unknown',
+   847→        quantization_level: 'unknown',
+   848→      },
+   849→    }));
+   850→
+   851→    return models;
+   852→  }
+   853→
+   854→  // ==============================================================
+   855→  // Mode Detection
+   856→  // ==============================================================
+   857→
+   858→  /**
+   859→   * Detect whether the configured endpoint is native Ollama or an
+   860→   * OpenAI-compatible server (LM Studio, etc.).
+   861→   *
+   862→   * Strategy: try the Ollama-specific GET /api/version endpoint. If it
+   863→   * responds with a JSON object containing a "version" field, we treat
+   864→   * it as native Ollama. Otherwise, fall back to OpenAI-compatible mode.
+   865→   */
+   866→  private async detectMode(): Promise<void> {
+   867→    try {
+   868→      const controller = new AbortController();
+   869→      const timeoutId = setTimeout(() => controller.abort(), 5000);
+   870→
+   871→      const response = await fetch(`${this.config.baseUrl}/api/version`, {
+   872→        method: 'GET',
+   873→        signal: controller.signal,
+   874→      });
+   875→
+   876→      clearTimeout(timeoutId);
+   877→
+   878→      if (response.ok) {
+   879→        const data = await response.json() as any;
+   880→        if (data && typeof data.version === 'string') {
+   881→          this.mode = 'ollama';
+   882→          return;
+   883→        }
+   884→      }
+   885→
+   886→      this.mode = 'openai-compatible';
+   887→    } catch {
+   888→      this.mode = 'openai-compatible';
+   889→    }
+   890→  }
+   891→
+   892→  /**
+   893→   * Get the current provider mode.
+   894→   */
+   895→  getMode(): ProviderMode {
+   896→    return this.mode;
+   897→  }
+   898→
+   899→  // ==============================================================
+   900→  // HTTP Helpers
+   901→  // ==============================================================
+   902→
+   903→  /**
+   904→   * Fetch wrapper with timeout and error handling.
+   905→   */
+   906→  private async fetch(url: string, init?: RequestInit): Promise<Response> {
+   907→    const controller = new AbortController();
+   908→    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+   909→
+   910→    // Merge abort signals
+   911→    const externalSignal = init?.signal;
+   912→    if (externalSignal) {
+   913→      externalSignal.addEventListener('abort', () => controller.abort());
+   914→    }
+   915→
+   916→    try {
+   917→      const response = await fetch(url, {
+   918→        ...init,
+   919→        signal: controller.signal,
+   920→      });
+   921→
+   922→      return response;
+   923→    } catch (error) {
+   924→      if (error instanceof DOMException && error.name === 'AbortError') {
+   925→        throw new OllamaTimeoutError(this.config.timeout);
+   926→      }
+   927→      throw new OllamaConnectionError(this.config.baseUrl, error);
+   928→    } finally {
+   929→      clearTimeout(timeoutId);
+   930→    }
+   931→  }
+   932→
+   933→  /**
+   934→   * Typed request helper for non-streaming JSON endpoints.
+   935→   */
+   936→  private async request<T>(path: string, method: string, body?: unknown): Promise<T> {
+   937→    let lastError: Error | null = null;
+   938→
+   939→    for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
+   940→      if (attempt > 0) {
+   941→        const waitTime = Math.min(2000 * Math.pow(2, attempt - 1), 10000);
+   942→        await this.sleep(waitTime);
+   943→      }
+   944→
+   945→      try {
+   946→        const init: RequestInit = {
+   947→          method,
+   948→          headers: { 'Content-Type': 'application/json' },
+   949→          signal: AbortSignal.timeout(this.config.timeout),
+   950→        };
+   951→
+   952→        if (body !== undefined) {
+   953→          init.body = JSON.stringify(body);
+   954→        }
+   955→
+   956→        const response = await this.fetch(`${this.config.baseUrl}${path}`, init);
+   957→
+   958→        if (!response.ok) {
+   959→          const text = await response.text();
+   960→          throw new OllamaProviderError(
+   961→            `Ollama API error (${response.status}): ${text}`,
+   962→            response.status,
+   963→            text,
+   964→          );
+   965→        }
+   966→
+   967→        return await response.json() as T;
+   968→      } catch (error) {
+   969→        lastError = error as Error;
+   970→        if (!this.isRetryable(error)) break;
+   971→      }
+   972→    }
+   973→
+   974→    throw lastError ?? new OllamaProviderError('Max retries exceeded');
+   975→  }
+   976→
+   977→  // ==============================================================
+   978→  // Message / Tool Conversion
+   979→  // ==============================================================
+   980→
+   981→  private convertMessages(
+   982→    messages: Array<{ role: string; content: string; toolCalls?: any[]; toolCallId?: string }>,
+   983→  ): OllamaChatMessage[] {
+   984→    return messages.map(m => {
+   985→      const msg: OllamaChatMessage = {
+   986→        role: m.role,
+   987→        content: m.content,
+   988→      };
+   989→
+   990→      // Convert tool calls to Ollama format
+   991→      if (m.toolCalls && m.toolCalls.length > 0) {
+   992→        msg.tool_calls = m.toolCalls.map((tc: any) => {
+   993→          let args: Record<string, unknown>;
+   994→          if (typeof tc.function?.arguments === 'string') {
+   995→            try {
+   996→              args = JSON.parse(tc.function.arguments);
+   997→            } catch {
+   998→              args = { raw: tc.function.arguments };
+   999→            }
+  1000→          } else if (tc.function?.arguments) {
+  1001→            args = tc.function.arguments;
+  1002→          } else {
+  1003→            args = {};
+  1004→          }
+  1005→
+  1006→          return {
+  1007→            function: {
+  1008→              name: tc.function?.name ?? '',
+  1009→              arguments: args,
+  1010→            },
+  1011→          };
+  1012→        });
+  1013→      }
+  1014→
+  1015→      // Tool result reference
+  1016→      if (m.toolCallId) {
+  1017→        msg.tool_call_id = m.toolCallId;
+  1018→      }
+  1019→
+  1020→      return msg;
+  1021→    });
+  1022→  }
+  1023→
+  1024→  private convertTools(tools: ToolDefinition[]): OllamaToolDefinition[] {
+  1025→    return tools.map(t => ({
+  1026→      type: 'function' as const,
+  1027→      function: {
+  1028→        name: t.name,
+  1029→        description: t.description,
+  1030→        parameters: t.parameters as Record<string, unknown>,
+  1031→      },
+  1032→    }));
+  1033→  }
+  1034→
+  1035→  // ==============================================================
+  1036→  // Utility
+  1037→  // ==============================================================
+  1038→
+  1039→  private isRetryable(error: unknown): boolean {
+  1040→    if (error instanceof OllamaProviderError) {
+  1041→      // Retry on server errors and rate limits
+  1042→      return (
+  1043→        error.statusCode === 429 ||
+  1044→        (error.statusCode !== undefined && error.statusCode >= 500)
+  1045→      );
+  1046→    }
+  1047→    if (error instanceof OllamaTimeoutError) return true;
+  1048→    if (error instanceof OllamaConnectionError) return true;
+  1049→    // Network-level errors are retryable
+  1050→    if (error instanceof TypeError && error.message.includes('fetch')) return true;
+  1051→    return false;
+  1052→  }
+  1053→
+  1054→  private sleep(ms: number): Promise<void> {
+  1055→    return new Promise(resolve => setTimeout(resolve, ms));
+  1056→  }
+  1057→}
+  1058→

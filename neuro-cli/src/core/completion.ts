@@ -27,6 +27,13 @@ export class CompletionEngine {
   private styleNames: string[] = ['default', 'concise', 'explanatory', 'learning', 'narrative', 'technical', 'review', 'debug'];
   private thinkingModes: string[] = ['none', 'brief', 'full', 'ultrathink'];
   private effortLevels: string[] = ['low', 'medium', 'high', 'ultrathink'];
+  // P2/P3 new completion lists
+  private telemetrySubcommands: string[] = ['on', 'off', 'status', 'export', 'clear'];
+  private syncSubcommands: string[] = ['push', 'pull', 'status', 'config'];
+  private voiceSubcommands: string[] = ['on', 'off', 'status', 'speak', 'listen'];
+  private locales: string[] = ['en', 'tr', 'zh', 'ja', 'es'];
+  private serverSubcommands: string[] = ['start', 'stop', 'status'];
+  private dashboardSubcommands: string[] = ['start', 'stop', 'status'];
   private fileExtensions: Map<string, string[]> = new Map([
     ['typescript', ['.ts', '.tsx', '.d.ts']],
     ['javascript', ['.js', '.jsx', '.mjs', '.cjs']],
@@ -88,6 +95,16 @@ export class CompletionEngine {
       ['commit-push-pr', 'Commit + push + create PR'],
       ['code-review', 'Multi-agent code review'],
       ['feedback', 'Give feedback'],
+      // P2 new commands
+      ['telemetry', 'Manage telemetry (on|off|status|export|clear)'],
+      ['vim', 'Toggle vim keybindings mode'],
+      ['lang', 'Switch language (en|tr|zh|ja|es)'],
+      ['voice', 'Manage voice I/O (on|off|status|speak|listen)'],
+      ['image', 'Analyze an image file'],
+      // P3 new commands
+      ['server', 'Manage API server (start|stop|status)'],
+      ['sync', 'Cloud sync (push|pull|status|config)'],
+      ['dashboard', 'Manage web dashboard (start|stop|status)'],
     ];
     for (const [cmd, desc] of commands) {
       this.slashCommands.set(cmd, desc);
@@ -247,6 +264,46 @@ export class CompletionEngine {
       case 'ignore':
         if (parts.length === 2) {
           return [this.ignoreSubcommands.filter(c => c.startsWith(argPartial)), line];
+        }
+        return [[], line];
+
+      // P2/P3 new command completions
+      case 'telemetry':
+        if (parts.length === 2) {
+          return [this.telemetrySubcommands.filter(c => c.startsWith(argPartial)), line];
+        }
+        return [[], line];
+
+      case 'vim':
+        return [['on', 'off'].filter(v => v.startsWith(argPartial)), line];
+
+      case 'lang':
+        return [this.locales.filter(l => l.startsWith(argPartial)), line];
+
+      case 'voice':
+        if (parts.length === 2) {
+          return [this.voiceSubcommands.filter(c => c.startsWith(argPartial)), line];
+        }
+        return [[], line];
+
+      case 'image':
+        return this.completeFilePath(argPartial || './');
+
+      case 'server':
+        if (parts.length === 2) {
+          return [this.serverSubcommands.filter(c => c.startsWith(argPartial)), line];
+        }
+        return [[], line];
+
+      case 'sync':
+        if (parts.length === 2) {
+          return [this.syncSubcommands.filter(c => c.startsWith(argPartial)), line];
+        }
+        return [[], line];
+
+      case 'dashboard':
+        if (parts.length === 2) {
+          return [this.dashboardSubcommands.filter(c => c.startsWith(argPartial)), line];
         }
         return [[], line];
 

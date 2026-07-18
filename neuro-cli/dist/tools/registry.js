@@ -22,7 +22,7 @@ export class ToolRegistry {
                 .map(name => this.tools.get(name)?.definition)
                 .filter((d) => d !== undefined);
         }
-        return this.getAll().map(t => t.definition);
+        return this.getAll().map(t => t.definition).filter((d) => d !== undefined);
     }
     async execute(name, args, context) {
         const tool = this.tools.get(name);
