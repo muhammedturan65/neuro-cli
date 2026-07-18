@@ -35,7 +35,9 @@ export declare class Orchestrator extends BaseAgent {
      */
     plan(task: string, callbacks?: AgentCallbacks): Promise<OrchestratedPlan>;
     /**
-     * Execute a planned task with sub-agents
+     * Execute a planned task with sub-agents — Claude Code style
+     * Sub-agents run until their tasks are complete.
+     * After all tasks complete, verify the overall result and re-plan if needed.
      */
     orchestrate(task: string, callbacks?: AgentCallbacks, autoPlan?: boolean): Promise<OrchestratorResult>;
     /**

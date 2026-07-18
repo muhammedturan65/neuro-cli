@@ -165,7 +165,7 @@ export class TerminalUI {
         console.log(`  ${this.theme.muted('Session:')}`, this.theme.dim(`${totalInput.toLocaleString()} in · ${totalOutput.toLocaleString()} out · $${totalCost.toFixed(4)}`));
     }
     // ── Agent Activity (subtle indicator) ───────────────────
-    agentActivity(agentName, status) {
+    agentActivity(agentName, status, detail) {
         const indicators = {
             starting: this.theme.muted('○'),
             working: this.theme.accent('◎'),
@@ -178,7 +178,8 @@ export class TerminalUI {
             done: 'done',
             error: 'failed',
         };
-        console.log(`  ${indicators[status]} ${this.theme.muted(agentName)} ${this.theme.dim(statusText[status])}`);
+        const detailStr = detail ? ` ${this.theme.dim(detail)}` : '';
+        console.log(`  ${indicators[status]} ${this.theme.muted(agentName)} ${this.theme.dim(statusText[status])}${detailStr}`);
     }
     // ── Status Messages (minimal) ───────────────────────────
     error(message) {

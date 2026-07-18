@@ -137,7 +137,9 @@ export declare class NeuroEngine {
      */
     private initializeAgents;
     /**
-     * Process a user message
+     * Process a user message — Claude Code style
+     * Every task is sent to the best agent which runs until completion.
+     * No arbitrary early termination — the agent keeps working until done.
      */
     processMessage(message: string, mode?: 'auto' | 'agent' | 'direct', targetAgent?: string): Promise<{
         content: string;
@@ -153,8 +155,9 @@ export declare class NeuroEngine {
      */
     private handleApproval;
     /**
-     * Assess task complexity to decide execution mode
-     * Now delegates to ModelRouter for more sophisticated analysis
+     * Assess task complexity — delegates to ModelRouter
+     * Note: complexity no longer determines execution mode (all tasks run until complete)
+     * but is still used for model selection
      */
     private assessComplexity;
     /**

@@ -1,6 +1,10 @@
 // ============================================================
-// NeuroCLI - Orchestrator Agent
+// NeuroCLI - Orchestrator Agent v5.0 (Claude Code-style)
 // Central coordinator that manages sub-agents
+// Key changes:
+//   - Sub-agents run until their tasks are complete (no hard limits)
+//   - Re-planning when sub-tasks fail or need follow-up
+//   - Verification loop after all sub-tasks complete
 // ============================================================
 
 import { BaseAgent, AgentRunResult, AgentCallbacks } from './base.js';
@@ -77,6 +81,7 @@ ${task}
 2. Assign each sub-task to the most appropriate agent
 3. Specify dependencies between tasks (which tasks must complete before others can start)
 4. Provide any context each agent needs
+5. IMPORTANT: Be thorough — include ALL steps needed to complete the task end-to-end
 
 Respond with a JSON plan in this exact format:
 \`\`\`json
@@ -94,7 +99,7 @@ Respond with a JSON plan in this exact format:
 \`\`\``;
 
     const messages: Message[] = [
-      { role: 'system', content: 'You are an expert task orchestrator. Always respond with valid JSON.', timestamp: Date.now() },
+      { role: 'system', content: 'You are an expert task orchestrator. Always respond with valid JSON. Be thorough — include every step needed.', timestamp: Date.now() },
       { role: 'user', content: planPrompt, timestamp: Date.now() },
     ];
 
@@ -105,7 +110,6 @@ Respond with a JSON plan in this exact format:
         messages,
       );
     } catch {
-      // API error during planning, fallback to direct approach
       return {
         reasoning: 'API error during planning, falling back to direct approach',
         tasks: [{ agent: 'Coder', task, dependsOn: [] }],
@@ -113,13 +117,11 @@ Respond with a JSON plan in this exact format:
     }
 
     try {
-      // Extract JSON from response
       const jsonMatch = response.content.match(/```json\n([\s\S]*?)\n```/) ||
                         response.content.match(/\{[\s\S]*\}/);
       const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : response.content;
       return JSON.parse(jsonStr);
     } catch {
-      // Fallback: use coder agent directly
       return {
         reasoning: 'Could not parse plan, defaulting to direct coding approach',
         tasks: [{ agent: 'Coder', task, dependsOn: [] }],
@@ -128,7 +130,9 @@ Respond with a JSON plan in this exact format:
   }
 
   /**
-   * Execute a planned task with sub-agents
+   * Execute a planned task with sub-agents — Claude Code style
+   * Sub-agents run until their tasks are complete.
+   * After all tasks complete, verify the overall result and re-plan if needed.
    */
   async orchestrate(
     task: string,
@@ -151,7 +155,7 @@ Respond with a JSON plan in this exact format:
     // Step 1: Create execution plan
     let plan: OrchestratedPlan;
     if (autoPlan) {
-      callbacks?.onThinking?.('🧠 Planning task decomposition...');
+      callbacks?.onThinking?.('Planning task decomposition...');
       plan = await this.plan(task, callbacks);
     } else {
       plan = {
@@ -160,12 +164,12 @@ Respond with a JSON plan in this exact format:
       };
     }
 
-    callbacks?.onThinking?.(`📋 Plan: ${plan.tasks.length} sub-tasks`);
-    callbacks?.onThinking?.(`💭 ${plan.reasoning}`);
+    callbacks?.onThinking?.(`Plan: ${plan.tasks.length} sub-tasks — ${plan.reasoning}`);
 
-    // Step 2: Execute tasks respecting dependencies
+    // Step 2: Execute tasks respecting dependencies — each agent runs until done
     const completedTasks = new Set<string>();
     let taskIndex = 0;
+    let maxReplans = 3; // Allow up to 3 re-planning cycles
 
     while (completedTasks.size < plan.tasks.length) {
       // Find tasks whose dependencies are all completed
@@ -176,25 +180,30 @@ Respond with a JSON plan in this exact format:
       });
 
       if (readyTasks.length === 0) {
-        // Deadlock detection - log unresolved tasks
+        // Deadlock detection
         const unresolved = plan.tasks.filter(t => !completedTasks.has(t.agent + ':' + t.task));
         if (unresolved.length > 0) {
-          callbacks?.onThinking?.(`⚠️ Deadlock detected. Unresolved tasks: ${unresolved.map(t => t.agent + ':' + t.task).join(', ')}`);
+          callbacks?.onThinking?.(`Deadlock detected. Unresolved tasks: ${unresolved.map(t => t.agent + ':' + t.task).join(', ')}`);
+          // Clear dependency constraints to break deadlock
+          for (const t of unresolved) {
+            t.dependsOn = [];
+          }
+          continue;
         }
         break;
       }
 
-      // Execute ready tasks (could be parallelized in future)
+      // Execute ready tasks (sequentially for safety, could parallelize in future)
       for (const subTask of readyTasks) {
         const agent = this.agents.get(subTask.agent);
         if (!agent) {
-          callbacks?.onThinking?.(`⚠️ Agent not found: ${subTask.agent}`);
+          callbacks?.onThinking?.(`Agent not found: ${subTask.agent}`);
           completedTasks.add(subTask.agent + ':' + subTask.task);
           continue;
         }
 
         taskIndex++;
-        callbacks?.onThinking?.(`\n🤖 [${taskIndex}/${plan.tasks.length}] Running ${subTask.agent}: ${subTask.task.slice(0, 80)}...`);
+        callbacks?.onThinking?.(`[${taskIndex}/${plan.tasks.length}] Running ${subTask.agent}: ${subTask.task.slice(0, 80)}...`);
 
         // Build context from previous agent results
         let fullTask = subTask.task;
@@ -214,16 +223,23 @@ Respond with a JSON plan in this exact format:
           }
         }
 
+        // Run the sub-agent — it will keep going until its task is complete
         let result: AgentRunResult;
         try {
           result = await agent.run(fullTask, {
             onToken: (token) => callbacks?.onToken?.(token),
             onToolCall: (name, args) => callbacks?.onToolCall?.(name, args),
-            onToolResult: (name, result, isError) => callbacks?.onToolResult?.(name, result, isError),
+            onToolResult: (name, res, isError) => callbacks?.onToolResult?.(name, res, isError),
             onApprovalNeeded: async (name, args, risk) => {
               return callbacks?.onApprovalNeeded?.(name, args, risk) ?? true;
             },
             onThinking: (thinking) => callbacks?.onThinking?.(thinking),
+            onIteration: (i, _max) => {
+              callbacks?.onThinking?.(`  ${subTask.agent} step ${i}`);
+            },
+            onTaskComplete: (reason) => {
+              callbacks?.onThinking?.(`  ${subTask.agent}: ${reason}`);
+            },
           });
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);

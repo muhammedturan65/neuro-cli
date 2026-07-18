@@ -1,5 +1,5 @@
 // ============================================================
-// NeuroCLI - NeuroEngine v4.1.3
+// NeuroCLI - NeuroEngine v5.0 (Claude Code-style Agentic Loop)
 // The main engine that ties everything together
 // Now with: Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval,
 // Model Router, Prompt Cache, Undo/Redo, Output Styles,
@@ -571,7 +571,7 @@ export class NeuroEngine {
 
     // Auto-Updater
     this.updater = new AutoUpdater({
-      currentVersion: '4.1.3',
+      currentVersion: '5.0.0',
       autoCheck: true,
       autoUpdate: false,
     });
@@ -620,6 +620,7 @@ Key responsibilities:
 - Manage dependencies between sub-tasks
 - Synthesize results from multiple agents
 - Handle errors and re-plan if needed
+- IMPORTANT: Keep working until the ENTIRE task is COMPLETE
 
 Always consider the strengths of each agent when delegating:
 - Planner: For task decomposition and architecture decisions
@@ -634,7 +635,7 @@ Always consider the strengths of each agent when delegating:
       temperature: 0.7,
       maxTokens: 4096,
       tools: [],
-      maxIterations: 20,
+      maxIterations: 0, // 0 = no limit, run until done
     };
 
     this.orchestrator = new Orchestrator(
@@ -758,7 +759,9 @@ Always consider the strengths of each agent when delegating:
   }
 
   /**
-   * Process a user message
+   * Process a user message — Claude Code style
+   * Every task is sent to the best agent which runs until completion.
+   * No arbitrary early termination — the agent keeps working until done.
    */
   async processMessage(
     message: string,
@@ -825,7 +828,7 @@ Always consider the strengths of each agent when delegating:
     const styleAddition = this.styleManager.getSystemPromptAddition();
     const thinkingAddition = this.extendedThinking.getSystemPromptAddition();
 
-    // Build UI callbacks
+    // Build UI callbacks — Claude Code style
     const callbacks: AgentCallbacks = {
       onThinking: (thinking) => this.ui.thinking(thinking),
       onToken: (token) => this.ui.streamingToken(token),
@@ -840,31 +843,34 @@ Always consider the strengths of each agent when delegating:
           return;
         }
         this.ui.toolCall(name, args);
-
-        // Record in undo/redo for file modification tools
-        if (['write_file', 'edit_file', 'apply_diff', 'delete_file'].includes(name)) {
-          // The undo/redo push will happen in the tool execution result handler
-        }
       },
       onToolResult: (name, result, isError) => this.ui.toolResult(name, result, isError),
       onApprovalNeeded: async (name, args, risk) => {
         return this.handleApproval(name, args, risk as 'low' | 'medium' | 'high');
       },
-      onIteration: (i, max) => {
-        this.ui.info(`Iteration ${i}/${max}`);
+      onIteration: (i, _max) => {
+        // Claude Code style: show iteration count without a ceiling
+        this.ui.agentActivity(this.config.defaultModel, 'working', `step ${i}`);
+      },
+      onCycleStart: (cycle, summary) => {
+        this.ui.agentActivity(this.config.defaultModel, 'working', `cycle ${cycle}: ${summary}`);
+      },
+      onTaskComplete: (reason) => {
+        this.ui.agentActivity(this.config.defaultModel, 'done', reason);
       },
     };
 
     let result;
     const activeModel = routeDecision?.model || this.config.defaultModel;
 
+    // === Claude Code-style routing: always send to the best agent and let it run until done ===
     if (mode === 'direct' && targetAgent) {
+      // Direct mode: use specified agent
       const agent = this.agents.get(targetAgent);
       if (!agent) {
         this.ui.error(`Agent not found: ${targetAgent}`);
         return { content: '', usage: { inputTokens: 0, outputTokens: 0, cost: 0 } };
       }
-      // Override agent model if defaultModel differs from agent's model
       const originalModel = agent.configModel;
       if (this.config.defaultModel !== originalModel) {
         agent.configModel = this.config.defaultModel;
@@ -875,9 +881,9 @@ Always consider the strengths of each agent when delegating:
       } finally {
         this.ui.endStreaming();
       }
-      // Restore original model
       agent.configModel = originalModel;
     } else if (mode === 'agent') {
+      // Orchestration mode: multi-agent with re-planning
       const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
       result = {
         content: orchestrateResult.content,
@@ -887,53 +893,50 @@ Always consider the strengths of each agent when delegating:
         execution: orchestrateResult.execution,
       };
     } else {
-      const complexity = routeDecision?.complexity || this.assessComplexity(message);
+      // Auto mode — Claude Code style: route to best agent, let it run until done
       const category = routeDecision?.category || this.modelRouter.getCategory(message);
+      const targetAgentName = this.selectAgentForCategory(category);
+      const agent = this.agents.get(targetAgentName);
 
-      if (complexity === 'simple') {
-        // Route to the best agent based on task category
-        const targetAgentName = this.selectAgentForCategory(category);
-        const agent = this.agents.get(targetAgentName);
-        if (agent) {
-          this.ui.info(`Using ${targetAgentName} agent (${category} task)`);
+      if (agent) {
+        // Override agent model with routed model if different
+        const originalModel = agent.configModel;
+        if (activeModel !== originalModel) {
+          agent.configModel = activeModel;
+        }
+
+        this.ui.info(`Using ${targetAgentName} agent (${category} task) — will run until complete`);
+        this.ui.startStreaming();
+        try {
+          result = await agent.run(message, callbacks);
+        } finally {
+          this.ui.endStreaming();
+        }
+
+        // Restore original model
+        agent.configModel = originalModel;
+      } else {
+        // Fallback: try Coder, then orchestrator
+        const coderAgent = this.agents.get('Coder');
+        if (coderAgent) {
+          this.ui.info(`Using Coder agent — will run until complete`);
           this.ui.startStreaming();
           try {
-            result = await agent.run(message, callbacks);
+            result = await coderAgent.run(message, callbacks);
           } finally {
             this.ui.endStreaming();
           }
         } else {
-          // Fallback to Coder
-          const coderAgent = this.agents.get('Coder');
-          if (coderAgent) {
-            this.ui.startStreaming();
-            try {
-              result = await coderAgent.run(message, callbacks);
-            } finally {
-              this.ui.endStreaming();
-            }
-          } else {
-            this.ui.warning('No agents initialized, using orchestration mode');
-            const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
-            result = {
-              content: orchestrateResult.content,
-              toolCallsMade: 0,
-              iterations: orchestrateResult.execution.iterations,
-              usage: orchestrateResult.totalUsage,
-              execution: orchestrateResult.execution,
-            };
-          }
+          this.ui.warning('No agents initialized, using orchestration mode');
+          const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
+          result = {
+            content: orchestrateResult.content,
+            toolCallsMade: 0,
+            iterations: orchestrateResult.execution.iterations,
+            usage: orchestrateResult.totalUsage,
+            execution: orchestrateResult.execution,
+          };
         }
-      } else {
-        this.ui.thinking('Analyzing task complexity... Using multi-agent orchestration');
-        const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
-        result = {
-          content: orchestrateResult.content,
-          toolCallsMade: 0,
-          iterations: orchestrateResult.execution.iterations,
-          usage: orchestrateResult.totalUsage,
-          execution: orchestrateResult.execution,
-        };
       }
     }
 
@@ -1069,8 +1072,9 @@ Always consider the strengths of each agent when delegating:
   }
 
   /**
-   * Assess task complexity to decide execution mode
-   * Now delegates to ModelRouter for more sophisticated analysis
+   * Assess task complexity — delegates to ModelRouter
+   * Note: complexity no longer determines execution mode (all tasks run until complete)
+   * but is still used for model selection
    */
   private assessComplexity(message: string): 'simple' | 'moderate' | 'complex' {
     const decision = this.modelRouter.route(message);

@@ -21,7 +21,7 @@ export declare class TerminalUI {
     approvalRequest(toolName: string, args: Record<string, unknown>, risk: 'low' | 'medium' | 'high'): boolean;
     tokenUsage(usage: TokenUsage, modelId: string): void;
     sessionStats(totalInput: number, totalOutput: number, totalCost: number): void;
-    agentActivity(agentName: string, status: 'starting' | 'working' | 'done' | 'error'): void;
+    agentActivity(agentName: string, status: 'starting' | 'working' | 'done' | 'error', detail?: string): void;
     error(message: string): void;
     info(message: string): void;
     success(message: string): void;

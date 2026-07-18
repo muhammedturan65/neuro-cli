@@ -16,6 +16,12 @@ export interface AgentCallbacks {
     onApprovalNeeded?: (toolName: string, args: Record<string, unknown>, risk: string) => Promise<boolean>;
     onIteration?: (iteration: number, maxIterations: number) => void;
     onComplete?: (result: AgentRunResult) => void;
+    /** Called when the agent starts a new agentic cycle */
+    onCycleStart?: (cycle: number, summary: string) => void;
+    /** Called when the agent detects task completion */
+    onTaskComplete?: (reason: string) => void;
+    /** Signal to abort the agent loop (e.g. user pressed Ctrl+C) */
+    abortSignal?: AbortSignal;
 }
 export declare class BaseAgent {
     protected config: AgentConfig;
@@ -24,6 +30,11 @@ export declare class BaseAgent {
     protected workingDirectory: string;
     protected sessionId: string;
     protected messages: Message[];
+    private lastToolCalls;
+    private repeatedActionCount;
+    private static readonly MAX_REPEATED_ACTIONS;
+    private static readonly MAX_CONSECUTIVE_ERRORS;
+    private static readonly ABSOLUTE_MAX_CYCLES;
     constructor(config: AgentConfig, client: OpenRouterClient, registry: ToolRegistry, workingDirectory: string, sessionId: string);
     get name(): string;
     get description(): string;
@@ -35,7 +46,7 @@ export declare class BaseAgent {
      */
     protected initializeMessages(taskContext?: string): Message[];
     /**
-     * Build the system prompt with context
+     * Build the system prompt with context — Claude Code-style
      */
     protected buildSystemPrompt(taskContext?: string): string;
     /**
@@ -51,7 +62,15 @@ export declare class BaseAgent {
      */
     protected addToolResult(toolCallId: string, content: string, name: string, isError?: boolean): void;
     /**
-     * Run the agent loop
+     * Detect if the model's response indicates the task is complete
+     */
+    private isTaskComplete;
+    /**
+     * Detect doom-loop: same tool+args repeated too many times
+     */
+    private detectDoomLoop;
+    /**
+     * Run the agent loop — Claude Code style: keep going until task is truly done
      */
     run(task: string, callbacks?: AgentCallbacks, maxIterations?: number): Promise<AgentRunResult>;
     /**

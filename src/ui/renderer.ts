@@ -191,7 +191,7 @@ export class TerminalUI {
 
   // ── Agent Activity (subtle indicator) ───────────────────
 
-  agentActivity(agentName: string, status: 'starting' | 'working' | 'done' | 'error'): void {
+  agentActivity(agentName: string, status: 'starting' | 'working' | 'done' | 'error', detail?: string): void {
     const indicators: Record<string, string> = {
       starting: this.theme.muted('○'),
       working: this.theme.accent('◎'),
@@ -204,7 +204,8 @@ export class TerminalUI {
       done: 'done',
       error: 'failed',
     };
-    console.log(`  ${indicators[status]} ${this.theme.muted(agentName)} ${this.theme.dim(statusText[status])}`);
+    const detailStr = detail ? ` ${this.theme.dim(detail)}` : '';
+    console.log(`  ${indicators[status]} ${this.theme.muted(agentName)} ${this.theme.dim(statusText[status])}${detailStr}`);
   }
 
   // ── Status Messages (minimal) ───────────────────────────

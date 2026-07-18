@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ============================================================
 // NeuroCLI - Advanced AI Terminal Coding Assistant
-// Main Entry Point - v4.1.3 with robust error handling
+// Main Entry Point - v5.0 (Claude Code-style Agentic Loop)
 // ============================================================
 
 import { Command } from 'commander';
@@ -20,7 +20,7 @@ import { ShellCompletionGenerator } from './core/shell-completion.js';
 import chalk from 'chalk';
 import { AutoUpdater } from './core/updater.js';
 
-const VERSION = '4.3.0';
+const VERSION = '5.0.0';
 
 // ---- Global Error Handlers (prevent crashes) ----
 process.on('unhandledRejection', (reason) => {

@@ -1,0 +1,722 @@
+     1→// ============================================================
+     2→// NeuroCLI - Model Router
+     3→// Automatically selects the best model based on task complexity,
+     4→// category, and effort level using local heuristic analysis.
+     5→// ============================================================
+     6→
+     7→// ---------------------------------------------------------------------------
+     8→// Public types
+     9→// ---------------------------------------------------------------------------
+    10→
+    11→export type Complexity = 'simple' | 'moderate' | 'complex';
+    12→export type EffortLevel = 'low' | 'medium' | 'high' | 'ultrathink';
+    13→export type TaskCategory =
+    14→  | 'code'
+    15→  | 'reasoning'
+    16→  | 'creative'
+    17→  | 'analysis'
+    18→  | 'conversation'
+    19→  | 'debugging'
+    20→  | 'review'
+    21→  | 'refactoring';
+    22→
+    23→export interface RoutingDecision {
+    24→  model: string;
+    25→  complexity: Complexity;
+    26→  category: TaskCategory;
+    27→  effort: EffortLevel;
+    28→  estimatedTokens: number;
+    29→  reasoning: string;
+    30→  alternatives: string[];
+    31→}
+    32→
+    33→export interface RouterConfig {
+    34→  defaultModel: string;
+    35→  simpleModel: string;
+    36→  moderateModel: string;
+    37→  complexModel: string;
+    38→  effortModels: Record<EffortLevel, string>;
+    39→  categoryOverrides: Partial<Record<TaskCategory, string>>;
+    40→  maxTokenBudget: number;
+    41→}
+    42→
+    43→export interface ModelInfo {
+    44→  name: string;
+    45→  contextWindow: number;
+    46→  maxOutput: number;
+    47→}
+    48→
+    49→// ---------------------------------------------------------------------------
+    50→// Internal analysis result
+    51→// ---------------------------------------------------------------------------
+    52→
+    53→interface PromptAnalysis {
+    54→  complexity: Complexity;
+    55→  category: TaskCategory;
+    56→  indicators: string[];
+    57→}
+    58→
+    59→// ---------------------------------------------------------------------------
+    60→// Keyword / pattern tables
+    61→// ---------------------------------------------------------------------------
+    62→
+    63→const CATEGORY_PATTERNS: Record<TaskCategory, RegExp[]> = {
+    64→  code: [
+    65→    /\b(write|create|implement|build|develop|code|program|function|class|method|module|api|endpoint|component|hook|middleware|service|library|package|script|utility|helper|factory|adapter|decorator|singleton|interface|type|enum|struct|trait|impl|abstract)\b/i,
+    66→    /\b(generat|scaffold|bootstrap|setup|init|boilerplate|snippet|algorithm|data\s*structure|parse|serialize|deserialize|encode|decode|compile|transpil|bundl)\b/i,
+    67→    /\b(react|vue|angular|svelte|next|nuxt|express|fastify|nestjs|django|flask|spring|rails|laravel)\b/i,
+    68→    /\b(sql|graphql|rest|grpc|websocket|rpc|crud|orm|migration|schema|query|mutation|subscription)\b/i,
+    69→    /\b(typescript|javascript|python|rust|go|java|c\+\+|ruby|swift|kotlin|scala|php|perl|shell|bash)\b/i,
+    70→  ],
+    71→  reasoning: [
+    72→    /\b(analy[zs]|evaluat|reason|deduc|infer|logic|propositional|syllogism|premise|conclusion|argument|proof|theorem|lemma)\b/i,
+    73→    /\b(why\s+does|how\s+does|what\s+causes|explain\s+why|explain\s+how|causal|correlat|implication|contradiction|paradox)\b/i,
+    74→    /\b(compare|contrast|weigh|trade[\s-]?off|pros?\s+and\s+cons?|advantage|disadvantage|merit|drawback|criterion|criteria)\b/i,
+    75→    /\b(decide|decision|choose|select\s+between|opt\s+for|rational|optimal|strategy|heuristic|judg[ei]|assess)\b/i,
+    76→    /\b(philosoph|ethical|moral|epistem|ontolog|metaphys|dialectic|hypothesis|hypothes[ie]s)\b/i,
+    77→  ],
+    78→  creative: [
+    79→    /\b(write|creat|compos|draft|story|poem|poetry|novel|fiction|narrative|tale|fable|myth|lore)\b/i,
+    80→    /\b(song|lyric|rap|ballad|haiku|limerick|sonnet|verse|stanza|rhyme)\b/i,
+    81→    /\b(creative|imagin|inspir|brainstorm|ideat|invent|original|unique|innovative|artistic|expressive)\b/i,
+    82→    /\b(screenplay|dialog|monologu|script|scene|plot|character|protagonist|antagonist|setting|world[\s-]?build)\b/i,
+    83→    /\b(marketing|copy|slogan|tagline|headline|pitch|campaign|brand|motto|manifesto)\b/i,
+    84→  ],
+    85→  analysis: [
+    86→    /\b(analy[zs]|assess|evaluat|measur|metric|statistic|quantif|quantif|data|dataset|insight|trend|pattern)\b/i,
+    87→    /\b(report|dashboard|chart|graph|visuali[zs]|plot|histogram|distribution|correlation|regression|outlier|anomal)\b/i,
+    88→    /\b(kpi|roi|conversion|retention|churn|funnel|cohort|segment|benchmark|baseline|variance|deviation)\b/i,
+    89→    /\b(survey|questionnaire|feedback|sentiment|opinion|poll|research|study|finding|conclusion|recommendation)\b/i,
+    90→    /\b(performance|latency|throughput|bottleneck|profiling|benchmark|load\s*test|stress\s*test|capacity)\b/i,
+    91→  ],
+    92→  conversation: [
+    93→    /^(hi|hello|hey|greetings|good\s+(morning|afternoon|evening)|howdy|sup|yo)\b/i,
+    94→    /\b(what\s+is|what\s+are|who\s+is|who\s+are|when\s+did|where\s+is|tell\s+me\s+about|explain\s+briefly)\b/i,
+    95→    /\b(how\s+do\s+i|how\s+can\s+i|help\s+me|can\s+you|could\s+you|would\s+you|please\s+(help|explain|tell|show))\b/i,
+    96→    /\b(thanks?|thank\s+you|appreciate|got\s*it|understood|makes?\s+sense|right|ok|okay|sure|cool|great|nice|awesome)\b/i,
+    97→    /\b(chat|talk|discuss|convers|question|answer|curious|wondering)\b/i,
+    98→  ],
+    99→  debugging: [
+   100→    /\b(debug|bug|error|issue|problem|crash|exception|traceback|stack\s*trace|fault|failure|faulty)\b/i,
+   101→    /\b(fix|repair|patch|resolve|troubleshoot|diagnos|investigat|root\s*cause|bisect|pinpoint|isolate)\b/i,
+   102→    /\b(not\s+work|broken|wrong|unexpected|incorrect|misbehav|regression|side\s*effect|glitch|hang|freeze)\b/i,
+   103→    /\b(log|stderr|stdout|assert|throw|catch|try|raise|panic|fatal|segfault|overflow|underflow|null\s*pointer|nil)\b/i,
+   104→    /\b(reproduce|repro|minimal\s+(repro|example|case)|step\s+to\s+reproduce|stack\s*overflow|memory\s*leak)\b/i,
+   105→  ],
+   106→  review: [
+   107→    /\b(review|audit|inspect|examine|check|verify|validat|ensure|confirm|certif|compliance)\b/i,
+   108→    /\b(code\s*review|pull\s*request|pr|merge\s*request|diff|change|change\s*set|patch|commit)\b/i,
+   109→    /\b(quality|standard|guideline|convention|style|lint|best\s*practice|clean\s*code|solid|dry|kiss)\b/i,
+   110→    /\b(secur|vulnerab|exploit|cve|owasp|injection|xss|csrf|sanitize|escape|encrypt|auth|perm)\b/i,
+   111→    /\b(performance\s*review|architectur(e|al)\s*review|design\s*review|security\s*review|readability)\b/i,
+   112→  ],
+   113→  refactoring: [
+   114→    /\b(refactor|restructur|reorganiz|rearrang|rearchitect|rewrite|overhaul|moderniz|migrate|port)\b/i,
+   115→    /\b(clean\s*up|simplif|duplicat|dead\s*code|unused|redundant|consolidat|merge|split|extract|inline)\b/i,
+   116→    /\b(design\s*pattern|solid|dry|kiss|yagni|coupling|cohesion|separation\s*of\s*concerns|single\s*responsib)\b/i,
+   117→    /\b(rename|rename|move|promote|demote|encapsulat|abstract|generaliz|speciali[zs]|parametri[zs])\b/i,
+   118→    /\b(improv(e|ing)|enhanc(e|ing)|optimi[zs]|speed\s*up|reduc(e|ing)|streamlin|declutter|tidy)\b/i,
+   119→  ],
+   120→};
+   121→
+   122→const COMPLEXITY_SIGNALS = {
+   123→  simple: {
+   124→    patterns: [
+   125→      /^(what\s+is|what\s+are|who\s+is|define|explain\s+briefly|list|show\s+me|tell\s+me|give\s+me\s+a)\b/i,
+   126→      /\b(simple|basic|quick|easy|short|small|single|one|trivial|minor|tiny|brief)\b/i,
+   127→      /\b(hello|hi|thanks|yes|no|ok|sure|done|correct|right|please)\b/i,
+   128→    ],
+   129→    lengthThreshold: 80,
+   130→    maxSteps: 5,
+   131→  },
+   132→  moderate: {
+   133→    patterns: [
+   134→      /\b(add|modify|update|change|extend|enhance|improve|adjust|configure|customize)\b/i,
+   135→      /\b(fix|debug|solve|resolve|handle|implement\s+a|write\s+a|create\s+a)\b/i,
+   136→      /\b(test|spec|assert|validate|verify)\b/i,
+   137→      /\b(review|check|audit|inspect|compare|evaluate)\b/i,
+   138→      /\b(refactor|clean|simplify|optimize|restructure)\b/i,
+   139→    ],
+   140→    lengthThreshold: 300,
+   141→    maxSteps: 15,
+   142→  },
+   143→  complex: {
+   144→    patterns: [
+   145→      /\b(implement\s+(a\s+)?(full|complete|entire|comprehensive|end[\s-]to[\s-]end|production|scalable|robust))\b/i,
+   146→      /\b(build\s+(a\s+)?(system|application|platform|framework|service|architecture|infrastructure|pipeline))\b/i,
+   147→      /\b(design\s+(and\s+implement|the\s+architecture|a\s+system|from\s+scratch))\b/i,
+   148→      /\b(migrate|migration|port\s+from|rewrite\s+(from|the|entire)|overhaul|modernize)\b/i,
+   149→      /\b(multi[\s-]*(step|phase|stage|part|agent|service|module|component)|micro[\s-]*service|distributed)\b/i,
+   150→      /\b(orchestrat|coordinat|integrat|synchron[iz]|pipeline|workflow|state\s*machine)\b/i,
+   151→      /\b(complex|comprehensive|intricate|sophisticated|elaborate|advanced|enterprise|large[\s-]*scale)\b/i,
+   152→      /\b(security\s+(audit|review|hardening)|performance\s+(optim|tuning|profiling)|scalab(ility|le))\b/i,
+   153→    ],
+   154→    lengthThreshold: 500,
+   155→    maxSteps: 30,
+   156→  },
+   157→};
+   158→
+   159→// ---------------------------------------------------------------------------
+   160→// Step-counting heuristics
+   161→// ---------------------------------------------------------------------------
+   162→
+   163→const STEP_INDICATORS: RegExp[] = [
+   164→  /\band\b/gi,
+   165→  /\bthen\b/gi,
+   166→  /\bafter\s+(that|which|complet|finish|done)\b/gi,
+   167→  /\bfinally\b/gi,
+   168→  /\bnext\b/gi,
+   169→  /\bfollowed\s+by\b/gi,
+   170→  /\bonce\s+(that|it|complete|done|finish)\b/gi,
+   171→  /\bsubsequently\b/gi,
+   172→  /\badditionally\b/gi,
+   173→  /\bfurthermore\b/gi,
+   174→  /\bmoreover\b/gi,
+   175→];
+   176→
+   177→// ---------------------------------------------------------------------------
+   178→// ModelRouter
+   179→// ---------------------------------------------------------------------------
+   180→
+   181→export class ModelRouter {
+   182→  private config: RouterConfig;
+   183→  private availableModels: Record<string, ModelInfo>;
+   184→  private currentEffort: EffortLevel = 'medium';
+   185→  private forcedModel: string | null = null;
+   186→
+   187→  // -----------------------------------------------------------------------
+   188→  // Construction
+   189→  // -----------------------------------------------------------------------
+   190→
+   191→  constructor(
+   192→    config: RouterConfig,
+   193→    availableModels: Record<string, ModelInfo>,
+   194→  ) {
+   195→    this.config = config;
+   196→    this.availableModels = availableModels;
+   197→    this.validateConfig();
+   198→  }
+   199→
+   200→  // -----------------------------------------------------------------------
+   201→  // Public API
+   202→  // -----------------------------------------------------------------------
+   203→
+   204→  /**
+   205→   * Route a prompt to the best available model.
+   206→   */
+   207→  route(prompt: string, effort?: EffortLevel): RoutingDecision {
+   208→    const effectiveEffort = effort ?? this.currentEffort;
+   209→    const analysis = this.analyzePrompt(prompt);
+   210→    const estimatedTokens = this.estimateTokens(prompt);
+   211→    const model = this.selectModel(analysis.complexity, analysis.category, effectiveEffort);
+   212→    const alternatives = this.getAlternatives(analysis.complexity, analysis.category);
+   213→    const reasoning = this.buildReasoning(analysis, effectiveEffort, model);
+   214→
+   215→    return {
+   216→      model,
+   217→      complexity: analysis.complexity,
+   218→      category: analysis.category,
+   219→      effort: effectiveEffort,
+   220→      estimatedTokens,
+   221→      reasoning,
+   222→      alternatives,
+   223→    };
+   224→  }
+   225→
+   226→  /**
+   227→   * Set the default effort level for subsequent routing calls.
+   228→   */
+   229→  setEffort(level: EffortLevel): void {
+   230→    this.currentEffort = level;
+   231→  }
+   232→
+   233→  /**
+   234→   * Get the current effort level.
+   235→   */
+   236→  getEffort(): EffortLevel {
+   237→    return this.currentEffort;
+   238→  }
+   239→
+   240→  /**
+   241→   * Force all routing decisions to use a specific model.
+   242→   */
+   243→  overrideModel(modelId: string): void {
+   244→    if (!this.availableModels[modelId]) {
+   245→      throw new Error(
+   246→        `Cannot override to unknown model "${modelId}". Available: ${Object.keys(this.availableModels).join(', ')}`,
+   247→      );
+   248→    }
+   249→    this.forcedModel = modelId;
+   250→  }
+   251→
+   252→  /**
+   253→   * Remove any forced model override.
+   254→   */
+   255→  clearOverride(): void {
+   256→    this.forcedModel = null;
+   257→  }
+   258→
+   259→  /**
+   260→   * Classify the task category of a prompt.
+   261→   */
+   262→  getCategory(prompt: string): TaskCategory {
+   263→    return this.analyzePrompt(prompt).category;
+   264→  }
+   265→
+   266→  /**
+   267→   * Classify the complexity of a prompt.
+   268→   */
+   269→  getComplexity(prompt: string): Complexity {
+   270→    return this.analyzePrompt(prompt).complexity;
+   271→  }
+   272→
+   273→  /**
+   274→   * Estimate the number of tokens a prompt will consume.
+   275→   * Uses a character-based heuristic (~4 chars per token for English,
+   276→   * with adjustments for code-heavy content).
+   277→   */
+   278→  estimateTokens(prompt: string): number {
+   279→    if (prompt.length === 0) return 0;
+   280→
+   281→    // Base estimate: ~4 characters per token for typical English text
+   282→    let charPerToken = 4;
+   283→
+   284→    // Code-heavy prompts tend to have higher token density
+   285→    const codeIndicators = [
+   286→      /```[\s\S]*?```/,       // fenced code blocks
+   287→      /\bfunction\b/,          // function keyword
+   288→      /\bconst\b|\blet\b|\bvar\b/,  // variable declarations
+   289→      /[{}()\[\];]/,           // braces and brackets
+   290→      /=>/,                    // arrow functions
+   291→      /import\s+.+\s+from/,   // imports
+   292→    ];
+   293→
+   294→    const codeSignalCount = codeIndicators.filter(p => p.test(prompt)).length;
+   295→    if (codeSignalCount >= 3) {
+   296→      charPerToken = 3.2; // code is denser
+   297→    } else if (codeSignalCount >= 1) {
+   298→      charPerToken = 3.6;
+   299→    }
+   300→
+   301→    // Whitespace-heavy prompts have lower density
+   302→    const whitespaceRatio = (prompt.match(/\s/g) ?? []).length / prompt.length;
+   303→    if (whitespaceRatio > 0.4) {
+   304→      charPerToken = 4.5;
+   305→    }
+   306→
+   307→    const baseTokens = Math.ceil(prompt.length / charPerToken);
+   308→
+   309→    // Add overhead for special tokens (system, role markers, etc.)
+   310→    const overhead = 8;
+   311→
+   312→    return baseTokens + overhead;
+   313→  }
+   314→
+   315→  /**
+   316→   * Print a human-readable routing decision to stdout.
+   317→   */
+   318→  printDecision(decision: RoutingDecision): void {
+   319→    const border = '-'.repeat(60);
+   320→    const lines: string[] = [
+   321→      border,
+   322→      '  MODEL ROUTING DECISION',
+   323→      border,
+   324→      `  Model       : ${decision.model}`,
+   325→      `  Complexity  : ${decision.complexity}`,
+   326→      `  Category    : ${decision.category}`,
+   327→      `  Effort      : ${decision.effort}`,
+   328→      `  Est. Tokens : ${decision.estimatedTokens.toLocaleString()}`,
+   329→      `  Reasoning   : ${decision.reasoning}`,
+   330→    ];
+   331→
+   332→    if (decision.alternatives.length > 0) {
+   333→      lines.push(`  Alternatives: ${decision.alternatives.join(', ')}`);
+   334→    }
+   335→
+   336→    lines.push(border);
+   337→
+   338→    for (const line of lines) {
+   339→      console.log(line);
+   340→    }
+   341→  }
+   342→
+   343→  // -----------------------------------------------------------------------
+   344→  // Private: prompt analysis
+   345→  // -----------------------------------------------------------------------
+   346→
+   347→  private analyzePrompt(prompt: string): PromptAnalysis {
+   348→    const indicators: string[] = [];
+   349→
+   350→    // --- Category detection (scored) ---
+   351→    const categoryScores = this.scoreCategories(prompt);
+   352→    const category = this.pickTopCategory(categoryScores, indicators);
+   353→
+   354→    // --- Complexity detection (scored) ---
+   355→    const complexity = this.scoreComplexity(prompt, indicators);
+   356→
+   357→    return { complexity, category, indicators };
+   358→  }
+   359→
+   360→  /**
+   361→   * Score each category based on how many pattern groups match.
+   362→   * Each group in CATEGORY_PATTERNS is worth 1 point when at least one
+   363→   * pattern in the group matches.
+   364→   */
+   365→  private scoreCategories(prompt: string): Map<TaskCategory, number> {
+   366→    const scores = new Map<TaskCategory, number>();
+   367→
+   368→    for (const [cat, patternGroups] of Object.entries(CATEGORY_PATTERNS) as [TaskCategory, RegExp[]][]) {
+   369→      let score = 0;
+   370→      for (const pattern of patternGroups) {
+   371→        if (pattern.test(prompt)) {
+   372→          score += 1;
+   373→        }
+   374→      }
+   375→      scores.set(cat, score);
+   376→    }
+   377→
+   378→    return scores;
+   379→  }
+   380→
+   381→  /**
+   382→   * Determine the winning category and record indicators.
+   383→   */
+   384→  private pickTopCategory(
+   385→    scores: Map<TaskCategory, number>,
+   386→    indicators: string[],
+   387→  ): TaskCategory {
+   388→    let bestCategory: TaskCategory = 'conversation';
+   389→    let bestScore = 0;
+   390→
+   391→    for (const [cat, score] of scores) {
+   392→      if (score > bestScore) {
+   393→        bestScore = score;
+   394→        bestCategory = cat;
+   395→      }
+   396→    }
+   397→
+   398→    // If nothing matched at all, default to conversation
+   399→    if (bestScore === 0) {
+   400→      indicators.push('no strong category signals -- defaulting to conversation');
+   401→      return 'conversation';
+   402→    }
+   403→
+   404→    indicators.push(`category "${bestCategory}" matched with score ${bestScore}`);
+   405→    return bestCategory;
+   406→  }
+   407→
+   408→  /**
+   409→   * Score complexity using a weighted combination of:
+   410→   *   1. Pattern match signals
+   411→   *   2. Prompt length
+   412→   *   3. Multi-step indicators
+   413→   */
+   414→  private scoreComplexity(prompt: string, indicators: string[]): Complexity {
+   415→    let simpleScore = 0;
+   416→    let moderateScore = 0;
+   417→    let complexScore = 0;
+   418→
+   419→    // --- Pattern-based scoring ---
+   420→
+   421→    for (const pattern of COMPLEXITY_SIGNALS.simple.patterns) {
+   422→      if (pattern.test(prompt)) {
+   423→        simpleScore += 2;
+   424→        indicators.push(`simple signal: "${this.truncateMatch(prompt, pattern)}"`);
+   425→      }
+   426→    }
+   427→
+   428→    for (const pattern of COMPLEXITY_SIGNALS.moderate.patterns) {
+   429→      if (pattern.test(prompt)) {
+   430→        moderateScore += 2;
+   431→        indicators.push(`moderate signal: "${this.truncateMatch(prompt, pattern)}"`);
+   432→      }
+   433→    }
+   434→
+   435→    for (const pattern of COMPLEXITY_SIGNALS.complex.patterns) {
+   436→      if (pattern.test(prompt)) {
+   437→        complexScore += 3;
+   438→        indicators.push(`complex signal: "${this.truncateMatch(prompt, pattern)}"`);
+   439→      }
+   440→    }
+   441→
+   442→    // --- Length-based scoring ---
+   443→    const length = prompt.length;
+   444→
+   445→    if (length <= COMPLEXITY_SIGNALS.simple.lengthThreshold) {
+   446→      simpleScore += 1;
+   447→      indicators.push(`short prompt (${length} chars)`);
+   448→    } else if (length <= COMPLEXITY_SIGNALS.moderate.lengthThreshold) {
+   449→      moderateScore += 1;
+   450→      indicators.push(`medium prompt (${length} chars)`);
+   451→    } else if (length <= COMPLEXITY_SIGNALS.complex.lengthThreshold) {
+   452→      moderateScore += 1;
+   453→      complexScore += 1;
+   454→      indicators.push(`long prompt (${length} chars)`);
+   455→    } else {
+   456→      complexScore += 2;
+   457→      indicators.push(`very long prompt (${length} chars)`);
+   458→    }
+   459→
+   460→    // --- Step-count scoring ---
+   461→    const stepCount = this.countSteps(prompt);
+   462→    if (stepCount <= COMPLEXITY_SIGNALS.simple.maxSteps) {
+   463→      simpleScore += 1;
+   464→    } else if (stepCount <= COMPLEXITY_SIGNALS.moderate.maxSteps) {
+   465→      moderateScore += 1;
+   466→      indicators.push(`multi-step request (${stepCount} steps detected)`);
+   467→    } else {
+   468→      complexScore += 2;
+   469→      indicators.push(`many-step request (${stepCount} steps detected)`);
+   470→    }
+   471→
+   472→    // --- Final decision ---
+   473→    const maxScore = Math.max(simpleScore, moderateScore, complexScore);
+   474→
+   475→    // Ties go to the higher complexity (safer default)
+   476→    if (complexScore === maxScore) return 'complex';
+   477→    if (moderateScore === maxScore) return 'moderate';
+   478→    return 'simple';
+   479→  }
+   480→
+   481→  /**
+   482→   * Count the approximate number of distinct steps or sub-tasks in a prompt.
+   483→   */
+   484→  private countSteps(prompt: string): number {
+   485→    let steps = 1; // at least one step
+   486→    for (const pattern of STEP_INDICATORS) {
+   487→      const matches = prompt.match(pattern);
+   488→      if (matches) {
+   489→        steps += matches.length;
+   490→      }
+   491→    }
+   492→    return steps;
+   493→  }
+   494→
+   495→  /**
+   496→   * Extract a short snippet from the prompt that matched a pattern,
+   497→   * for use as a human-readable indicator.
+   498→   */
+   499→  private truncateMatch(prompt: string, pattern: RegExp): string {
+   500→    const match = prompt.match(pattern);
+   501→    if (!match) return '(no match)';
+   502→    const text = match[0];
+   503→    return text.length > 40 ? text.slice(0, 37) + '...' : text;
+   504→  }
+   505→
+   506→  // -----------------------------------------------------------------------
+   507→  // Private: model selection
+   508→  // -----------------------------------------------------------------------
+   509→
+   510→  private selectModel(complexity: Complexity, category: TaskCategory, effort: EffortLevel): string {
+   511→    // 1. User override takes absolute precedence
+   512→    if (this.forcedModel) {
+   513→      return this.forcedModel;
+   514→    }
+   515→
+   516→    // 2. Effort-level model mapping takes precedence when the effort is
+   517→    //    explicitly above "medium". This lets users escalate thinking
+   518→    //    without changing the prompt.
+   519→    if (effort === 'ultrathink' || effort === 'high') {
+   520→      const effortModel = this.config.effortModels[effort];
+   521→      if (effortModel && this.availableModels[effortModel]) {
+   522→        return effortModel;
+   523→      }
+   524→    }
+   525→
+   526→    // 3. Category-specific override
+   527→    const categoryModel = this.config.categoryOverrides[category];
+   528→    if (categoryModel && this.availableModels[categoryModel]) {
+   529→      return categoryModel;
+   530→    }
+   531→
+   532→    // 4. Effort-level mapping for low/medium
+   533→    if (effort === 'low' || effort === 'medium') {
+   534→      const effortModel = this.config.effortModels[effort];
+   535→      if (effortModel && this.availableModels[effortModel]) {
+   536→        return effortModel;
+   537→      }
+   538→    }
+   539→
+   540→    // 5. Complexity-based default
+   541→    switch (complexity) {
+   542→      case 'simple':
+   543→        return this.config.simpleModel;
+   544→      case 'moderate':
+   545→        return this.config.moderateModel;
+   546→      case 'complex':
+   547→        return this.config.complexModel;
+   548→    }
+   549→  }
+   550→
+   551→  /**
+   552→   * Return alternative models that could handle the same task but were not
+   553→   * selected as the primary choice.
+   554→   */
+   555→  private getAlternatives(complexity: Complexity, category: TaskCategory): string[] {
+   556→    const selected = this.selectModel(complexity, category, this.currentEffort);
+   557→    const candidates = new Set<string>();
+   558→
+   559→    // Add complexity-adjacent models
+   560→    candidates.add(this.config.simpleModel);
+   561→    candidates.add(this.config.moderateModel);
+   562→    candidates.add(this.config.complexModel);
+   563→
+   564→    // Add effort models
+   565→    for (const model of Object.values(this.config.effortModels)) {
+   566→      candidates.add(model);
+   567→    }
+   568→
+   569→    // Add category override if present
+   570→    const categoryModel = this.config.categoryOverrides[category];
+   571→    if (categoryModel) {
+   572→      candidates.add(categoryModel);
+   573→    }
+   574→
+   575→    // Remove the selected model and any models not in the available set
+   576→    candidates.delete(selected);
+   577→    for (const candidate of [...candidates]) {
+   578→      if (!this.availableModels[candidate]) {
+   579→        candidates.delete(candidate);
+   580→      }
+   581→    }
+   582→
+   583→    return [...candidates];
+   584→  }
+   585→
+   586→  // -----------------------------------------------------------------------
+   587→  // Private: reasoning string
+   588→  // -----------------------------------------------------------------------
+   589→
+   590→  private buildReasoning(
+   591→    analysis: PromptAnalysis,
+   592→    effort: EffortLevel,
+   593→    model: string,
+   594→  ): string {
+   595→    const parts: string[] = [];
+   596→
+   597→    if (this.forcedModel) {
+   598→      parts.push(`User override forced model to "${this.forcedModel}".`);
+   599→      return parts.join(' ');
+   600→    }
+   601→
+   602→    parts.push(`Prompt classified as ${analysis.complexity} ${analysis.category} task.`);
+   603→
+   604→    switch (analysis.complexity) {
+   605→      case 'simple':
+   606→        parts.push('Routed to fast model for quick response.');
+   607→        break;
+   608→      case 'moderate':
+   609→        parts.push('Routed to balanced model for capable response.');
+   610→        break;
+   611→      case 'complex':
+   612→        parts.push('Routed to powerful model for thorough analysis.');
+   613→        break;
+   614→    }
+   615→
+   616→    if (effort === 'ultrathink') {
+   617→      parts.push('Ultrathink mode: using highest-capability model for deep reasoning.');
+   618→    } else if (effort === 'high') {
+   619→      parts.push('High effort: using advanced model for detailed output.');
+   620→    } else if (effort === 'low') {
+   621→      parts.push('Low effort: using fast model for concise response.');
+   622→    }
+   623→
+   624→    parts.push(`Selected "${model}".`);
+   625→
+   626→    return parts.join(' ');
+   627→  }
+   628→
+   629→  // -----------------------------------------------------------------------
+   630→  // Private: config validation
+   631→  // -----------------------------------------------------------------------
+   632→
+   633→  private validateConfig(): void {
+   634→    const requiredModels: string[] = [
+   635→      this.config.defaultModel,
+   636→      this.config.simpleModel,
+   637→      this.config.moderateModel,
+   638→      this.config.complexModel,
+   639→    ];
+   640→
+   641→    for (const modelId of requiredModels) {
+   642→      if (!this.availableModels[modelId]) {
+   643→        throw new Error(
+   644→          `RouterConfig references model "${modelId}" which is not in the available models list. ` +
+   645→          `Available: ${Object.keys(this.availableModels).join(', ')}`,
+   646→        );
+   647→      }
+   648→    }
+   649→
+   650→    for (const [level, modelId] of Object.entries(this.config.effortModels)) {
+   651→      if (!this.availableModels[modelId]) {
+   652→        throw new Error(
+   653→          `RouterConfig effortModels.${level} references model "${modelId}" which is not in the available models list. ` +
+   654→          `Available: ${Object.keys(this.availableModels).join(', ')}`,
+   655→        );
+   656→      }
+   657→    }
+   658→
+   659→    for (const [category, modelId] of Object.entries(this.config.categoryOverrides)) {
+   660→      if (modelId && !this.availableModels[modelId]) {
+   661→        throw new Error(
+   662→          `RouterConfig categoryOverrides.${category} references model "${modelId}" which is not in the available models list. ` +
+   663→          `Available: ${Object.keys(this.availableModels).join(', ')}`,
+   664→        );
+   665→      }
+   666→    }
+   667→
+   668→    if (this.config.maxTokenBudget <= 0) {
+   669→      throw new Error('RouterConfig.maxTokenBudget must be a positive integer.');
+   670→    }
+   671→  }
+   672→}
+   673→
+   674→// ---------------------------------------------------------------------------
+   675→// Default configuration factory
+   676→// ---------------------------------------------------------------------------
+   677→
+   678→export const DEFAULT_ROUTER_CONFIG: RouterConfig = {
+   679→  defaultModel: 'anthropic/claude-sonnet-4',
+   680→  simpleModel: 'google/gemini-2.0-flash-001',
+   681→  moderateModel: 'anthropic/claude-sonnet-4',
+   682→  complexModel: 'anthropic/claude-opus-4',
+   683→  effortModels: {
+   684→    low: 'google/gemini-2.0-flash-001',
+   685→    medium: 'anthropic/claude-sonnet-4',
+   686→    high: 'anthropic/claude-opus-4',
+   687→    ultrathink: 'openai/o3',
+   688→  },
+   689→  categoryOverrides: {
+   690→    code: 'anthropic/claude-sonnet-4',
+   691→    reasoning: 'openai/o3',
+   692→    creative: 'anthropic/claude-sonnet-4',
+   693→    debugging: 'anthropic/claude-sonnet-4',
+   694→    review: 'anthropic/claude-sonnet-4',
+   695→    refactoring: 'anthropic/claude-sonnet-4',
+   696→  },
+   697→  maxTokenBudget: 200_000,
+   698→};
+   699→
+   700→export const DEFAULT_AVAILABLE_MODELS: Record<string, ModelInfo> = {
+   701→  'google/gemini-2.0-flash-001': {
+   702→    name: 'Gemini 2.0 Flash',
+   703→    contextWindow: 1_048_576,
+   704→    maxOutput: 8_192,
+   705→  },
+   706→  'anthropic/claude-sonnet-4': {
+   707→    name: 'Claude Sonnet 4',
+   708→    contextWindow: 200_000,
+   709→    maxOutput: 16_384,
+   710→  },
+   711→  'anthropic/claude-opus-4': {
+   712→    name: 'Claude Opus 4',
+   713→    contextWindow: 200_000,
+   714→    maxOutput: 32_000,
+   715→  },
+   716→  'openai/o3': {
+   717→    name: 'OpenAI o3',
+   718→    contextWindow: 200_000,
+   719→    maxOutput: 100_000,
+   720→  },
+   721→};
+   722→
