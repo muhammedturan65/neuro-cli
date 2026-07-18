@@ -21,6 +21,11 @@ export interface Theme {
     keyword: typeof chalk;
     comment: typeof chalk;
     border: typeof chalk;
+    diffAdd: typeof chalk;
+    diffRemove: typeof chalk;
+    diffContext: typeof chalk;
+    label: typeof chalk;
+    path: typeof chalk;
 }
 export declare function getTheme(name: string): Theme;
 export declare function listThemes(): string[];

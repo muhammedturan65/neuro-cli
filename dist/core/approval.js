@@ -171,27 +171,20 @@ export class ApprovalSystem {
     // --- Interactive Prompt ---
     async promptUser(toolName, args, risk, description) {
         const riskColors = { low: chalk.green, medium: chalk.yellow, high: chalk.red };
-        const riskIcons = { low: '🟢', medium: '🟡', high: '🔴' };
+        const riskLabels = { low: 'low', medium: 'med', high: 'high' };
+        // Claude Code style: compact, minimal approval prompt
         console.log();
-        console.log(`  ${riskIcons[risk]} ${riskColors[risk].bold(`Approval needed [${risk} risk]`)}`);
-        console.log(`  ${chalk.cyan('Tool:')} ${chalk.white.bold(toolName)}`);
+        console.log(`  ${chalk.dim('┌─')} ${chalk.bold(toolName)} ${riskColors[risk](`[${riskLabels[risk]}]`)}`);
+        // Show key argument on one line
+        const keyArg = this.formatCompactArgs(toolName, args);
+        if (keyArg) {
+            console.log(`  ${chalk.dim('│')} ${chalk.gray(keyArg)}`);
+        }
         if (description) {
-            console.log(`  ${chalk.cyan('Description:')} ${chalk.gray(description)}`);
+            console.log(`  ${chalk.dim('│')} ${chalk.gray(description.slice(0, 100))}`);
         }
-        const argEntries = Object.entries(args);
-        if (argEntries.length > 0) {
-            console.log(`  ${chalk.cyan('Arguments:')}`);
-            for (const [key, value] of argEntries.slice(0, 5)) {
-                const val = typeof value === 'string' && value.length > 80 ? value.slice(0, 80) + '...' : String(value);
-                console.log(`    ${chalk.gray(key)}: ${chalk.white(val)}`);
-            }
-            if (argEntries.length > 5) {
-                console.log(`    ${chalk.gray(`...and ${argEntries.length - 5} more`)}`);
-            }
-        }
-        console.log();
-        console.log(`  ${chalk.gray('y')} = Yes  ${chalk.gray('n')} = No  ${chalk.gray('a')} = Yes always (session)  ${chalk.gray('A')} = Yes always (persist)  ${chalk.gray('e')} = Edit args  ${chalk.gray('d')} = Show diff`);
-        const answer = await this.readline(`${riskIcons[risk]} Allow ${toolName}? [y/n/a/A/e/d]: `);
+        console.log(`  ${chalk.dim('└─')} ${chalk.gray('y')}yes ${chalk.gray('n')}no ${chalk.gray('a')}session ${chalk.gray('A')}always ${chalk.gray('e')}edit ${chalk.gray('d')}diff`);
+        const answer = await this.readline(`  ${riskColors[risk]('?')} Allow? `);
         const startTime = Date.now();
         switch (answer.toLowerCase().trim()) {
             case 'y':
@@ -277,19 +270,18 @@ export class ApprovalSystem {
             groups.get(item.toolName).push(item);
         }
         console.log();
-        console.log(chalk.bold.cyan(`  ━━━ Batch Approval (${batch.length} operations) ━━━`));
+        console.log(`  ${chalk.dim('┌─')} ${chalk.bold(`Batch (${batch.length} ops)`)}`);
         for (const [toolName, items] of groups) {
-            console.log(`  ${chalk.cyan(toolName)}: ${chalk.white(`${items.length} operations`)}`);
-            for (const item of items.slice(0, 3)) {
+            console.log(`  ${chalk.dim('│')} ${chalk.bold(toolName)} ${chalk.gray(`${items.length} ops`)}`);
+            for (const item of items.slice(0, 2)) {
                 const preview = item.args.path || item.args.command || item.description || '';
-                console.log(`    - ${chalk.gray(String(preview).slice(0, 60))}`);
+                console.log(`  ${chalk.dim('│')}   ${chalk.gray(String(preview).slice(0, 60))}`);
             }
-            if (items.length > 3)
-                console.log(`    ${chalk.gray(`...and ${items.length - 3} more`)}`);
+            if (items.length > 2)
+                console.log(`  ${chalk.dim('│')}   ${chalk.gray(`+${items.length - 2} more`)}`);
         }
-        console.log();
-        console.log(`  ${chalk.gray('y')} = Approve all  ${chalk.gray('n')} = Deny all  ${chalk.gray('r')} = Review each`);
-        const answer = await this.readline('  Batch approve? [y/n/r]: ');
+        console.log(`  ${chalk.dim('└─')} ${chalk.gray('y')}all ${chalk.gray('n')}none ${chalk.gray('r')}review`);
+        const answer = await this.readline(`  ${chalk.yellow('?')} Batch? `);
         switch (answer.toLowerCase().trim()) {
             case 'y':
             case 'yes':
@@ -314,6 +306,33 @@ export class ApprovalSystem {
     }
     // --- Helpers ---
     isBlacklisted(toolName) { return this.blacklist.has(toolName); }
+    /**
+     * Format tool arguments as a compact one-liner for Claude Code-style display
+     */
+    formatCompactArgs(toolName, args) {
+        switch (toolName) {
+            case 'read_file':
+            case 'edit_file':
+            case 'write_file':
+            case 'delete_file':
+            case 'apply_diff':
+                return String(args.path || '');
+            case 'run_command':
+                return String(args.command || '').slice(0, 80);
+            case 'search_files':
+                return `"${args.query || ''}" in ${args.path || '.'}`;
+            case 'list_directory':
+                return String(args.path || args.directory || '.');
+            case 'web_search':
+                return `"${args.query || ''}"`;
+            case 'web_fetch':
+                return String(args.url || '').slice(0, 60);
+            default: {
+                const entries = Object.entries(args).slice(0, 2);
+                return entries.map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 40) : JSON.stringify(v)}`).join(' ');
+            }
+        }
+    }
     isWhitelisted(toolName) {
         if (this.whitelist.has(toolName))
             return true;

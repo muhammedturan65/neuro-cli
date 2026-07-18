@@ -78,7 +78,7 @@ export interface NeuroConfig {
         maxHistory: number;
     };
     ui: {
-        theme: 'dark' | 'light' | 'dracula' | 'nord';
+        theme: 'claude' | 'dark' | 'light' | 'dracula' | 'nord';
         showTokenCount: boolean;
         showCost: boolean;
         streaming: boolean;

@@ -110,7 +110,7 @@ export const DEFAULT_CONFIG: NeuroConfig = {
     maxHistory: 100,
   },
   ui: {
-    theme: 'dracula',
+    theme: 'claude',
     showTokenCount: true,
     showCost: true,
     streaming: true,

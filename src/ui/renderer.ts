@@ -1,66 +1,64 @@
 // ============================================================
-// NeuroCLI - Terminal UI Renderer
-// Beautiful terminal output with streaming support
+// NeuroCLI - Terminal UI Renderer v2
+// Claude Code-inspired minimal, professional terminal output
+// Clean lines, subtle colors, compact information display
 // ============================================================
 
 import chalk from 'chalk';
 import { Theme, getTheme } from './theme.js';
 import { TokenUsage } from '../core/types.js';
-import { MODELS, calculateCost } from '../api/models.js';
+import { MODELS } from '../api/models.js';
 
 export class TerminalUI {
   public theme: Theme;
   private showTokens: boolean;
   private showCost: boolean;
+  private isStreaming: boolean = false;
+  public version: string = '4.3.0';
 
-  constructor(themeName: string = 'dracula', showTokens: boolean = true, showCost: boolean = true) {
+  constructor(themeName: string = 'claude', showTokens: boolean = true, showCost: boolean = true) {
     this.theme = getTheme(themeName);
     this.showTokens = showTokens;
     this.showCost = showCost;
   }
 
-  /**
-   * Print the banner / splash screen
-   */
+  setVersion(v: string): void {
+    this.version = v;
+  }
+
+  // ── Banner ──────────────────────────────────────────────
+
   banner(): void {
-    const banner = `
-${this.theme.primary('  ╔══════════════════════════════════════════╗')}
-${this.theme.primary('  ║')}  ${this.theme.accent.bold('🧠 NeuroCLI')} ${this.theme.muted('v1.0.0')}                    ${this.theme.primary('║')}
-${this.theme.primary('  ║')}  ${this.theme.secondary('Advanced AI Terminal Coding Assistant')}     ${this.theme.primary('║')}
-${this.theme.primary('  ╠══════════════════════════════════════════╣')}
-${this.theme.primary('  ║')}  ${this.theme.muted('OpenRouter')} ${this.theme.success('●')}  ${this.theme.muted('Multi-Agent')} ${this.theme.success('●')}  ${this.theme.muted('Streaming')} ${this.theme.success('●')}  ${this.theme.primary('║')}
-${this.theme.primary('  ╚══════════════════════════════════════════╝')}
-`;
-    console.log(banner);
+    // Claude Code style: clean, minimal, no box art
+    // Version is injected from index.ts via setVersion()
+    console.log();
+    console.log(`  ${this.theme.bold('NeuroCLI')} ${this.theme.muted(`v${this.version}`)}`);
+    console.log(`  ${this.theme.dim('─'.repeat(40))}`);
   }
 
-  /**
-   * Print user message
-   */
+  // ── User Messages ───────────────────────────────────────
+
   userMessage(content: string): void {
-    console.log(`\n${this.theme.user('❯')} ${this.theme.user.bold('You')}`);
-    console.log(`  ${content}\n`);
+    console.log();
+    console.log(`  ${this.theme.accent('>')} ${content}`);
+    console.log();
   }
 
-  /**
-   * Print assistant message with markdown-like formatting
-   */
-  assistantMessage(content: string): void {
-    console.log(`${this.theme.accent('◈')} ${this.theme.bold('Neuro')}`);
+  // ── Assistant Messages ──────────────────────────────────
 
-    // Simple markdown rendering
+  assistantMessage(content: string): void {
     const lines = content.split('\n');
     for (const line of lines) {
       if (line.startsWith('```')) {
-        continue; // Code block markers handled separately
+        continue;
       } else if (line.startsWith('# ')) {
-        console.log(`  ${this.theme.bold(line)}`);
+        console.log(`  ${this.theme.bold(line.slice(2))}`);
       } else if (line.startsWith('## ')) {
-        console.log(`  ${this.theme.primary(line)}`);
+        console.log(`  ${this.theme.bold(line.slice(3))}`);
       } else if (line.startsWith('### ')) {
-        console.log(`  ${this.theme.accent(line)}`);
+        console.log(`  ${this.theme.primary(line.slice(4))}`);
       } else if (line.startsWith('- ') || line.startsWith('* ')) {
-        console.log(`  ${this.theme.muted('•')} ${line.slice(2)}`);
+        console.log(`  ${this.theme.muted('·')} ${line.slice(2)}`);
       } else if (line.startsWith('> ')) {
         console.log(`  ${this.theme.thinking(line)}`);
       } else {
@@ -70,235 +68,271 @@ ${this.theme.primary('  ╚═════════════════�
     console.log();
   }
 
-  /**
-   * Print streaming token
-   */
+  // ── Streaming ───────────────────────────────────────────
+
   streamingToken(token: string): void {
     process.stdout.write(token);
   }
 
-  /**
-   * Start streaming block
-   */
   startStreaming(): void {
-    process.stdout.write(`${this.theme.accent('◈')} ${this.theme.bold('Neuro')} `);
+    this.isStreaming = true;
   }
 
-  /**
-   * End streaming block
-   */
   endStreaming(): void {
+    this.isStreaming = false;
     console.log('\n');
   }
 
-  /**
-   * Print thinking indicator
-   */
+  // ── Thinking / Status ───────────────────────────────────
+
   thinking(message: string): void {
-    console.log(`${this.theme.thinking('  ○')} ${this.theme.thinking(message)}`);
+    // Claude Code: dim italic, compact
+    console.log(`  ${this.theme.thinking(message)}`);
   }
 
-  /**
-   * Print tool call
-   */
+  // ── Tool Calls (Claude Code style: compact one-liners) ──
+
   toolCall(name: string, args: Record<string, unknown>): void {
-    const argsStr = Object.entries(args)
-      .map(([k, v]) => {
-        const val = typeof v === 'string' && v.length > 60
-          ? `"${v.slice(0, 60)}..."`
-          : JSON.stringify(v);
-        return `${this.theme.muted(k)}=${val}`;
-      })
-      .join(' ');
-
-    console.log(`  ${this.theme.tool('⚡')} ${this.theme.tool.bold(name)} ${this.theme.muted(argsStr)}`);
+    // Build compact argument summary
+    const summary = this.formatToolArgs(name, args);
+    console.log(`  ${this.theme.tool('→')} ${this.theme.tool(name)}${summary}`);
   }
 
-  /**
-   * Print tool result
-   */
-  toolResult(name: string, result: string, isError: boolean): void {
-    if (isError) {
-      console.log(`  ${this.theme.error('✗')} ${this.theme.error(name)}: ${this.theme.error(result.slice(0, 200))}`);
-    } else {
-      const preview = result.length > 200 ? result.slice(0, 200) + '...' : result;
-      console.log(`  ${this.theme.success('✓')} ${this.theme.muted(name)}: ${this.theme.muted(preview)}`);
+  private formatToolArgs(name: string, args: Record<string, unknown>): string {
+    switch (name) {
+      case 'read_file':
+        return ` ${this.theme.path(String(args.path || ''))}`;
+      case 'write_file':
+        return ` ${this.theme.path(String(args.path || ''))} ${this.theme.muted(`(${this.byteSize(String(args.content || ''))})`)}`;
+      case 'edit_file':
+        return ` ${this.theme.path(String(args.path || ''))}`;
+      case 'search_files':
+        return ` ${this.theme.muted(`"${args.query || ''}"`)} ${this.theme.path(String(args.path || '.'))}`;
+      case 'list_directory':
+        return ` ${this.theme.path(String(args.path || args.directory || '.'))}`;
+      case 'run_command':
+        return ` ${this.theme.muted(this.truncate(String(args.command || ''), 60))}`;
+      case 'apply_diff':
+        return ` ${this.theme.path(String(args.path || ''))}`;
+      case 'delete_file':
+        return ` ${this.theme.path(String(args.path || ''))}`;
+      case 'web_search':
+        return ` ${this.theme.muted(`"${args.query || ''}"`)}`;
+      case 'web_fetch':
+        return ` ${this.theme.muted(this.truncate(String(args.url || ''), 60))}`;
+      default: {
+        const entries = Object.entries(args);
+        if (entries.length === 0) return '';
+        const first = entries[0];
+        const val = typeof first[1] === 'string' ? this.truncate(first[1], 50) : JSON.stringify(first[1]);
+        return ` ${this.theme.muted(`${first[0]}: ${val}`)}`;
+      }
     }
   }
 
-  /**
-   * Print approval request
-   */
-  approvalRequest(toolName: string, args: Record<string, unknown>, risk: 'low' | 'medium' | 'high'): boolean {
-    const riskColors = {
-      low: this.theme.success,
-      medium: this.theme.warning,
-      high: this.theme.error,
-    };
-    const riskIcons = { low: '🟢', medium: '🟡', high: '🔴' };
+  // ── Tool Results (compact status line) ──────────────────
 
-    console.log(`\n  ${riskIcons[risk]} ${riskColors[risk].bold(`Approval needed [${risk} risk]`)}`);
-    console.log(`  Tool: ${this.theme.tool(toolName)}`);
-    console.log(`  Args: ${this.theme.muted(JSON.stringify(args, null, 2).slice(0, 300))}`);
+  toolResult(name: string, result: string, isError: boolean): void {
+    if (isError) {
+      const preview = this.truncate(result.replace(/\n/g, ' '), 80);
+      console.log(`  ${this.theme.error('✗')} ${this.theme.error(preview)}`);
+    } else {
+      // Show brief success indicator with key info
+      const preview = this.truncate(result.replace(/\n/g, ' '), 80);
+      if (preview.length > 0 && !preview.startsWith('{') && !preview.startsWith('[')) {
+        console.log(`  ${this.theme.dim(preview)}`);
+      }
+    }
+  }
+
+  // ── Approval Prompts (minimal, clear) ───────────────────
+
+  approvalRequest(toolName: string, args: Record<string, unknown>, risk: 'low' | 'medium' | 'high'): boolean {
+    const riskLabel = {
+      low: this.theme.success('low'),
+      medium: this.theme.warning('med'),
+      high: this.theme.error('high'),
+    };
+    const summary = this.formatToolArgs(toolName, args);
+    console.log();
+    console.log(`  ${this.theme.muted('┌─')} ${this.theme.bold(toolName)} ${riskLabel[risk]} risk`);
+    console.log(`  ${this.theme.muted('└─')}${summary}`);
     return true;
   }
 
-  /**
-   * Print token usage
-   */
+  // ── Token Usage (compact footer) ────────────────────────
+
   tokenUsage(usage: TokenUsage, modelId: string): void {
     if (!this.showTokens && !this.showCost) return;
 
     const parts: string[] = [];
     if (this.showTokens) {
-      parts.push(`in: ${usage.inputTokens.toLocaleString()}`);
-      parts.push(`out: ${usage.outputTokens.toLocaleString()}`);
+      parts.push(`${usage.inputTokens.toLocaleString()}in`);
+      parts.push(`${usage.outputTokens.toLocaleString()}out`);
     }
     if (this.showCost) {
-      parts.push(`cost: $${usage.cost.toFixed(4)}`);
+      parts.push(`$${usage.cost.toFixed(4)}`);
     }
 
     const model = MODELS[modelId];
     const modelName = model?.name || modelId;
 
-    console.log(`  ${this.theme.muted(`📊 ${modelName} | ${parts.join(' | ')}`)}`);
+    // Claude Code style: dim compact line
+    console.log(`  ${this.theme.dim(`${modelName} · ${parts.join(' · ')}`)}`);
   }
 
-  /**
-   * Print session stats
-   */
+  // ── Session Stats ───────────────────────────────────────
+
   sessionStats(totalInput: number, totalOutput: number, totalCost: number): void {
-    console.log(`\n  ${this.theme.muted('━━━ Session Stats ━━━')}`);
-    console.log(`  ${this.theme.muted(`Total tokens: ${totalInput.toLocaleString()} in + ${totalOutput.toLocaleString()} out`)}`);
-    console.log(`  ${this.theme.muted(`Total cost: $${totalCost.toFixed(4)}`)}`);
+    console.log();
+    console.log(`  ${this.theme.muted('Session:')}`, 
+      this.theme.dim(`${totalInput.toLocaleString()} in · ${totalOutput.toLocaleString()} out · $${totalCost.toFixed(4)}`));
   }
 
-  /**
-   * Print agent activity
-   */
+  // ── Agent Activity (subtle indicator) ───────────────────
+
   agentActivity(agentName: string, status: 'starting' | 'working' | 'done' | 'error'): void {
-    const icons = {
-      starting: '🚀',
-      working: '⚙️',
-      done: '✅',
-      error: '❌',
+    const indicators: Record<string, string> = {
+      starting: this.theme.muted('○'),
+      working: this.theme.accent('◎'),
+      done: this.theme.success('●'),
+      error: this.theme.error('●'),
     };
-    const colors = {
-      starting: this.theme.primary,
-      working: this.theme.warning,
-      done: this.theme.success,
-      error: this.theme.error,
+    const statusText: Record<string, string> = {
+      starting: 'starting',
+      working: 'working...',
+      done: 'done',
+      error: 'failed',
     };
-
-    console.log(`  ${icons[status]} ${colors[status](`${agentName}: ${status}`)}`);
+    console.log(`  ${indicators[status]} ${this.theme.muted(agentName)} ${this.theme.dim(statusText[status])}`);
   }
 
-  /**
-   * Print error
-   */
+  // ── Status Messages (minimal) ───────────────────────────
+
   error(message: string): void {
-    console.error(`\n  ${this.theme.error('✗ Error:')} ${this.theme.error(message)}\n`);
+    console.error(`  ${this.theme.error('✗')} ${message}`);
   }
 
-  /**
-   * Print info
-   */
   info(message: string): void {
-    console.log(`  ${this.theme.primary('ℹ')} ${this.theme.primary(message)}`);
+    console.log(`  ${this.theme.muted('→')} ${this.theme.muted(message)}`);
   }
 
-  /**
-   * Print success
-   */
   success(message: string): void {
-    console.log(`  ${this.theme.success('✓')} ${this.theme.success(message)}`);
+    console.log(`  ${this.theme.success('✓')} ${message}`);
   }
 
-  /**
-   * Print warning
-   */
   warning(message: string): void {
-    console.log(`  ${this.theme.warning('⚠')} ${this.theme.warning(message)}`);
+    console.log(`  ${this.theme.warning('!')} ${message}`);
   }
 
-  /**
-   * Print separator
-   */
+  // ── Separator ───────────────────────────────────────────
+
   separator(): void {
     console.log(`  ${this.theme.dim('─'.repeat(50))}`);
   }
 
-  /**
-   * Print code block
-   */
+  // ── Code Block (clean frame) ────────────────────────────
+
   codeBlock(code: string, language?: string): void {
     const header = language ? ` ${language} ` : '';
-    console.log(`  ${this.theme.dim('┌' + '─'.repeat(48) + '┐')}`);
+    const width = 60;
+    console.log(`  ${this.theme.dim('┌' + '─'.repeat(width - 2) + '┐')}`);
     if (header) {
-      console.log(`  ${this.theme.dim('│')} ${this.theme.keyword(header)}${' '.repeat(47 - header.length)}${this.theme.dim('│')}`);
+      console.log(`  ${this.theme.dim('│')} ${this.theme.keyword(header)}${' '.repeat(width - 3 - header.length)}${this.theme.dim('│')}`);
     }
-    for (const line of code.split('\n')) {
-      const truncated = line.length > 46 ? line.slice(0, 46) + '…' : line;
-      console.log(`  ${this.theme.dim('│')} ${this.theme.code(truncated)}${' '.repeat(Math.max(0, 47 - truncated.length))}${this.theme.dim('│')}`);
+    for (const line of code.split('\n').slice(0, 30)) {
+      const truncated = line.length > width - 4 ? line.slice(0, width - 5) + '…' : line;
+      console.log(`  ${this.theme.dim('│')} ${this.theme.code(truncated)}${' '.repeat(Math.max(0, width - 3 - truncated.length))}${this.theme.dim('│')}`);
     }
-    console.log(`  ${this.theme.dim('└' + '─'.repeat(48) + '┘')}`);
+    console.log(`  ${this.theme.dim('└' + '─'.repeat(width - 2) + '┘')}`);
   }
 
-  /**
-   * Print model selection menu
-   */
-  modelList(selectedModel: string): void {
-    console.log(`\n  ${this.theme.bold('Available Models:')}\n`);
+  // ── Model List ──────────────────────────────────────────
 
-    const categories = {
-      '🆓 Free (Best for Coding)': [
+  modelList(selectedModel: string): void {
+    console.log();
+    console.log(`  ${this.theme.bold('Models')}`);
+    console.log(`  ${this.theme.dim('─'.repeat(50))}`);
+
+    const categories: Record<string, string[]> = {
+      'Free · Coding': [
         'qwen/qwen3-coder:free',
         'nvidia/nemotron-3-super-120b-a12b:free',
-        'nvidia/nemotron-3-ultra-550b-a55b:free',
         'cohere/north-mini-code:free',
       ],
-      '🆓 Free (Large Context)': [
-        'nvidia/nemotron-3-super-120b-a12b:free',
+      'Free · Large Context': [
         'nvidia/nemotron-3-ultra-550b-a55b:free',
-        'tencent/hy3:free',
         'meta-llama/llama-3.3-70b-instruct:free',
+        'tencent/hy3:free',
       ],
-      '🆓 Free (Vision + Tools)': [
+      'Free · Vision': [
         'google/gemma-4-31b-it:free',
         'nvidia/nemotron-nano-12b-v2-vl:free',
-        'openai/gpt-oss-20b:free',
-        'poolside/laguna-m.1:free',
       ],
-      '💎 Premium Flagship': ['anthropic/claude-opus-4', 'openai/o3', 'google/gemini-2.5-pro'],
-      '💎 Premium Balanced': ['anthropic/claude-sonnet-4', 'openai/gpt-4o', 'deepseek/deepseek-r1'],
-      '💎 Premium Fast': ['anthropic/claude-3.5-haiku', 'openai/gpt-4o-mini', 'google/gemini-2.5-flash', 'deepseek/deepseek-chat'],
+      'Premium · Flagship': ['anthropic/claude-opus-4', 'openai/o3', 'google/gemini-2.5-pro'],
+      'Premium · Balanced': ['anthropic/claude-sonnet-4', 'openai/gpt-4o', 'deepseek/deepseek-r1'],
+      'Premium · Fast': ['anthropic/claude-3.5-haiku', 'openai/gpt-4o-mini', 'google/gemini-2.5-flash'],
     };
 
     for (const [category, models] of Object.entries(categories)) {
-      console.log(`  ${this.theme.primary.bold(category)}`);
+      console.log(`  ${this.theme.label(category)}`);
       for (const modelId of models) {
         const model = MODELS[modelId];
         if (!model) continue;
-        const selected = modelId === selectedModel ? this.theme.accent(' ◀ current') : '';
+        const isCurrent = modelId === selectedModel;
+        const marker = isCurrent ? this.theme.accent('●') : this.theme.dim('○');
+        const name = isCurrent ? this.theme.bold(model.name) : this.theme.muted(model.name);
         const isFree = model.inputPrice === 0 && model.outputPrice === 0;
-        const price = isFree ? 'FREE' : `$${model.inputPrice}/${model.outputPrice}`;
-        const priceColored = isFree ? this.theme.success(price.padEnd(12)) : this.theme.muted(price.padEnd(12));
-        console.log(`    ${this.theme.muted('•')} ${this.theme.tool(model.name.padEnd(35))} ${priceColored} ${this.theme.muted(`${(model.contextWindow / 1000).toFixed(0)}K ctx`)}${model.supportsTools ? this.theme.muted(' 🔧') : ''}${selected}`);
+        const price = isFree ? this.theme.success('free') : this.theme.muted(`$${model.inputPrice}/${model.outputPrice}`);
+        const ctx = this.theme.dim(`${(model.contextWindow / 1000).toFixed(0)}K`);
+        console.log(`    ${marker} ${name.padEnd(36)} ${price.padEnd(14)} ${ctx}`);
       }
       console.log();
     }
   }
 
-  /**
-   * Print agent list
-   */
+  // ── Agent List ──────────────────────────────────────────
+
   agentList(agents: Array<{ name: string; description: string; model: string }>): void {
-    console.log(`\n  ${this.theme.bold('Available Agents:')}\n`);
+    console.log();
+    console.log(`  ${this.theme.bold('Agents')}`);
+    console.log(`  ${this.theme.dim('─'.repeat(50))}`);
     for (const agent of agents) {
-      const model = MODELS[agent.model];
-      console.log(`  ${this.theme.tool('◆')} ${this.theme.bold(agent.name.padEnd(12))} ${this.theme.muted('- ' + agent.description)}`);
-      console.log(`    ${this.theme.muted(`Model: ${model?.name || agent.model}`)}`);
+      console.log(`  ${this.theme.accent('●')} ${this.theme.bold(agent.name.padEnd(12))} ${this.theme.muted(agent.description)}`);
     }
     console.log();
+  }
+
+  // ── Diff Display (Claude Code style: + and - lines) ─────
+
+  diffAdd(line: string): void {
+    console.log(`  ${this.theme.diffAdd('+')} ${this.theme.diffAdd(line)}`);
+  }
+
+  diffRemove(line: string): void {
+    console.log(`  ${this.theme.diffRemove('-')} ${this.theme.diffRemove(line)}`);
+  }
+
+  diffContext(line: string): void {
+    console.log(`  ${this.theme.diffContext(' ')} ${this.theme.diffContext(line)}`);
+  }
+
+  diffHeader(file: string): void {
+    console.log();
+    console.log(`  ${this.theme.dim('───')} ${this.theme.path(file)} ${this.theme.dim('───')}`);
+  }
+
+  // ── Helpers ─────────────────────────────────────────────
+
+  private truncate(str: string, maxLen: number): string {
+    if (str.length <= maxLen) return str;
+    return str.slice(0, maxLen - 1) + '…';
+  }
+
+  private byteSize(content: string): string {
+    const bytes = Buffer.byteLength(content, 'utf-8');
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   }
 }

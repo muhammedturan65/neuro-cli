@@ -83,10 +83,9 @@ export class DiffPreview {
   static renderDiff(diff: FileDiff, contextLines: number = 3): void {
     const { filePath, added, removed, lines } = diff;
 
+    // Claude Code style: clean diff header with +/-
     console.log();
-    console.log(`  ${chalk.bold.cyan('━━━ Diff Preview ━━━')}`);
-    console.log(`  ${chalk.white(filePath)} ${chalk.green(`+${added}`)} ${chalk.red(`-${removed}`)}`);
-    console.log(`  ${chalk.gray('─'.repeat(50))}`);
+    console.log(`  ${chalk.dim('───')} ${chalk.bold(filePath)} ${chalk.green(`+${added}`)} ${chalk.red(`-${removed}`)}`);
 
     let inChange = false;
     let contextCount = 0;
@@ -106,24 +105,20 @@ export class DiffPreview {
         case 'context':
           contextCount++;
           if (inChange) {
-            // Show a few context lines after a change
             if (contextCount <= contextLines) {
-              console.log(`  ${chalk.gray(' ')} ${chalk.gray(line.content)}`);
+              console.log(`  ${chalk.dim(' ')} ${chalk.dim(line.content)}`);
             } else {
               inChange = false;
-              console.log(`  ${chalk.gray('  ...')}`);
+              console.log(`  ${chalk.dim('  ...')}`);
             }
           } else if (contextCount <= 1) {
-            // Show one context line before a change
-            console.log(`  ${chalk.gray(' ')} ${chalk.gray(line.content)}`);
+            console.log(`  ${chalk.dim(' ')} ${chalk.dim(line.content)}`);
           }
           break;
       }
     }
 
-    console.log(`  ${chalk.gray('─'.repeat(50))}`);
-    console.log(`  ${chalk.green(`+${added} additions`)}  ${chalk.red(`-${removed} deletions`)}`);
-    console.log();
+    console.log(`  ${chalk.dim(`${chalk.green(`+${added}`)} ${chalk.red(`-${removed}`)}`)}`);
   }
 
   /**
@@ -131,18 +126,15 @@ export class DiffPreview {
    */
   static renderSummary(diffs: FileDiff[]): void {
     console.log();
-    console.log(`  ${chalk.bold.cyan('━━━ Changes Summary ━━━')}`);
     for (const diff of diffs) {
       const statusLabel = diff.added > 0 && diff.removed === 0 ? chalk.green('created') :
                      diff.added === 0 && diff.removed > 0 ? chalk.red('deleted') :
                      chalk.yellow('modified');
-      console.log(`  ${statusLabel} ${diff.filePath.padEnd(40)} ${chalk.green(`+${diff.added}`)} ${chalk.red(`-${diff.removed}`)}`);
+      console.log(`  ${statusLabel} ${diff.filePath} ${chalk.green(`+${diff.added}`)} ${chalk.red(`-${diff.removed}`)}`);
     }
     const totalAdded = diffs.reduce((s, d) => s + d.added, 0);
     const totalRemoved = diffs.reduce((s, d) => s + d.removed, 0);
-    console.log(`  ${chalk.gray('─'.repeat(50))}`);
-    console.log(`  ${chalk.bold('Total:')} ${chalk.green(`+${totalAdded}`)} ${chalk.red(`-${totalRemoved}`)}`);
-    console.log();
+    console.log(`  ${chalk.dim(`${chalk.green(`+${totalAdded}`)} ${chalk.red(`-${totalRemoved}`)}`)}`);
   }
 
   /**

@@ -1,9 +1,40 @@
 // ============================================================
 // NeuroCLI - Terminal UI Theme
-// Beautiful color themes for the terminal
+// Inspired by Claude Code's minimal, professional aesthetic
+// Clean color palettes with warm accent tones
 // ============================================================
 import chalk from 'chalk';
 const themes = {
+    // Claude Code-inspired warm minimal theme (default)
+    claude: {
+        name: 'claude',
+        primary: chalk.hex('#e5e5e5'),
+        secondary: chalk.hex('#888888'),
+        accent: chalk.hex('#d97706'), // amber-600 (Claude's signature warm orange)
+        success: chalk.hex('#22c55e'),
+        warning: chalk.hex('#eab308'),
+        error: chalk.hex('#ef4444'),
+        muted: chalk.hex('#737373'),
+        dim: chalk.hex('#525252'),
+        bold: chalk.bold.hex('#fafafa'),
+        user: chalk.hex('#d97706'), // amber for user input
+        assistant: chalk.hex('#e5e5e5'), // clean white for assistant
+        system: chalk.hex('#737373'),
+        tool: chalk.hex('#60a5fa'), // blue-400 for tool indicators
+        thinking: chalk.hex('#737373').italic,
+        code: chalk.hex('#a3e635'), // lime for code
+        number: chalk.hex('#c084fc'), // purple for numbers
+        string: chalk.hex('#86efac'), // green for strings
+        keyword: chalk.hex('#f472b6'), // pink for keywords
+        comment: chalk.hex('#737373').italic,
+        border: chalk.hex('#404040'),
+        diffAdd: chalk.hex('#4ade80'),
+        diffRemove: chalk.hex('#f87171'),
+        diffContext: chalk.hex('#737373'),
+        label: chalk.hex('#a3a3a3'),
+        path: chalk.hex('#93c5fd'),
+    },
+    // Retained dracula theme (classic)
     dracula: {
         name: 'dracula',
         primary: chalk.hex('#bd93f9'),
@@ -26,30 +57,13 @@ const themes = {
         keyword: chalk.hex('#ff79c6'),
         comment: chalk.hex('#6272a4').italic,
         border: chalk.hex('#44475a'),
+        diffAdd: chalk.hex('#50fa7b'),
+        diffRemove: chalk.hex('#ff5555'),
+        diffContext: chalk.hex('#6272a4'),
+        label: chalk.hex('#6272a4'),
+        path: chalk.hex('#8be9fd'),
     },
-    dark: {
-        name: 'dark',
-        primary: chalk.blue,
-        secondary: chalk.gray,
-        accent: chalk.cyan,
-        success: chalk.green,
-        warning: chalk.yellow,
-        error: chalk.red,
-        muted: chalk.gray,
-        dim: chalk.dim,
-        bold: chalk.bold.white,
-        user: chalk.cyan,
-        assistant: chalk.white,
-        system: chalk.gray,
-        tool: chalk.yellow,
-        thinking: chalk.gray.italic,
-        code: chalk.green,
-        number: chalk.magenta,
-        string: chalk.green,
-        keyword: chalk.blue,
-        comment: chalk.gray.italic,
-        border: chalk.dim,
-    },
+    // Retained nord theme
     nord: {
         name: 'nord',
         primary: chalk.hex('#88c0d0'),
@@ -72,33 +86,73 @@ const themes = {
         keyword: chalk.hex('#81a1c1'),
         comment: chalk.hex('#4c566a').italic,
         border: chalk.hex('#3b4252'),
+        diffAdd: chalk.hex('#a3be8c'),
+        diffRemove: chalk.hex('#bf616a'),
+        diffContext: chalk.hex('#4c566a'),
+        label: chalk.hex('#4c566a'),
+        path: chalk.hex('#88c0d0'),
     },
+    // Dark minimal (Claude Code variant - cooler tones)
+    dark: {
+        name: 'dark',
+        primary: chalk.hex('#d4d4d4'),
+        secondary: chalk.hex('#737373'),
+        accent: chalk.hex('#3b82f6'), // blue accent for dark
+        success: chalk.hex('#22c55e'),
+        warning: chalk.hex('#eab308'),
+        error: chalk.hex('#ef4444'),
+        muted: chalk.hex('#737373'),
+        dim: chalk.hex('#525252'),
+        bold: chalk.bold.hex('#fafafa'),
+        user: chalk.hex('#3b82f6'),
+        assistant: chalk.hex('#d4d4d4'),
+        system: chalk.hex('#737373'),
+        tool: chalk.hex('#a78bfa'),
+        thinking: chalk.hex('#737373').italic,
+        code: chalk.hex('#4ade80'),
+        number: chalk.hex('#c084fc'),
+        string: chalk.hex('#86efac'),
+        keyword: chalk.hex('#f472b6'),
+        comment: chalk.hex('#737373').italic,
+        border: chalk.hex('#404040'),
+        diffAdd: chalk.hex('#4ade80'),
+        diffRemove: chalk.hex('#f87171'),
+        diffContext: chalk.hex('#737373'),
+        label: chalk.hex('#a3a3a3'),
+        path: chalk.hex('#93c5fd'),
+    },
+    // Light theme
     light: {
         name: 'light',
-        primary: chalk.blue,
-        secondary: chalk.gray,
-        accent: chalk.cyan,
-        success: chalk.green,
-        warning: chalk.yellow,
-        error: chalk.red,
-        muted: chalk.gray,
-        dim: chalk.dim,
-        bold: chalk.bold.black,
-        user: chalk.blue,
-        assistant: chalk.black,
-        system: chalk.gray,
-        tool: chalk.yellow,
-        thinking: chalk.gray.italic,
-        code: chalk.green,
-        number: chalk.magenta,
-        string: chalk.green,
-        keyword: chalk.blue,
-        comment: chalk.gray.italic,
-        border: chalk.gray,
+        primary: chalk.hex('#171717'),
+        secondary: chalk.hex('#737373'),
+        accent: chalk.hex('#d97706'),
+        success: chalk.hex('#16a34a'),
+        warning: chalk.hex('#ca8a04'),
+        error: chalk.hex('#dc2626'),
+        muted: chalk.hex('#737373'),
+        dim: chalk.hex('#a3a3a3'),
+        bold: chalk.bold.hex('#0a0a0a'),
+        user: chalk.hex('#d97706'),
+        assistant: chalk.hex('#171717'),
+        system: chalk.hex('#737373'),
+        tool: chalk.hex('#2563eb'),
+        thinking: chalk.hex('#737373').italic,
+        code: chalk.hex('#16a34a'),
+        number: chalk.hex('#9333ea'),
+        string: chalk.hex('#16a34a'),
+        keyword: chalk.hex('#db2777'),
+        comment: chalk.hex('#737373').italic,
+        border: chalk.hex('#d4d4d4'),
+        diffAdd: chalk.hex('#16a34a'),
+        diffRemove: chalk.hex('#dc2626'),
+        diffContext: chalk.hex('#737373'),
+        label: chalk.hex('#525252'),
+        path: chalk.hex('#2563eb'),
     },
 };
 export function getTheme(name) {
-    return themes[name] || themes.dracula;
+    return themes[name] || themes.claude;
 }
 export function listThemes() {
     return Object.keys(themes);

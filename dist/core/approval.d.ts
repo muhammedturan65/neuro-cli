@@ -64,6 +64,10 @@ export declare class ApprovalSystem {
     requestBatchApproval(toolName: string, args: Record<string, unknown>, risk: 'low' | 'medium' | 'high', description?: string): Promise<ApprovalResult>;
     private processBatch;
     private isBlacklisted;
+    /**
+     * Format tool arguments as a compact one-liner for Claude Code-style display
+     */
+    private formatCompactArgs;
     private isWhitelisted;
     private getPattern;
     private getAlwaysKey;

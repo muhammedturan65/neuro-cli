@@ -106,7 +106,7 @@ export const DEFAULT_CONFIG = {
         maxHistory: 100,
     },
     ui: {
-        theme: 'dracula',
+        theme: 'claude',
         showTokenCount: true,
         showCost: true,
         streaming: true,

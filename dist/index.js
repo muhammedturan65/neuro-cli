@@ -16,7 +16,7 @@ import { HeadlessMode } from './core/headless.js';
 import { ShellCompletionGenerator } from './core/shell-completion.js';
 import chalk from 'chalk';
 import { AutoUpdater } from './core/updater.js';
-const VERSION = '4.2.0';
+const VERSION = '4.3.0';
 // ---- Global Error Handlers (prevent crashes) ----
 process.on('unhandledRejection', (reason) => {
     console.error(chalk.red('\n⚠️ Unhandled promise rejection:'), reason);
@@ -420,6 +420,7 @@ async function startInteractive(options) {
     const updater = new AutoUpdater({ currentVersion: VERSION });
     const updateCheck = updater.checkOnStartup(); // Fire and forget — don't block startup
     // Print banner
+    engine.ui.setVersion(VERSION);
     engine.ui.banner();
     const theme = engine.ui.theme;
     const permMode = engine.approval.getMode();
@@ -444,7 +445,7 @@ async function startInteractive(options) {
     const rl = createInterface({
         input: process.stdin,
         output: process.stdout,
-        prompt: chalk.cyan('❯ '),
+        prompt: chalk.hex('#d97706')('> '),
         historySize: 100,
         completer: completionEngine.complete,
     });
@@ -532,7 +533,7 @@ async function startInteractive(options) {
                             engine.ui.success(`Theme: ${args[0]}`);
                         }
                         else {
-                            console.log('Available themes: dracula, dark, nord, light');
+                            console.log('Available themes: claude, dracula, dark, nord, light');
                         }
                         break;
                     case 'resume':

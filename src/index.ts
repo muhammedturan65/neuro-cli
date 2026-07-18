@@ -20,7 +20,7 @@ import { ShellCompletionGenerator } from './core/shell-completion.js';
 import chalk from 'chalk';
 import { AutoUpdater } from './core/updater.js';
 
-const VERSION = '4.2.0';
+const VERSION = '4.3.0';
 
 // ---- Global Error Handlers (prevent crashes) ----
 process.on('unhandledRejection', (reason) => {
@@ -315,7 +315,7 @@ program
 async function startInteractive(options: any) {
   const config = initConfig(options.apiKey);
   if (options.model) config.defaultModel = options.model;
-  if (options.theme) config.ui.theme = options.theme as 'dark' | 'light' | 'dracula' | 'nord';
+  if (options.theme) config.ui.theme = options.theme as 'dark' | 'light' | 'dracula' | 'nord' | 'claude';
   if (options.noStreaming) config.ui.streaming = false;
   if (options.permissionMode) config.permissionMode = options.permissionMode;
   if (options.diffPreview === true) config.diffPreview = true;
@@ -400,6 +400,7 @@ async function startInteractive(options: any) {
   const updateCheck = updater.checkOnStartup(); // Fire and forget — don't block startup
 
   // Print banner
+  engine.ui.setVersion(VERSION);
   engine.ui.banner();
   const theme = engine.ui.theme;
   const permMode = engine.approval.getMode();
@@ -427,7 +428,7 @@ async function startInteractive(options: any) {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: chalk.cyan('❯ '),
+    prompt: chalk.hex('#d97706')('> '),
     historySize: 100,
     completer: completionEngine.complete,
   });
@@ -515,7 +516,7 @@ async function startInteractive(options: any) {
             config.ui.theme = args[0] as 'dark' | 'light' | 'dracula' | 'nord';
             engine.ui = new TerminalUI(config.ui.theme, config.ui.showTokenCount, config.ui.showCost);
             engine.ui.success(`Theme: ${args[0]}`);
-          } else { console.log('Available themes: dracula, dark, nord, light'); }
+          } else { console.log('Available themes: claude, dracula, dark, nord, light'); }
           break;
 
         case 'resume':
