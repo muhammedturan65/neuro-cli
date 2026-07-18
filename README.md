@@ -7,6 +7,10 @@
 
 <h1 align="center">NeuroCLI v4.0</h1>
 
+<p align="center">
+  <img src="docs/neuro-hero.png" alt="NeuroCLI Terminal Screenshot" width="700">
+</p>
+
 <p align="center"><strong>Advanced AI Terminal Coding Assistant</strong></p>
 
 <p align="center">
