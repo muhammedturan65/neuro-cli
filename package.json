@@ -1,7 +1,7 @@
 {
   "name": "neuro-cli",
-  "version": "4.0.0",
-  "description": "Advanced AI-powered terminal coding assistant with multi-agent orchestration, sub-agent spawning, ACP protocol, OS-level sandboxing, spec-driven development, smart monitoring, multi-model routing, MCP Apps, and 23+ free models",
+  "version": "4.1.0",
+  "description": "Advanced AI-powered terminal coding assistant with multi-agent orchestration, sub-agent spawning, ACP protocol, OS-level sandboxing, spec-driven development, smart monitoring, multi-model routing, MCP Apps, auto-updater, and 23+ free models",
   "main": "dist/index.js",
   "bin": {
     "neuro": "dist/index.js"

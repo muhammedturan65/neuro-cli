@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ============================================================
 // NeuroCLI - Advanced AI Terminal Coding Assistant
-// Main Entry Point - v3.0.0 with all new features
+// Main Entry Point - v4.1.0 with auto-updater
 // ============================================================
 
 import { Command } from 'commander';
@@ -18,8 +18,9 @@ import { CompletionEngine } from './core/completion.js';
 import { HeadlessMode } from './core/headless.js';
 import { ShellCompletionGenerator } from './core/shell-completion.js';
 import chalk from 'chalk';
+import { AutoUpdater } from './core/updater.js';
 
-const VERSION = '4.0.0';
+const VERSION = '4.1.0';
 
 // ---- CLI Setup ----
 const program = new Command();
@@ -244,6 +245,47 @@ program
     })
   );
 
+// ---- Update Command ----
+program
+  .command('update')
+  .description('Check for updates and optionally self-update')
+  .option('--force', 'Force check even if recently checked')
+  .option('--auto', 'Auto-update without prompting')
+  .option('--check-only', 'Only check, do not update')
+  .option('--dismiss', 'Dismiss the current available update')
+  .action(async (opts: any) => {
+    const updater = new AutoUpdater({ currentVersion: VERSION });
+
+    if (opts.dismiss) {
+      const result = await updater.checkForUpdate(true);
+      if (result.hasUpdate) {
+        updater.dismissVersion(result.latestVersion);
+        console.log(chalk.gray(`Dismissed update notification for v${result.latestVersion}`));
+      } else {
+        console.log(chalk.gray('No update to dismiss'));
+      }
+      return;
+    }
+
+    if (opts.auto) {
+      updater.setAutoUpdate(true);
+    }
+
+    if (opts.checkOnly) {
+      console.log(chalk.cyan('Checking for updates...'));
+      const result = await updater.checkForUpdate(opts.force);
+      if (result.hasUpdate) {
+        updater.showUpdateDetails(result);
+      } else {
+        updater.showUpToDate();
+      }
+      return;
+    }
+
+    // Interactive update flow
+    await updater.interactiveUpdate();
+  });
+
 // ---- Shell Completion ----
 program
   .command('completion <shell>')
@@ -338,6 +380,10 @@ async function startInteractive(options: any) {
     }
   }
 
+  // Initialize auto-updater and check for updates in background
+  const updater = new AutoUpdater({ currentVersion: VERSION });
+  const updateCheck = updater.checkOnStartup(); // Fire and forget — don't block startup
+
   // Print banner
   engine.ui.banner();
   const theme = engine.ui.theme;
@@ -351,6 +397,13 @@ async function startInteractive(options: any) {
   console.log(theme.muted(`  Cache: ${config.promptCache.enabled ? 'on' : 'off'}`));
   console.log(theme.muted(`  Working Dir: ${process.cwd()}`));
   console.log(theme.muted(`  Type /help for commands, Tab for completion, Ctrl+C to exit\n`));
+
+  // Show update notification if available (after banner)
+  updateCheck.then((result) => {
+    if (result && result.hasUpdate) {
+      updater.showUpdateNotification(result);
+    }
+  }).catch(() => { /* silently ignore */ });
 
   // Create readline with tab completion
   const completionEngine = new CompletionEngine(process.cwd());
@@ -779,7 +832,7 @@ async function startInteractive(options: any) {
           break;
 
         case 'doctor':
-          console.log(chalk.bold('\nNeuroCLI v3.0 Health Check:\n'));
+          console.log(chalk.bold('\nNeuroCLI v4.1.0 Health Check:\n'));
           console.log(`  API Key: ${config.apiKey ? chalk.green('configured') : chalk.red('MISSING')}`);
           console.log(`  Default Model: ${chalk.cyan(config.defaultModel)} ${MODELS[config.defaultModel] ? chalk.green('valid') : chalk.red('INVALID')}`);
           console.log(`  MCP Servers: ${chalk.cyan(String(engine.mcpClient.listServers().length))}`);
@@ -802,6 +855,13 @@ async function startInteractive(options: any) {
           // Check Ollama availability
           const ollamaAvail = await engine.ollamaProvider.isAvailable().catch(() => false);
           console.log(`  Ollama: ${ollamaAvail ? chalk.green('available') : chalk.gray('not running')}`);
+          // Update check status
+          const lastUpdateCheck = updater.getLastCheck();
+          const updateStatus = lastUpdateCheck?.hasUpdate ? chalk.yellow(`update available (v${lastUpdateCheck.latestVersion})`) : chalk.green('up to date');
+          console.log(`  Auto-Update: ${updateStatus}`);
+          const nextCheck = updater.timeUntilNextCheck();
+          const nextCheckStr = nextCheck > 0 ? ` (next check in ${Math.floor(nextCheck / 3600000)}h)` : '';
+          console.log(`  Update Check: ${chalk.gray('enabled' + nextCheckStr)}`);
           console.log();
           break;
 
@@ -886,6 +946,57 @@ async function startInteractive(options: any) {
           }
           break;
 
+        case 'update':
+        case 'upgrade':
+          const updateSub = args[0];
+          if (updateSub === 'now') {
+            engine.ui.info('Updating NeuroCLI...');
+            const updateResult = await updater.performUpdate();
+            if (updateResult.success) {
+              engine.ui.success(updateResult.message);
+              console.log(chalk.yellow('  Please restart NeuroCLI to use the new version.'));
+            } else {
+              engine.ui.error(updateResult.message);
+            }
+          } else if (updateSub === 'check') {
+            engine.ui.info('Checking for updates...');
+            const checkResult = await updater.checkForUpdate(true);
+            if (checkResult.hasUpdate) {
+              updater.showUpdateDetails(checkResult);
+              updater.showUpdateNotification(checkResult);
+            } else {
+              updater.showUpToDate();
+            }
+          } else if (updateSub === 'dismiss') {
+            const checkResult = await updater.checkForUpdate(true);
+            if (checkResult.hasUpdate) {
+              updater.dismissVersion(checkResult.latestVersion);
+              engine.ui.success(`Dismissed update notification for v${checkResult.latestVersion}`);
+            } else {
+              engine.ui.info('No update to dismiss');
+            }
+          } else if (updateSub === 'auto') {
+            const enableAuto = args[1] !== 'off';
+            updater.setAutoUpdate(enableAuto);
+            engine.ui.success(`Auto-update: ${enableAuto ? 'enabled' : 'disabled'}`);
+          } else if (updateSub === 'interval') {
+            const hours = args[1] ? parseFloat(args[1]) : 24;
+            if (isNaN(hours) || hours < 1) {
+              engine.ui.error('Interval must be at least 1 hour');
+            } else {
+              updater.setCheckInterval(hours);
+              engine.ui.success(`Update check interval set to ${hours} hours`);
+            }
+          } else if (updateSub === 'reset') {
+            updater.resetDismissed();
+            updater.forceNextCheck();
+            engine.ui.success('Update preferences reset');
+          } else {
+            // Default: interactive update flow
+            await updater.interactiveUpdate();
+          }
+          break;
+
         case 'exit':
         case 'quit':
         case 'q':
@@ -923,7 +1034,7 @@ async function startInteractive(options: any) {
 
 function printHelp(engine: NeuroEngine): void {
   const t = engine.ui.theme;
-  console.log(`\n  ${t.bold('NeuroCLI v3.0 Commands:')}\n`);
+  console.log(`\n  ${t.bold('NeuroCLI v4.1.0 Commands:')}\n`);
   console.log(`  ${t.tool('/help')}            Show this help message`);
   console.log(`  ${t.tool('/model [id]')}      Switch or list models`);
   console.log(`  ${t.tool('/agent [name]')}    Switch or list agents`);
@@ -962,6 +1073,7 @@ function printHelp(engine: NeuroEngine): void {
   console.log(`  ${t.tool('/ollama')}          List Ollama local models`);
   console.log(`  ${t.tool('/commit-push-pr')}  Commit + push + create PR`);
   console.log(`  ${t.tool('/code-review')}     Multi-agent code review`);
+  console.log(`  ${t.tool('/update [cmd]')}    Check/update NeuroCLI (now|check|dismiss|auto|interval|reset)`);
   console.log(`  ${t.tool('/feedback')}        Give feedback`);
   console.log(`  ${t.tool('/clear')}           Clear terminal`);
   console.log(`  ${t.tool('/exit')}            Exit NeuroCLI`);
