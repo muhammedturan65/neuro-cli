@@ -3,6 +3,7 @@
 // Streaming + Tool Use + Multi-model support
 // ============================================================
 
+// @ts-ignore
 import { createParser } from 'eventsource-parser';
 import { Message, ToolCall, ToolDefinition, ToolResult } from '../core/types.js';
 import { MODELS, calculateCost } from './models.js';

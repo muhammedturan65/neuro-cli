@@ -149,6 +149,7 @@ class CDPConnection {
   async connect(): Promise<void> {
     // Dynamic import of ws module - only if available
     try {
+      // @ts-ignore
       const wsModule = await import('ws');
       const WebSocket = wsModule.default || wsModule.WebSocket || wsModule;
 

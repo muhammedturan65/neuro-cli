@@ -3,30 +3,30 @@
 // Beautiful color themes for the terminal
 // ============================================================
 
-import chalk, { ChalkInstance } from 'chalk';
+import chalk from 'chalk';
 
 export interface Theme {
   name: string;
-  primary: ChalkInstance;
-  secondary: ChalkInstance;
-  accent: ChalkInstance;
-  success: ChalkInstance;
-  warning: ChalkInstance;
-  error: ChalkInstance;
-  muted: ChalkInstance;
-  dim: ChalkInstance;
-  bold: ChalkInstance;
-  user: ChalkInstance;
-  assistant: ChalkInstance;
-  system: ChalkInstance;
-  tool: ChalkInstance;
-  thinking: ChalkInstance;
-  code: ChalkInstance;
-  number: ChalkInstance;
-  string: ChalkInstance;
-  keyword: ChalkInstance;
-  comment: ChalkInstance;
-  border: ChalkInstance;
+  primary: typeof chalk;
+  secondary: typeof chalk;
+  accent: typeof chalk;
+  success: typeof chalk;
+  warning: typeof chalk;
+  error: typeof chalk;
+  muted: typeof chalk;
+  dim: typeof chalk;
+  bold: typeof chalk;
+  user: typeof chalk;
+  assistant: typeof chalk;
+  system: typeof chalk;
+  tool: typeof chalk;
+  thinking: typeof chalk;
+  code: typeof chalk;
+  number: typeof chalk;
+  string: typeof chalk;
+  keyword: typeof chalk;
+  comment: typeof chalk;
+  border: typeof chalk;
 }
 
 const themes: Record<string, Theme> = {

@@ -4,7 +4,7 @@
 // Network policy engine, command filtering, audit logging
 // ============================================================
 
-import { execSync, spawn } from 'child_process';
+import { execSync, spawn, ChildProcess } from 'child_process';
 import { resolve, normalize, relative } from 'path';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { platform } from 'os';
@@ -955,7 +955,7 @@ export class OSSandboxManager {
       let stderr = '';
       let timedOut = false;
 
-      const child = spawn('docker', args, {
+      const child: ChildProcess = spawn('docker', args, {
         cwd: options?.cwd ?? this.projectDir,
         env: { ...process.env, FORCE_COLOR: '0' },
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -966,17 +966,17 @@ export class OSSandboxManager {
         child.kill('SIGKILL');
       }, dockerTimeout);
 
-      child.stdout.on('data', (data: Buffer) => {
+      child.stdout?.on('data', (data: Buffer) => {
         stdout += data.toString();
       });
 
-      child.stderr.on('data', (data: Buffer) => {
+      child.stderr?.on('data', (data: Buffer) => {
         stderr += data.toString();
       });
 
       if (options?.stdin) {
-        child.stdin.write(options.stdin);
-        child.stdin.end();
+        child.stdin?.write(options.stdin);
+        child.stdin?.end();
       }
 
       child.on('close', (exitCode) => {
@@ -1071,10 +1071,10 @@ export class OSSandboxManager {
       let stderr = '';
       let timedOut = false;
 
-      const child = spawn('sh', ['-c', fullCommand], {
+      const child: ChildProcess = spawn('sh', ['-c', fullCommand], {
         cwd: options?.cwd ?? this.projectDir,
         env: options?.env
-          ? this.commandFilter.sanitizeEnv(options.env)
+          ? { ...process.env, ...this.commandFilter.sanitizeEnv(options.env) }
           : { ...process.env, FORCE_COLOR: '0' },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -1084,17 +1084,17 @@ export class OSSandboxManager {
         child.kill('SIGKILL');
       }, timeout);
 
-      child.stdout.on('data', (data: Buffer) => {
+      child.stdout?.on('data', (data: Buffer) => {
         stdout += data.toString();
       });
 
-      child.stderr.on('data', (data: Buffer) => {
+      child.stderr?.on('data', (data: Buffer) => {
         stderr += data.toString();
       });
 
       if (options?.stdin) {
-        child.stdin.write(options.stdin);
-        child.stdin.end();
+        child.stdin?.write(options.stdin);
+        child.stdin?.end();
       }
 
       child.on('close', (exitCode) => {
@@ -1199,10 +1199,10 @@ export class OSSandboxManager {
       let stderr = '';
       let timedOut = false;
 
-      const child = spawn('sh', ['-c', sandboxedCommand], {
+      const child: ChildProcess = spawn('sh', ['-c', sandboxedCommand], {
         cwd: options?.cwd ?? this.projectDir,
         env: options?.env
-          ? this.commandFilter.sanitizeEnv(options.env)
+          ? { ...process.env, ...this.commandFilter.sanitizeEnv(options.env) }
           : { ...process.env, FORCE_COLOR: '0' },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -1212,17 +1212,17 @@ export class OSSandboxManager {
         child.kill('SIGKILL');
       }, timeout);
 
-      child.stdout.on('data', (data: Buffer) => {
+      child.stdout?.on('data', (data: Buffer) => {
         stdout += data.toString();
       });
 
-      child.stderr.on('data', (data: Buffer) => {
+      child.stderr?.on('data', (data: Buffer) => {
         stderr += data.toString();
       });
 
       if (options?.stdin) {
-        child.stdin.write(options.stdin);
-        child.stdin.end();
+        child.stdin?.write(options.stdin);
+        child.stdin?.end();
       }
 
       child.on('close', (exitCode) => {
@@ -1277,10 +1277,10 @@ export class OSSandboxManager {
       let stderr = '';
       let timedOut = false;
 
-      const child = spawn('sh', ['-c', command], {
+      const child: ChildProcess = spawn('sh', ['-c', command], {
         cwd: options?.cwd ?? this.projectDir,
         env: options?.env
-          ? this.commandFilter.sanitizeEnv(options.env)
+          ? { ...process.env, ...this.commandFilter.sanitizeEnv(options.env) }
           : { ...process.env, FORCE_COLOR: '0' },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -1290,17 +1290,17 @@ export class OSSandboxManager {
         child.kill('SIGKILL');
       }, timeout);
 
-      child.stdout.on('data', (data: Buffer) => {
+      child.stdout?.on('data', (data: Buffer) => {
         stdout += data.toString();
       });
 
-      child.stderr.on('data', (data: Buffer) => {
+      child.stderr?.on('data', (data: Buffer) => {
         stderr += data.toString();
       });
 
       if (options?.stdin) {
-        child.stdin.write(options.stdin);
-        child.stdin.end();
+        child.stdin?.write(options.stdin);
+        child.stdin?.end();
       }
 
       child.on('close', (exitCode) => {

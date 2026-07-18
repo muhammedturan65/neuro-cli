@@ -47,7 +47,7 @@ program
   .option('--sandbox', 'Enable sandbox mode')
   .option('--spending-limit <usd>', 'Set daily spending limit in USD', parseFloat)
   .option('--ollama', 'Use Ollama local models instead of OpenRouter')
-  .action(async (options) => {
+  .action(async (options: any) => {
     await startInteractive(options);
   });
 
@@ -62,7 +62,7 @@ program
   .option('-f, --format <format>', 'Output format: text, json, stream-json')
   .option('--auto', 'Auto-approve all tool calls')
   .option('--continue <sessionId>', 'Continue a specific session')
-  .action(async (prompt, opts) => {
+  .action(async (prompt: any, opts: any) => {
     const result = await HeadlessMode.run({
       prompt,
       model: opts.model,
@@ -83,7 +83,7 @@ program
   .option('-m, --model <model>', 'Model to use')
   .option('-a, --agent <agent>', 'Agent to use')
   .option('-f, --format <format>', 'Output format: text, json')
-  .action(async (prompt, opts) => {
+  .action(async (prompt: any, opts: any) => {
     const config = initConfig();
     if (opts.model) config.defaultModel = opts.model;
     const engine = new NeuroEngine(config);
@@ -101,7 +101,7 @@ program
   .command('models')
   .description('List available models')
   .option('--ollama', 'List Ollama local models')
-  .action(async (opts) => {
+  .action(async (opts: any) => {
     if (opts.ollama) {
       const { OllamaProvider } = await import('./api/ollama.js');
       const provider = new OllamaProvider();
@@ -147,7 +147,7 @@ program
   .option('--set-permission <mode>', 'Set permission mode (manual, auto, plan, yolo)')
   .option('--set-spending-limit <usd>', 'Set daily spending limit in USD', parseFloat)
   .option('--show', 'Show current config')
-  .action(async (opts) => {
+  .action(async (opts: any) => {
     const config = initConfig();
     const theme = getTheme(config.ui.theme);
 
@@ -179,7 +179,7 @@ program
   .command('sessions')
   .description('List or manage sessions')
   .option('--clear', 'Clear all sessions')
-  .action(async (opts) => {
+  .action(async (opts: any) => {
     const { SessionManager } = await import('./core/session.js');
     const sm = new SessionManager();
 
@@ -205,7 +205,7 @@ program
       .argument('<command>', 'Command to run (for stdio) or URL (for http/sse)')
       .option('-t, --transport <type>', 'Transport type: stdio, sse, http', 'stdio')
       .option('--headers <json>', 'HTTP headers as JSON string')
-      .action(async (name, command, opts) => {
+      .action(async (name: any, command: any, opts: any) => {
         const { MCPClient } = await import('./mcp/client.js');
         const client = new MCPClient();
         const isUrl = command.startsWith('http://') || command.startsWith('https://');
@@ -236,7 +236,7 @@ program
     })
   )
   .addCommand(
-    new Command('remove').description('Remove an MCP server').argument('<name>').action(async (name) => {
+    new Command('remove').description('Remove an MCP server').argument('<name>').action(async (name: any) => {
       const { MCPClient } = await import('./mcp/client.js');
       const client = new MCPClient();
       if (client.removeServer(name)) console.log(chalk.green(`MCP server "${name}" removed`));
@@ -248,7 +248,7 @@ program
 program
   .command('completion <shell>')
   .description('Generate shell completion script (bash, zsh, fish)')
-  .action((shell) => {
+  .action((shell: any) => {
     const generator = new ShellCompletionGenerator(ShellCompletionGenerator.getDefaultOptions());
     const script = generator.generate(shell as 'bash' | 'zsh' | 'fish');
     console.log(script);

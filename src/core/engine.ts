@@ -626,9 +626,16 @@ Always consider the strengths of each agent when delegating:
         this.ui.error(`Agent not found: ${targetAgent}`);
         return { content: '', usage: { inputTokens: 0, outputTokens: 0, cost: 0 } };
       }
+      // Override agent model if defaultModel differs from agent's model
+      const originalModel = agent.configModel;
+      if (this.config.defaultModel !== originalModel) {
+        agent.configModel = this.config.defaultModel;
+      }
       this.ui.startStreaming();
       result = await agent.run(message, callbacks);
       this.ui.endStreaming();
+      // Restore original model
+      agent.configModel = originalModel;
     } else if (mode === 'agent') {
       const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
       result = {

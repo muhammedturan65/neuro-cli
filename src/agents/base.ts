@@ -56,6 +56,15 @@ export class BaseAgent {
     return this.config.description;
   }
 
+  /** Access to agent config for model overrides etc. */
+  get configModel(): string | undefined {
+    return this.config.model;
+  }
+
+  set configModel(model: string | undefined) {
+    this.config.model = model;
+  }
+
   /**
    * Initialize agent with system prompt and context
    */

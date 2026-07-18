@@ -430,6 +430,18 @@ export const MODELS: Record<string, ModelConfig> = {
     supportsVision: false,
     supportsStreaming: true,
   },
+  'deepseek/deepseek-chat-v3-0324': {
+    id: 'deepseek/deepseek-chat-v3-0324',
+    name: 'DeepSeek V3 0324',
+    provider: 'deepseek',
+    contextWindow: 163840,
+    maxOutput: 32768,
+    inputPrice: 0.14,
+    outputPrice: 0.28,
+    supportsTools: true,
+    supportsVision: false,
+    supportsStreaming: true,
+  },
 
   // ---- Qwen ----
   'qwen/qwen3-235b-a22b': {

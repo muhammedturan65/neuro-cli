@@ -318,6 +318,7 @@ export class WebDashboard {
         // Auto-open browser
         if (this.config.autoOpen) {
           try {
+            // @ts-ignore
             import('open').then(mod => {
               mod.default(url).catch(() => {});
             }).catch(() => {

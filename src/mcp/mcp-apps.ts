@@ -5,6 +5,7 @@
 // ============================================================
 
 import chalk from 'chalk';
+// @ts-ignore
 import ora from 'ora';
 import { MCPClient } from './client.js';
 
@@ -1047,6 +1048,7 @@ export class MCPAppManager {
           disabled: btn.disabled || false,
         }));
         try {
+          // @ts-ignore
           const { default: inquirer } = await import('inquirer');
           const answer = await inquirer.prompt([{
             type: 'list',
@@ -1077,6 +1079,7 @@ export class MCPAppManager {
       const fields: FormField[] = component.data?.fields || [];
       if (fields.length > 0) {
         try {
+          // @ts-ignore
           const { default: inquirer } = await import('inquirer');
           const questions = fields.map((field) => {
             const base: any = {
@@ -1125,6 +1128,7 @@ export class MCPAppManager {
         value: a.id,
       }));
       try {
+        // @ts-ignore
         const { default: inquirer } = await import('inquirer');
         const answer = await inquirer.prompt([{
           type: 'list',
