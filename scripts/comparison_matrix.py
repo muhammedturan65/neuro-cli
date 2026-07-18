@@ -99,7 +99,7 @@ features = [
     ("Bağlam & Hafıza", "NEURO.md / CLAUDE.md / AGENTS.md", "✅", "✅", "✅", "⚠️", "✅", "⚠️", "✅", "✅", "✅", "⚠️"),
     ("Bağlam & Hafıza", ".neuroignore / .gitignore Benzeri", "✅", "✅", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️"),
     ("Bağlam & Hafıza", "Prompt Cache", "✅", "✅", "⚠️", "⚠️", "✅", "✅", "⚠️", "⚠️", "⚠️", "⚠️"),
-    ("Bağlam & Hafıza", "Tree-sitter Entegrasyonu", "❌", "❌", "❌", "✅", "❌", "❌", "❌", "❌", "❌", "❌"),
+    ("Bağlam & Hafıza", "Tree-sitter Entegrasyonu", "✅", "❌", "❌", "✅", "❌", "❌", "❌", "❌", "❌", "❌"),
     ("Bağlam & Hafıza", "Otomatik Bağlam Sıkıştırma", "✅", "✅", "⚠️", "⚠️", "✅", "⚠️", "✅", "⚠️", "⚠️", "⚠️"),
     
     # ═══ 3. TOOL SYSTEM ═══
@@ -110,7 +110,7 @@ features = [
     ("Araç Sistemi", "Özel Araç Tanımlama (Custom Tools)", "✅", "⚠️", "⚠️", "❌", "⚠️", "✅", "⚠️", "✅", "✅", "⚠️"),
     ("Araç Sistemi", "Plugin SDK Sistemi", "✅", "✅", "✅", "⚠️", "⚠️", "✅", "✅", "⚠️", "✅", "⚠️"),
     ("Araç Sistemi", "Function Calling / Tool Use", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "✅"),
-    ("Araç Sistemi", "Tarayıcı Otomasyonu", "❌", "⚠️", "❌", "❌", "⚠️", "❌", "⚠️", "✅", "❌", "✅"),
+    ("Araç Sistemi", "Tarayıcı Otomasyonu", "✅", "⚠️", "❌", "❌", "⚠️", "❌", "⚠️", "✅", "❌", "✅"),
     
     # ═══ 4. SESSION & WORKFLOW ═══
     ("Oturum & İş Akışı", "Oturum Yönetimi (Resume/Save)", "✅", "✅", "⚠️", "✅", "✅", "✅", "✅", "✅", "✅", "✅"),
@@ -120,7 +120,7 @@ features = [
     ("Oturum & İş Akışı", "Diff Önizleme (Değişiklik Görüntüleme)", "✅", "✅", "✅", "✅", "✅", "⚠️", "✅", "✅", "⚠️", "⚠️"),
     ("Oturum & İş Akışı", "Plan / Act Modu", "⚠️", "✅", "✅", "✅", "✅", "⚠️", "✅", "✅", "⚠️", "⚠️"),
     ("Oturum & İş Akışı", "Headless Mod (Betik Modu)", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "⚠️", "✅", "✅"),
-    ("Oturum & İş Akışı", "Planlı Görevler / Scheduled Tasks", "❌", "✅", "❌", "❌", "✅", "❌", "⚠️", "❌", "❌", "❌"),
+    ("Oturum & İş Akışı", "Planlı Görevler / Scheduled Tasks", "✅", "✅", "❌", "❌", "✅", "❌", "⚠️", "❌", "❌", "❌"),
     
     # ═══ 5. SAFETY & APPROVAL ═══
     ("Güvenlik & Onay", "İnteraktif Onay Sistemi", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "✅"),
@@ -131,17 +131,17 @@ features = [
     ("Güvenlik & Onay", "Güvenlik Danışmanı (Advisor)", "✅", "⚠️", "⚠️", "❌", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️"),
     
     # ═══ 6. SKILL SYSTEM ═══
-    ("Yetenek (Skill) Sistemi", "SKILL.md Standardı (YAML Frontmatter)", "⚠️", "✅", "✅", "❌", "⚠️", "✅", "✅", "⚠️", "⚠️", "❌"),
+    ("Yetenek (Skill) Sistemi", "SKILL.md Standardı (YAML Frontmatter)", "✅", "✅", "✅", "❌", "⚠️", "✅", "✅", "⚠️", "⚠️", "❌"),
     ("Yetenek (Skill) Sistemi", "Otomatik Skill Keşfi / Aktivasyon", "⚠️", "✅", "✅", "❌", "⚠️", "✅", "✅", "⚠️", "⚠️", "❌"),
-    ("Yetenek (Skill) Sistemi", "Skill Paylaşımı (GitHub Registry)", "❌", "✅", "✅", "❌", "⚠️", "✅", "✅", "❌", "❌", "❌"),
+    ("Yetenek (Skill) Sistemi", "Skill Paylaşımı (GitHub Registry)", "✅", "✅", "✅", "❌", "⚠️", "✅", "✅", "❌", "❌", "❌"),
     ("Yetenek (Skill) Sistemi", "Özel Ajanlar (Custom Agents)", "✅", "✅", "⚠️", "❌", "⚠️", "✅", "✅", "✅", "⚠️", "⚠️"),
-    ("Yetenek (Skill) Sistemi", "AGENTS.md Evrensel Standardı", "⚠️", "✅", "✅", "❌", "✅", "⚠️", "✅", "✅", "✅", "❌"),
-    ("Yetenek (Skill) Sistemi", "agentskills.io Spec Uyumu", "❌", "✅", "✅", "❌", "⚠️", "⚠️", "✅", "❌", "❌", "❌"),
+    ("Yetenek (Skill) Sistemi", "AGENTS.md Evrensel Standardı", "✅", "✅", "✅", "❌", "✅", "⚠️", "✅", "✅", "✅", "❌"),
+    ("Yetenek (Skill) Sistemi", "agentskills.io Spec Uyumu", "✅", "✅", "✅", "❌", "⚠️", "⚠️", "✅", "❌", "❌", "❌"),
     
     # ═══ 7. HOOKS & LIFECYCLE ═══
     ("Hook & Yaşam Döngüsü", "Lifecycle Hooks Sistemi", "✅", "✅", "⚠️", "❌", "⚠️", "⚠️", "✅", "⚠️", "⚠️", "⚠️"),
     ("Hook & Yaşam Döngüsü", "20+ Hook Olayı", "✅", "✅", "⚠️", "❌", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️"),
-    ("Hook & Yaşam Döngüsü", "Plugin Bundle (Skills+Hooks+MCP)", "⚠️", "✅", "⚠️", "❌", "⚠️", "✅", "✅", "⚠️", "⚠️", "⚠️"),
+    ("Hook & Yaşam Döngüsü", "Plugin Bundle (Skills+Hooks+MCP)", "✅", "✅", "⚠️", "❌", "⚠️", "✅", "✅", "⚠️", "⚠️", "⚠️"),
     
     # ═══ 8. MODEL MANAGEMENT ═══
     ("Model Yönetimi", "Model Router (Akıllı Yönlendirme)", "✅", "⚠️", "⚠️", "⚠️", "✅", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️"),
@@ -179,9 +179,9 @@ features = [
     # ═══ 13. INTEGRATIONS ═══
     ("Entegrasyonlar", "LSP Entegrasyonu", "✅", "⚠️", "❌", "❌", "✅", "❌", "⚠️", "❌", "❌", "❌"),
     ("Entegrasyonlar", "Git Entegrasyonu (Derin)", "✅", "✅", "✅", "✅", "✅", "⚠️", "✅", "✅", "⚠️", "⚠️"),
-    ("Entegrasyonlar", "GitHub PR/Issue İşlemleri", "⚠️", "⚠️", "⚠️", "❌", "✅", "⚠️", "✅", "⚠️", "⚠️", "⚠️"),
+    ("Entegrasyonlar", "GitHub PR/Issue İşlemleri", "✅", "⚠️", "⚠️", "❌", "✅", "⚠️", "✅", "⚠️", "⚠️", "⚠️"),
     ("Entegrasyonlar", "IDE Entegrasyonu (VS Code vb.)", "❌", "⚠️", "✅", "⚠️", "✅", "❌", "✅", "✅", "✅", "✅"),
-    ("Entegrasyonlar", "CI/CD Pipeline Entegrasyonu", "❌", "✅", "✅", "⚠️", "✅", "✅", "✅", "⚠️", "⚠️", "⚠️"),
+    ("Entegrasyonlar", "CI/CD Pipeline Entegrasyonu", "✅", "✅", "✅", "⚠️", "✅", "✅", "✅", "⚠️", "⚠️", "⚠️"),
     ("Entegrasyonlar", "Jira/Linear Entegrasyonu", "❌", "⚠️", "⚠️", "❌", "⚠️", "⚠️", "✅", "❌", "❌", "❌"),
     
     # ═══ 14. MONITORING & TELEMETRY ═══
@@ -190,11 +190,11 @@ features = [
     ("İzleme & Telemetri", "Performans Metrikleri", "✅", "⚠️", "⚠️", "❌", "✅", "⚠️", "✅", "⚠️", "⚠️", "✅"),
     
     # ═══ 15. CODE QUALITY ═══
-    ("Kod Kalitesi", "Linting Entegrasyonu", "❌", "⚠️", "⚠️", "✅", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️"),
-    ("Kod Kalitesi", "Test Çalıştırma Entegrasyonu", "❌", "✅", "✅", "✅", "✅", "⚠️", "✅", "⚠️", "⚠️", "✅"),
-    ("Kod Kalitesi", "Kod İnceleme (Review)", "❌", "✅", "✅", "❌", "✅", "⚠️", "✅", "⚠️", "⚠️", "⚠️"),
+    ("Kod Kalitesi", "Linting Entegrasyonu", "✅", "⚠️", "⚠️", "✅", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️"),
+    ("Kod Kalitesi", "Test Çalıştırma Entegrasyonu", "✅", "✅", "✅", "✅", "✅", "⚠️", "✅", "⚠️", "⚠️", "✅"),
+    ("Kod Kalitesi", "Kod İnceleme (Review)", "✅", "✅", "✅", "❌", "✅", "⚠️", "✅", "⚠️", "⚠️", "⚠️"),
     ("Kod Kalitesi", "Refactoring Asistanı", "⚠️", "✅", "✅", "✅", "✅", "⚠️", "✅", "✅", "⚠️", "⚠️"),
-    ("Kod Kalitesi", "Güvenlik Tarama", "❌", "⚠️", "⚠️", "❌", "⚠️", "⚠️", "✅", "❌", "❌", "⚠️"),
+    ("Kod Kalitesi", "Güvenlik Tarama", "✅", "⚠️", "⚠️", "❌", "⚠️", "⚠️", "✅", "❌", "❌", "⚠️"),
     
     # ═══ 16. DEVELOPER EXPERIENCE ═══
     ("Geliştirici Deneyimi", "Kurulum Kolaylığı (1 Komut)", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "⚠️"),
@@ -204,10 +204,10 @@ features = [
     ("Geliştirici Deneyimi", "Masaüstü Uygulaması", "❌", "❌", "❌", "❌", "✅", "❌", "❌", "❌", "✅", "✅"),
     
     # ═══ 17. ADVANCED AI FEATURES ═══
-    ("Gelişmiş AI Özellikleri", "Auto Mod (Tam Otonom)", "❌", "✅", "✅", "❌", "✅", "❌", "✅", "⚠️", "⚠️", "⚠️"),
-    ("Gelişmiş AI Özellikleri", "/goal / /routine Komutları", "❌", "✅", "❌", "❌", "⚠️", "❌", "⚠️", "❌", "❌", "❌"),
-    ("Gelişmiş AI Özellikleri", "Paralel Agent Çalıştırma", "❌", "✅", "⚠️", "❌", "✅", "⚠️", "⚠️", "✅", "⚠️", "✅"),
-    ("Gelişmiş AI Özellikleri", "Background Session", "❌", "✅", "❌", "❌", "✅", "❌", "⚠️", "❌", "❌", "⚠️"),
+    ("Gelişmiş AI Özellikleri", "Auto Mod (Tam Otonom)", "✅", "✅", "✅", "❌", "✅", "❌", "✅", "⚠️", "⚠️", "⚠️"),
+    ("Gelişmiş AI Özellikleri", "/goal / /routine Komutları", "✅", "✅", "❌", "❌", "⚠️", "❌", "⚠️", "❌", "❌", "❌"),
+    ("Gelişmiş AI Özellikleri", "Paralel Agent Çalıştırma", "✅", "✅", "⚠️", "❌", "✅", "⚠️", "⚠️", "✅", "⚠️", "✅"),
+    ("Gelişmiş AI Özellikleri", "Background Session", "✅", "✅", "❌", "❌", "✅", "❌", "⚠️", "❌", "❌", "⚠️"),
     ("Gelişmiş AI Özellikleri", "Retry / Self-Healing Mantığı", "✅", "✅", "✅", "✅", "✅", "⚠️", "✅", "✅", "⚠️", "✅"),
     ("Gelişmiş AI Özellikleri", "SWE-bench Skoru", "❌", "✅", "✅", "✅", "✅", "⚠️", "⚠️", "⚠️", "⚠️", "⚠️"),
 ]
