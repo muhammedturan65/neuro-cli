@@ -1,6 +1,6 @@
 // ============================================================
 // NeuroCLI - Advanced AI Terminal Coding Assistant
-// Core Types & Interfaces - v3.0 with all new features
+// Core Types & Interfaces - v4.0 with all new features
 // ============================================================
 
 export interface Message {
@@ -127,6 +127,18 @@ export interface NeuroConfig {
   cloudSync: CloudSyncConfigType;
   /** Web dashboard configuration */
   dashboard: DashboardConfigType;
+  /** v4.0: Auto mode configuration */
+  autoMode: AutoModeConfigType;
+  /** v4.0: Scheduled tasks configuration */
+  scheduledTasks: ScheduledTasksConfigType;
+  /** v4.0: Linting configuration */
+  linting: LintingConfigType;
+  /** v4.0: Testing configuration */
+  testing: TestingConfigType;
+  /** v4.0: Code review configuration */
+  codeReview: CodeReviewConfigType;
+  /** v4.0: Security scanner configuration */
+  securityScanner: SecurityScannerConfigType;
 }
 
 export interface Session {
@@ -378,4 +390,117 @@ export interface DashboardConfigType {
   autoOpen: boolean;
   /** Refresh interval for real-time updates (ms) */
   refreshInterval: number;
+}
+
+// ---- v4.0 New Config Types ----
+
+// Auto mode configuration
+export interface AutoModeConfigType {
+  /** Whether auto mode is enabled */
+  enabled: boolean;
+  /** Safety level for auto mode */
+  safetyLevel: 'conservative' | 'moderate' | 'aggressive';
+  /** Maximum iterations in auto mode */
+  maxIterations: number;
+  /** Maximum cost in USD (0 = unlimited) */
+  maxCost: number;
+  /** Maximum execution time in ms (0 = unlimited) */
+  maxTimeMs: number;
+  /** Commands that are always blocked */
+  blockedCommands: string[];
+  /** File patterns that cannot be modified */
+  blockedPatterns: string[];
+  /** Auto git commit after changes */
+  autoCommit: boolean;
+  /** Auto run tests after changes */
+  autoTest: boolean;
+  /** Pause on error */
+  pauseOnError: boolean;
+}
+
+// Scheduled tasks configuration
+export interface ScheduledTasksConfigType {
+  /** Whether scheduled tasks are enabled */
+  enabled: boolean;
+  /** Maximum concurrent scheduled tasks */
+  maxConcurrent: number;
+  /** Default interval unit */
+  defaultIntervalUnit: 'minutes' | 'hours' | 'days';
+  /** Whether to persist tasks across restarts */
+  persistTasks: boolean;
+  /** Directory for task persistence */
+  tasksDir: string;
+}
+
+// Linting configuration
+export interface LintingConfigType {
+  /** Whether linting is enabled */
+  enabled: boolean;
+  /** Auto-run linter on file changes */
+  autoRunOnChange: boolean;
+  /** Auto-fix issues when possible */
+  autoFix: boolean;
+  /** Fail on lint errors */
+  failOnError: boolean;
+  /** Linter timeout in ms */
+  timeout: number;
+  /** File patterns to exclude */
+  excludePatterns: string[];
+}
+
+// Testing configuration
+export interface TestingConfigType {
+  /** Whether testing integration is enabled */
+  enabled: boolean;
+  /** Auto-run tests on file changes */
+  autoRunOnChange: boolean;
+  /** Run tests on file save */
+  runOnSave: boolean;
+  /** Coverage threshold percentage */
+  coverageThreshold: number;
+  /** Test timeout in ms */
+  timeout: number;
+  /** Run only tests related to changed files */
+  relatedTestsOnly: boolean;
+}
+
+// Code review configuration
+export interface CodeReviewConfigType {
+  /** Whether code review is enabled */
+  enabled: boolean;
+  /** Auto-review on file changes */
+  autoReviewOnChange: boolean;
+  /** Focus areas for review */
+  focusAreas: string[];
+  /** Minimum severity to report */
+  severityThreshold: 'critical' | 'major' | 'minor' | 'suggestion';
+  /** File patterns to exclude */
+  excludePatterns: string[];
+}
+
+// Security scanner configuration
+export interface SecurityScannerConfigType {
+  /** Whether security scanning is enabled */
+  enabled: boolean;
+  /** Auto-scan on file changes */
+  autoScanOnChange: boolean;
+  /** Fail on this severity level */
+  failOnSeverity: 'critical' | 'high' | 'medium' | 'low';
+  /** File patterns to exclude */
+  excludePatterns: string[];
+  /** Custom security rules */
+  customRules: SecurityRuleType[];
+}
+
+// Security rule type
+export interface SecurityRuleType {
+  id: string;
+  name: string;
+  category: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  pattern: string;
+  description: string;
+  remediation: string;
+  cwe?: string;
+  owasp?: string;
 }

@@ -235,6 +235,101 @@ export class CommandSystem {
         description: 'Show session statistics',
         prompt: 'Show current session statistics including: tokens used, cost, number of messages, tools called, and duration.',
       },
+      // --- v4.0 New Commands ---
+      {
+        name: 'auto',
+        description: 'Toggle autonomous mode (skip approvals)',
+        prompt: 'Toggle auto mode. When enabled, I will execute without asking for approval on each step. Use safety checks instead. {args}',
+        autoApprove: true,
+      },
+      {
+        name: 'goal',
+        description: 'Set a high-level goal for autonomous execution',
+        prompt: 'Set a goal for me to work towards autonomously. I will break it down into steps and execute them. {args}',
+        autoApprove: false,
+      },
+      {
+        name: 'routine',
+        description: 'Save and replay command sequences',
+        prompt: 'Manage routines. List, create, or execute saved command sequences. {args}',
+      },
+      {
+        name: 'loop',
+        description: 'Schedule a recurring task',
+        prompt: 'Schedule a recurring task. Usage: /loop <interval> <prompt> where interval is like 5m, 1h, 1d. {args}',
+      },
+      {
+        name: 'bg',
+        description: 'Run a task in the background',
+        prompt: 'Start this task in the background. I will work on it independently and you can check status later. {args}',
+      },
+      {
+        name: 'skills',
+        description: 'Manage SKILL.md skills (install/search/list)',
+        prompt: 'Manage skills. Use: /skills list, /skills install <name>, /skills search <query>, /skills activate <name>. {args}',
+      },
+      {
+        name: 'parallel',
+        description: 'Spawn parallel agents for concurrent work',
+        prompt: 'Spawn parallel agents to work on multiple tasks concurrently. {args}',
+      },
+      {
+        name: 'repomap',
+        description: 'Build and show repository map (tree-sitter)',
+        prompt: 'Analyze the repository structure and build a map of all symbols, classes, functions, and their relationships. Show the repo map. {args}',
+      },
+      {
+        name: 'lint',
+        description: 'Run linters on the project',
+        prompt: 'Run configured linters on the project. Auto-detect ESLint, Prettier, Ruff, etc. {args}',
+        tools: ['run_command', 'read_file'],
+      },
+      {
+        name: 'test',
+        description: 'Run tests with auto-detection',
+        prompt: 'Detect and run the test framework. Support Jest, Vitest, pytest, Go test, cargo test. {args}',
+        tools: ['run_command', 'read_file'],
+      },
+      {
+        name: 'review',
+        description: 'Code review with security/performance checks',
+        prompt: 'Perform a thorough code review checking for security vulnerabilities, performance issues, code style, and correctness. {args}',
+        tools: ['read_file', 'search_files', 'run_command'],
+      },
+      {
+        name: 'scan',
+        description: 'Security vulnerability scan',
+        prompt: 'Scan the codebase for security vulnerabilities: hardcoded secrets, injection risks, weak crypto, and more. {args}',
+        tools: ['read_file', 'search_files'],
+      },
+      {
+        name: 'bundle',
+        description: 'Manage plugin bundles (install/create/publish)',
+        prompt: 'Manage plugin bundles. Use: /bundle install <source>, /bundle list, /bundle create <name>, /bundle publish. {args}',
+      },
+      {
+        name: 'pr',
+        description: 'GitHub PR operations',
+        prompt: 'Create or manage GitHub pull requests. {args}',
+        tools: ['run_command', 'read_file'],
+      },
+      {
+        name: 'issue',
+        description: 'GitHub issue operations',
+        prompt: 'Create or manage GitHub issues. {args}',
+        tools: ['run_command'],
+      },
+      {
+        name: 'ci',
+        description: 'CI/CD pipeline operations',
+        prompt: 'Run, monitor, or manage CI/CD pipelines. {args}',
+        tools: ['run_command'],
+      },
+      {
+        name: 'browser',
+        description: 'Browser automation (navigate/screenshot/click)',
+        prompt: 'Use the browser to navigate, take screenshots, click elements, or extract content from web pages. {args}',
+      },
     ];
 
     for (const cmd of bundled) {

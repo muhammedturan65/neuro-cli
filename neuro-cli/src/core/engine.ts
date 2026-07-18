@@ -1,15 +1,21 @@
 // ============================================================
-// NeuroCLI - NeuroEngine v3.0
+// NeuroCLI - NeuroEngine v4.0
 // The main engine that ties everything together
 // Now with: Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval,
 // Model Router, Prompt Cache, Undo/Redo, Output Styles,
 // Skill System, Custom Agents, Custom Tools, Ollama,
 // Extended Thinking, Spending Monitor, NeuroIgnore,
 // Telemetry, Vim Mode, i18n, Multimodal, Voice I/O,
-// API Server, Cloud Sync, Web Dashboard
+// API Server, Cloud Sync, Web Dashboard,
+// SKILL.md Standard, Auto Mode, Scheduled Tasks,
+// Parallel Agents, Background Sessions, Browser Automation,
+// Tree-sitter, Linting, Testing, Code Review,
+// GitHub Integration, CI/CD, Plugin Bundles, Security Scanner
 // ============================================================
 
 import { NeuroConfig, Message, AgentExecution, PermissionMode } from '../core/types.js';
+import { join } from 'path';
+import { homedir } from 'os';
 import { OpenRouterClient, TokenUsage } from '../api/openrouter.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { registerAllTools } from '../tools/index.js';
@@ -44,6 +50,17 @@ import { VoiceIO, VoiceConfig } from './voice.js';
 import { APIServer, APIServerConfig } from './api-server.js';
 import { CloudSync, CloudSyncConfig } from './cloud-sync.js';
 import { WebDashboard, DashboardConfig } from './web-dashboard.js';
+import { SkillStandard } from '../context/skill-standard.js';
+import { AutoMode, AutoModeConfig } from './auto-mode.js';
+import { ScheduledTaskManager, ScheduledTaskConfig } from './scheduled-tasks.js';
+import { ParallelAgentManager, ParallelAgentConfig } from './parallel-agents.js';
+import { BackgroundSessionManager, BackgroundSessionConfig } from './background-session.js';
+import { TreeSitterIntegration } from '../context/tree-sitter.js';
+import { LintingIntegration, LinterConfig } from './linting.js';
+import { TestingIntegration, TestingConfig } from './testing.js';
+import { CodeReviewSystem, CodeReviewConfig } from './code-review.js';
+import { SecurityScanner, SecurityScanConfig } from './security-scanner.js';
+import { PluginBundleManager } from './plugin-bundle.js';
 
 export class NeuroEngine {
   public config: NeuroConfig;
@@ -83,6 +100,19 @@ export class NeuroEngine {
   public apiServer: APIServer;
   public cloudSync: CloudSync;
   public dashboard: WebDashboard;
+
+  // v4.0 new systems
+  public skillStandard: SkillStandard;
+  public autoMode: AutoMode;
+  public scheduledTasks: ScheduledTaskManager;
+  public parallelAgents: ParallelAgentManager;
+  public backgroundSessions: BackgroundSessionManager;
+  public treeSitter: TreeSitterIntegration;
+  public linting: LintingIntegration;
+  public testing: TestingIntegration;
+  public codeReview: CodeReviewSystem;
+  public securityScanner: SecurityScanner;
+  public pluginBundles: PluginBundleManager;
 
   private autoApproveSet: Set<string>;
   private requireApprovalSet: Set<string>;
@@ -233,6 +263,84 @@ export class NeuroEngine {
       enabled: false,
     });
     this.dashboard.setEngine(this);
+
+    // --- v4.0 New Systems ---
+
+    // SKILL.md standard (agentskills.io compliant)
+    this.skillStandard = new SkillStandard();
+
+    // Auto mode (full autonomous)
+    this.autoMode = new AutoMode({
+      enabled: false,
+      safetyLevel: 'conservative',
+      maxIterations: 50,
+      maxCost: 0,
+      maxTimeMs: 0,
+      blockedCommands: ['rm -rf /', 'mkfs', 'dd if=/dev/zero'],
+      blockedPatterns: ['/etc/passwd', '/etc/shadow'],
+      autoCommit: false,
+      autoTest: false,
+      pauseOnError: true,
+    });
+
+    // Scheduled tasks (/loop)
+    this.scheduledTasks = new ScheduledTaskManager();
+
+    // Parallel agents
+    this.parallelAgents = new ParallelAgentManager({
+      maxConcurrent: 5,
+    });
+
+    // Background sessions
+    this.backgroundSessions = new BackgroundSessionManager();
+
+    // Tree-sitter integration (repo map)
+    this.treeSitter = new TreeSitterIntegration(process.cwd());
+
+    // Linting integration
+    this.linting = new LintingIntegration(process.cwd(), {
+      enabled: true,
+      autoRunOnChange: false,
+      autoFix: false,
+      failOnError: false,
+      timeout: 30000,
+      excludePatterns: ['node_modules', '.git', 'dist'],
+    });
+
+    // Testing integration
+    this.testing = new TestingIntegration(process.cwd(), {
+      enabled: true,
+      autoRunOnChange: false,
+      runOnSave: false,
+      coverageThreshold: 80,
+      timeout: 60000,
+      relatedTestsOnly: false,
+    });
+
+    // Code review
+    this.codeReview = new CodeReviewSystem(process.cwd(), {
+      enabled: true,
+      autoReviewOnChange: false,
+      focusAreas: ['security', 'performance', 'correctness', 'style'],
+      severityThreshold: 'minor',
+      excludePatterns: ['node_modules', '.git', 'dist'],
+    });
+
+    // Security scanner
+    this.securityScanner = new SecurityScanner(process.cwd(), {
+      enabled: true,
+      autoScanOnChange: false,
+      failOnSeverity: 'high',
+      excludePatterns: ['node_modules', '.git', 'dist', 'coverage'],
+      customRules: [],
+    });
+
+    // Plugin bundles
+    this.pluginBundles = new PluginBundleManager(
+      join(homedir(), '.neuro', 'bundles'),
+    );
+
+    // --- End v4.0 ---
 
     // --- End P2/P3 ---
 

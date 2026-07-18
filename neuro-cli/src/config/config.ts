@@ -208,6 +208,56 @@ export const DEFAULT_CONFIG: NeuroConfig = {
     autoOpen: true,
     refreshInterval: 5000,
   },
+  // v4.0 new configs
+  autoMode: {
+    enabled: false,
+    safetyLevel: 'conservative',
+    maxIterations: 50,
+    maxCost: 0,
+    maxTimeMs: 0,
+    blockedCommands: ['rm -rf /', 'mkfs', 'dd if=/dev/zero'],
+    blockedPatterns: ['/etc/passwd', '/etc/shadow'],
+    autoCommit: false,
+    autoTest: false,
+    pauseOnError: true,
+  },
+  scheduledTasks: {
+    enabled: true,
+    maxConcurrent: 5,
+    defaultIntervalUnit: 'hours',
+    persistTasks: true,
+    tasksDir: '',
+  },
+  linting: {
+    enabled: true,
+    autoRunOnChange: false,
+    autoFix: false,
+    failOnError: false,
+    timeout: 30000,
+    excludePatterns: ['node_modules', '.git', 'dist'],
+  },
+  testing: {
+    enabled: true,
+    autoRunOnChange: false,
+    runOnSave: false,
+    coverageThreshold: 80,
+    timeout: 60000,
+    relatedTestsOnly: false,
+  },
+  codeReview: {
+    enabled: true,
+    autoReviewOnChange: false,
+    focusAreas: ['security', 'performance', 'correctness', 'style'],
+    severityThreshold: 'minor',
+    excludePatterns: ['node_modules', '.git', 'dist'],
+  },
+  securityScanner: {
+    enabled: true,
+    autoScanOnChange: false,
+    failOnSeverity: 'high',
+    excludePatterns: ['node_modules', '.git', 'dist', 'coverage'],
+    customRules: [],
+  },
 };
 
 export function loadConfig(): NeuroConfig {

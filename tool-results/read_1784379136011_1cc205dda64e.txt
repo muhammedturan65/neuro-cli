@@ -1,0 +1,878 @@
+     1→// ============================================================
+     2→// NeuroCLI - Linting Integration
+     3→// Automatic linter detection, execution, and auto-fix
+     4→// Supports ESLint, Prettier, Ruff, Pylint, Flake8,
+     5→// golangci-lint, Clippy, and standard linters per language
+     6→// ============================================================
+     7→
+     8→import { join, resolve, dirname, extname, basename, relative } from 'path';
+     9→import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+    10→import { spawn, execSync, SpawnOptions } from 'child_process';
+    11→
+    12→// -----------------------------------------------------------
+    13→// Public interfaces
+    14→// -----------------------------------------------------------
+    15→
+    16→export interface LintIssue {
+    17→  file: string;
+    18→  line: number;
+    19→  column: number;
+    20→  severity: 'error' | 'warning' | 'info';
+    21→  rule: string;
+    22→  message: string;
+    23→  fixable: boolean;
+    24→  source?: string;
+    25→}
+    26→
+    27→export interface LintResult {
+    28→  success: boolean;
+    29→  issues: LintIssue[];
+    30→  fixed: number;
+    31→  totalFiles: number;
+    32→  duration: number;
+    33→  linter: string;
+    34→}
+    35→
+    36→export interface LinterConfig {
+    37→  enabled: boolean;
+    38→  autoRunOnChange: boolean;
+    39→  autoFix: boolean;
+    40→  failOnError: boolean;
+    41→  timeout: number;
+    42→  excludePatterns: string[];
+    43→}
+    44→
+    45→// -----------------------------------------------------------
+    46→// Internal types
+    47→// -----------------------------------------------------------
+    48→
+    49→interface LinterInfo {
+    50→  name: string;
+    51→  language: string;
+    52→  configFiles: string[];
+    53→  commands: { lint: string[]; fix?: string[]; format?: string[] };
+    54→  parseOutput: (stdout: string, stderr: string, rootDir: string) => LintIssue[];
+    55→}
+    56→
+    57→interface FormatterInfo {
+    58→  name: string;
+    59→  configFiles: string[];
+    60→  command: string[];
+    61→  extensions: string[];
+    62→}
+    63→
+    64→type LintResultCallback = (result: LintResult) => void;
+    65→
+    66→// -----------------------------------------------------------
+    67→// Linter definitions
+    68→// -----------------------------------------------------------
+    69→
+    70→const LINTERS: LinterInfo[] = [
+    71→  // JavaScript / TypeScript
+    72→  {
+    73→    name: 'eslint',
+    74→    language: 'javascript',
+    75→    configFiles: [
+    76→      '.eslintrc',
+    77→      '.eslintrc.js',
+    78→      '.eslintrc.cjs',
+    79→      '.eslintrc.mjs',
+    80→      '.eslintrc.json',
+    81→      '.eslintrc.yaml',
+    82→      '.eslintrc.yml',
+    83→    ],
+    84→    commands: {
+    85→      lint: ['npx', 'eslint', '--format', 'json'],
+    86→      fix: ['npx', 'eslint', '--fix', '--format', 'json'],
+    87→    },
+    88→    parseOutput: (stdout, _stderr, rootDir) => {
+    89→      const issues: LintIssue[] = [];
+    90→      try {
+    91→        const results = JSON.parse(stdout) as Array<{
+    92→          filePath: string;
+    93→          messages: Array<{
+    94→            line: number;
+    95→            column: number;
+    96→            severity: number;
+    97→            ruleId: string;
+    98→            message: string;
+    99→            fix?: { range: [number, number]; text: string };
+   100→          }>;
+   101→        }>;
+   102→        for (const fileResult of results) {
+   103→          for (const msg of fileResult.messages) {
+   104→            issues.push({
+   105→              file: relative(rootDir, fileResult.filePath),
+   106→              line: msg.line,
+   107→              column: msg.column,
+   108→              severity: msg.severity === 2 ? 'error' : msg.severity === 1 ? 'warning' : 'info',
+   109→              rule: msg.ruleId ?? 'unknown',
+   110→              message: msg.message,
+   111→              fixable: msg.fix !== undefined,
+   112→            });
+   113→          }
+   114→        }
+   115→      } catch {
+   116→        // Parse error — return empty
+   117→      }
+   118→      return issues;
+   119→    },
+   120→  },
+   121→  // Python - Ruff
+   122→  {
+   123→    name: 'ruff',
+   124→    language: 'python',
+   125→    configFiles: ['ruff.toml', 'pyproject.toml'],
+   126→    commands: {
+   127→      lint: ['ruff', 'check', '--output-format', 'json'],
+   128→      fix: ['ruff', 'check', '--fix', '--output-format', 'json'],
+   129→      format: ['ruff', 'format'],
+   130→    },
+   131→    parseOutput: (stdout, _stderr, rootDir) => {
+   132→      const issues: LintIssue[] = [];
+   133→      try {
+   134→        const results = JSON.parse(stdout) as Array<{
+   135→          filename: string;
+   136→          location: { row: number; column: number };
+   137→          fix?: { message: string };
+   138→          code: string;
+   139→          message: string;
+   140→        }>;
+   141→        for (const item of results) {
+   142→          issues.push({
+   143→            file: relative(rootDir, item.filename),
+   144→            line: item.location.row,
+   145→            column: item.location.column,
+   146→            severity: 'warning',
+   147→            rule: item.code,
+   148→            message: item.message,
+   149→            fixable: item.fix !== undefined,
+   150→          });
+   151→        }
+   152→      } catch {
+   153→        // Parse error
+   154→      }
+   155→      return issues;
+   156→    },
+   157→  },
+   158→  // Python - Pylint
+   159→  {
+   160→    name: 'pylint',
+   161→    language: 'python',
+   162→    configFiles: ['.pylintrc', 'pyproject.toml', 'setup.cfg'],
+   163→    commands: {
+   164→      lint: ['pylint', '--output-format=json'],
+   165→      fix: undefined,
+   166→    },
+   167→    parseOutput: (stdout, _stderr, rootDir) => {
+   168→      const issues: LintIssue[] = [];
+   169→      try {
+   170→        const results = JSON.parse(stdout) as Array<{
+   171→          path: string;
+   172→          line: number;
+   173→          column: number;
+   174→          type: string;
+   175→          symbol: string;
+   176→          message: string;
+   177→        }>;
+   178→        for (const item of results) {
+   179→          const sev: LintIssue['severity'] =
+   180→            item.type === 'error' || item.type === 'fatal'
+   181→              ? 'error'
+   182→              : item.type === 'warning'
+   183→                ? 'warning'
+   184→                : 'info';
+   185→          issues.push({
+   186→            file: relative(rootDir, item.path),
+   187→            line: item.line,
+   188→            column: item.column + 1,
+   189→            severity: sev,
+   190→            rule: item.symbol,
+   191→            message: item.message,
+   192→            fixable: false,
+   193→          });
+   194→        }
+   195→      } catch {
+   196→        // Parse error
+   197→      }
+   198→      return issues;
+   199→    },
+   200→  },
+   201→  // Python - Flake8
+   202→  {
+   203→    name: 'flake8',
+   204→    language: 'python',
+   205→    configFiles: ['.flake8', 'setup.cfg', 'tox.ini'],
+   206→    commands: {
+   207→      lint: ['flake8', '--format=json'],
+   208→    },
+   209→    parseOutput: (stdout, _stderr, rootDir) => {
+   210→      const issues: LintIssue[] = [];
+   211→      try {
+   212→        const data = JSON.parse(stdout) as Record<string, Array<{
+   213→          row: number;
+   214→          col: number;
+   215→          code: string;
+   216→          message: string;
+   217→        }>>;
+   218→        for (const [filePath, violations] of Object.entries(data)) {
+   219→          for (const v of violations) {
+   220→            issues.push({
+   221→              file: relative(rootDir, filePath),
+   222→              line: v.row,
+   223→              column: v.col,
+   224→              severity: v.code.startsWith('E') || v.code.startsWith('F') ? 'error' : 'warning',
+   225→              rule: v.code,
+   226→              message: v.message,
+   227→              fixable: false,
+   228→            });
+   229→          }
+   230→        }
+   231→      } catch {
+   232→        // Try line-by-line parsing as fallback
+   233→        const lines = stdout.split('\n');
+   234→        const pattern = /^(.+):(\d+):(\d+):\s+(\w+)\s+(.+)$/;
+   235→        for (const line of lines) {
+   236→          const match = line.match(pattern);
+   237→          if (match) {
+   238→            issues.push({
+   239→              file: relative(rootDir, match[1]),
+   240→              line: parseInt(match[2], 10),
+   241→              column: parseInt(match[3], 10),
+   242→              severity: match[4].startsWith('E') || match[4].startsWith('F') ? 'error' : 'warning',
+   243→              rule: match[4],
+   244→              message: match[5],
+   245→              fixable: false,
+   246→            });
+   247→          }
+   248→        }
+   249→      }
+   250→      return issues;
+   251→    },
+   252→  },
+   253→  // Go - golangci-lint
+   254→  {
+   255→    name: 'golangci-lint',
+   256→    language: 'go',
+   257→    configFiles: ['.golangci.yml', '.golangci.yaml', '.golangci.json', '.golangci.toml'],
+   258→    commands: {
+   259→      lint: ['golangci-lint', 'run', '--out-format=json'],
+   260→      fix: ['golangci-lint', 'run', '--fix', '--out-format=json'],
+   261→    },
+   262→    parseOutput: (stdout, _stderr, rootDir) => {
+   263→      const issues: LintIssue[] = [];
+   264→      try {
+   265→        const data = JSON.parse(stdout) as {
+   266→          Issues?: Array<{
+   267→            Pos: { Filename: string; Line: number; Column: number };
+   268→            FromLinter: string;
+   269→            Text: string;
+   270→            Severity: string;
+   271→          }>;
+   272→        };
+   273→        for (const issue of data.Issues ?? []) {
+   274→          issues.push({
+   275→            file: relative(rootDir, issue.Pos.Filename),
+   276→            line: issue.Pos.Line,
+   277→            column: issue.Pos.Column,
+   278→            severity: issue.Severity === 'error' ? 'error' : 'warning',
+   279→            rule: issue.FromLinter,
+   280→            message: issue.Text,
+   281→            fixable: false,
+   282→          });
+   283→        }
+   284→      } catch {
+   285→        // Parse error
+   286→      }
+   287→      return issues;
+   288→    },
+   289→  },
+   290→  // Rust - Clippy
+   291→  {
+   292→    name: 'clippy',
+   293→    language: 'rust',
+   294→    configFiles: ['clippy.toml', '.clippy.toml'],
+   295→    commands: {
+   296→      lint: ['cargo', 'clippy', '--message-format=json'],
+   297→      fix: ['cargo', 'clippy', '--fix', '--allow-dirty', '--message-format=json'],
+   298→    },
+   299→    parseOutput: (stdout, _stderr, rootDir) => {
+   300→      const issues: LintIssue[] = [];
+   301→      const lines = stdout.split('\n');
+   302→      for (const line of lines) {
+   303→        try {
+   304→          const msg = JSON.parse(line) as {
+   305→            reason?: string;
+   306→            message?: {
+   307→              rendered?: string;
+   308→              spans?: Array<{
+   309→                file_name: string;
+   310→                line_start: number;
+   311→                column_start: number;
+   312→              }>;
+   313→              code?: { code: string };
+   314→              level: string;
+   315→            };
+   316→          };
+   317→          if (msg.reason === 'compiler-message' && msg.message) {
+   318→            const span = msg.message.spans?.[0];
+   319→            issues.push({
+   320→              file: span ? relative(rootDir, span.file_name) : 'unknown',
+   321→              line: span?.line_start ?? 0,
+   322→              column: span?.column_start ?? 0,
+   323→              severity: msg.message.level === 'error' ? 'error' : 'warning',
+   324→              rule: msg.message.code?.code ?? 'clippy',
+   325→              message: msg.message.rendered?.split('\n')[0] ?? '',
+   326→              fixable: false,
+   327→            });
+   328→          }
+   329→        } catch {
+   330→          // Not a JSON line — skip
+   331→        }
+   332→      }
+   333→      return issues;
+   334→    },
+   335→  },
+   336→];
+   337→
+   338→// Formatter definitions
+   339→const FORMATTERS: FormatterInfo[] = [
+   340→  {
+   341→    name: 'prettier',
+   342→    configFiles: [
+   343→      '.prettierrc',
+   344→      '.prettierrc.js',
+   345→      '.prettierrc.cjs',
+   346→      '.prettierrc.mjs',
+   347→      '.prettierrc.json',
+   348→      '.prettierrc.yaml',
+   349→      '.prettierrc.yml',
+   350→      'prettier.config.js',
+   351→      'prettier.config.cjs',
+   352→      'prettier.config.mjs',
+   353→    ],
+   354→    command: ['npx', 'prettier', '--write'],
+   355→    extensions: ['.js', '.jsx', '.ts', '.tsx', '.json', '.css', '.scss', '.less', '.html', '.md', '.yaml', '.yml', '.graphql'],
+   356→  },
+   357→  {
+   358→    name: 'ruff-format',
+   359→    configFiles: ['ruff.toml', 'pyproject.toml'],
+   360→    command: ['ruff', 'format'],
+   361→    extensions: ['.py', '.pyi'],
+   362→  },
+   363→  {
+   364→    name: 'gofmt',
+   365→    configFiles: [],
+   366→    command: ['gofmt', '-w'],
+   367→    extensions: ['.go'],
+   368→  },
+   369→  {
+   370→    name: 'rustfmt',
+   371→    configFiles: ['rustfmt.toml', '.rustfmt.toml'],
+   372→    command: ['cargo', 'fmt'],
+   373→    extensions: ['.rs'],
+   374→  },
+   375→];
+   376→
+   377→// Language → extension mapping for standard linters
+   378→const LANGUAGE_EXTENSIONS: Record<string, string[]> = {
+   379→  javascript: ['.js', '.jsx', '.mjs', '.cjs'],
+   380→  typescript: ['.ts', '.tsx', '.mts', '.cts'],
+   381→  python: ['.py', '.pyi'],
+   382→  go: ['.go'],
+   383→  rust: ['.rs'],
+   384→  java: ['.java'],
+   385→  c: ['.c', '.h'],
+   386→  cpp: ['.cpp', '.cc', '.cxx', '.hpp', '.hxx'],
+   387→  ruby: ['.rb'],
+   388→  shell: ['.sh', '.bash'],
+   389→};
+   390→
+   391→// Default configuration
+   392→const DEFAULT_LINTER_CONFIG: LinterConfig = {
+   393→  enabled: true,
+   394→  autoRunOnChange: false,
+   395→  autoFix: false,
+   396→  failOnError: true,
+   397→  timeout: 60_000,
+   398→  excludePatterns: [
+   399→    'node_modules/**',
+   400→    '.git/**',
+   401→    'dist/**',
+   402→    'build/**',
+   403→    '__pycache__/**',
+   404→    'target/**',
+   405→    '.next/**',
+   406→    'vendor/**',
+   407→  ],
+   408→};
+   409→
+   410→// -----------------------------------------------------------
+   411→// LintingIntegration class
+   412→// -----------------------------------------------------------
+   413→
+   414→export class LintingIntegration {
+   415→  private config: LinterConfig;
+   416→  private projectRoot: string;
+   417→  private detectedLinters: Map<string, LinterInfo> = new Map();
+   418→  private detectedFormatter: FormatterInfo | null = null;
+   419→  private cachedIssues: LintIssue[] = [];
+   420→  private callbacks: LintResultCallback[] = [];
+   421→  private lintersDetected = false;
+   422→
+   423→  constructor(projectRoot?: string, config?: Partial<LinterConfig>) {
+   424→    this.projectRoot = projectRoot ?? process.cwd();
+   425→    this.config = { ...DEFAULT_LINTER_CONFIG, ...config };
+   426→  }
+   427→
+   428→  // ----------------------------------------------------------
+   429→  // Public API
+   430→  // ----------------------------------------------------------
+   431→
+   432→  /**
+   433→   * Run linter on a specific file or the entire project.
+   434→   * Returns a LintResult with all detected issues.
+   435→   */
+   436→  async runLint(filePath?: string, fix?: boolean): Promise<LintResult> {
+   437→    if (!this.config.enabled) {
+   438→      return this.emptyResult('disabled');
+   439→    }
+   440→
+   441→    this.ensureDetected();
+   442→
+   443→    if (this.detectedLinters.size === 0) {
+   444→      return this.emptyResult('none');
+   445→    }
+   446→
+   447→    const shouldFix = fix ?? this.config.autoFix;
+   448→    const startTime = Date.now();
+   449→    let allIssues: LintIssue[] = [];
+   450→    let totalFixed = 0;
+   451→    let totalFiles = 0;
+   452→    let primaryLinter = '';
+   453→
+   454→    for (const [name, linter] of this.detectedLinters) {
+   455→      // Determine which command to use
+   456→      let commandParts: string[];
+   457→      if (shouldFix && linter.commands.fix) {
+   458→        commandParts = [...linter.commands.fix];
+   459→      } else {
+   460→        commandParts = [...linter.commands.lint];
+   461→      }
+   462→
+   463→      // Append file path if provided
+   464→      if (filePath) {
+   465→        commandParts.push(resolve(this.projectRoot, filePath));
+   466→      }
+   467→
+   468→      // Add exclude patterns
+   469→      for (const pattern of this.config.excludePatterns) {
+   470→        if (name === 'eslint') {
+   471→          commandParts.push('--ignore-pattern', pattern);
+   472→        } else if (name === 'ruff') {
+   473→          // Ruff uses different exclude syntax
+   474→        }
+   475→      }
+   476→
+   477→      try {
+   478→        const { stdout, stderr, exitCode } = await this.execCommand(
+   479→          commandParts,
+   480→          this.projectRoot,
+   481→          this.config.timeout,
+   482→        );
+   483→
+   484→        const issues = linter.parseOutput(stdout, stderr, this.projectRoot);
+   485→        allIssues = allIssues.concat(issues);
+   486→        totalFiles += this.countLintedFiles(issues);
+   487→        if (!primaryLinter) primaryLinter = name;
+   488→
+   489→        // If fixing, count how many were auto-fixed
+   490→        if (shouldFix) {
+   491→          const preFixCount = this.cachedIssues.filter(
+   492→            i => i.fixable,
+   493→          ).length;
+   494→          totalFixed += Math.max(0, preFixCount - issues.length);
+   495→        }
+   496→      } catch (error) {
+   497→        // Linter may exit with non-zero when issues found — that's expected
+   498→        if (error instanceof Error && 'stdout' in error) {
+   499→          const execErr = error as Error & { stdout?: string; stderr?: string };
+   500→          if (execErr.stdout) {
+   501→            const issues = linter.parseOutput(
+   502→              execErr.stdout,
+   503→              execErr.stderr ?? '',
+   504→              this.projectRoot,
+   505→            );
+   506→            allIssues = allIssues.concat(issues);
+   507→            totalFiles += this.countLintedFiles(issues);
+   508→            if (!primaryLinter) primaryLinter = name;
+   509→          }
+   510→        }
+   511→        // Silently skip linters that fail to execute
+   512→      }
+   513→    }
+   514→
+   515→    // Filter by exclude patterns
+   516→    allIssues = this.filterExcludedIssues(allIssues);
+   517→
+   518→    const duration = Date.now() - startTime;
+   519→    this.cachedIssues = allIssues;
+   520→
+   521→    const result: LintResult = {
+   522→      success: allIssues.filter(i => i.severity === 'error').length === 0,
+   523→      issues: allIssues,
+   524→      fixed: totalFixed,
+   525→      totalFiles,
+   526→      duration,
+   527→      linter: primaryLinter || 'unknown',
+   528→    };
+   529→
+   530→    this.emit(result);
+   531→    return result;
+   532→  }
+   533→
+   534→  /**
+   535→   * Detect which linters are configured in the project root.
+   536→   * Returns an array of detected linter names.
+   537→   */
+   538→  detectLinter(projectRoot?: string): string[] {
+   539→    const root = projectRoot ?? this.projectRoot;
+   540→    const detected: string[] = [];
+   541→
+   542→    for (const linter of LINTERS) {
+   543→      const hasConfig = linter.configFiles.some(cfg =>
+   544→        existsSync(join(root, cfg)),
+   545→      );
+   546→
+   547→      // Also check if the linter binary is available
+   548→      const hasBinary = this.isCommandAvailable(linter.commands.lint[0]);
+   549→
+   550→      if (hasConfig || hasBinary) {
+   551→        detected.push(linter.name);
+   552→        this.detectedLinters.set(linter.name, linter);
+   553→      }
+   554→    }
+   555→
+   556→    // If no linters found but has package.json, assume ESLint for JS projects
+   557→    if (detected.length === 0 && existsSync(join(root, 'package.json'))) {
+   558→      const defaultEslint = LINTERS.find(l => l.name === 'eslint')!;
+   559→      this.detectedLinters.set('eslint', defaultEslint);
+   560→      detected.push('eslint');
+   561→    }
+   562→
+   563→    this.lintersDetected = true;
+   564→    return detected;
+   565→  }
+   566→
+   567→  /**
+   568→   * Auto-fix linting issues for a specific file or the entire project.
+   569→   */
+   570→  async fixIssues(filePath?: string): Promise<LintResult> {
+   571→    return this.runLint(filePath, true);
+   572→  }
+   573→
+   574→  /**
+   575→   * Get all current lint issues, optionally filtered by file.
+   576→   * If no cached issues exist, runs the linter first.
+   577→   */
+   578→  async getIssues(filePath?: string): Promise<LintIssue[]> {
+   579→    if (this.cachedIssues.length === 0) {
+   580→      await this.runLint(filePath);
+   581→    }
+   582→
+   583→    if (filePath) {
+   584→      const absPath = resolve(this.projectRoot, filePath);
+   585→      return this.cachedIssues.filter(
+   586→        i => resolve(this.projectRoot, i.file) === absPath,
+   587→      );
+   588→    }
+   589→
+   590→    return [...this.cachedIssues];
+   591→  }
+   592→
+   593→  /**
+   594→   * Format a file using the project's configured formatter.
+   595→   * Returns true if formatting succeeded.
+   596→   */
+   597→  async formatFile(filePath: string): Promise<boolean> {
+   598→    this.ensureDetected();
+   599→    const formatter = this.detectFormatter(this.projectRoot);
+   600→
+   601→    if (!formatter) {
+   602→      return false;
+   603→    }
+   604→
+   605→    const ext = extname(filePath);
+   606→    if (formatter.extensions.length > 0 && !formatter.extensions.includes(ext)) {
+   607→      return false;
+   608→    }
+   609→
+   610→    const commandParts = [...formatter.command, resolve(this.projectRoot, filePath)];
+   611→
+   612→    try {
+   613→      await this.execCommand(commandParts, this.projectRoot, this.config.timeout);
+   614→      return true;
+   615→    } catch {
+   616→      return false;
+   617→    }
+   618→  }
+   619→
+   620→  /**
+   621→   * Detect the configured formatter for the project.
+   622→   * Returns the FormatterInfo or null if none found.
+   623→   */
+   624→  detectFormatter(projectRoot?: string): FormatterInfo | null {
+   625→    const root = projectRoot ?? this.projectRoot;
+   626→
+   627→    for (const formatter of FORMATTERS) {
+   628→      const hasConfig = formatter.configFiles.some(cfg =>
+   629→        existsSync(join(root, cfg)),
+   630→      );
+   631→      const hasBinary = this.isCommandAvailable(formatter.command[0]);
+   632→
+   633→      if (hasConfig || hasBinary) {
+   634→        this.detectedFormatter = formatter;
+   635→        return formatter;
+   636→      }
+   637→    }
+   638→
+   639→    return null;
+   640→  }
+   641→
+   642→  /**
+   643→   * Register a callback for lint results.
+   644→   */
+   645→  onLintResult(callback: LintResultCallback): void {
+   646→    this.callbacks.push(callback);
+   647→  }
+   648→
+   649→  /**
+   650→   * Remove a previously registered callback.
+   651→   */
+   652→  offLintResult(callback: LintResultCallback): void {
+   653→    this.callbacks = this.callbacks.filter(cb => cb !== callback);
+   654→  }
+   655→
+   656→  /**
+   657→   * Get the current linter configuration.
+   658→   */
+   659→  getConfig(): LinterConfig {
+   660→    return { ...this.config };
+   661→  }
+   662→
+   663→  /**
+   664→   * Update the linter configuration.
+   665→   */
+   666→  updateConfig(updates: Partial<LinterConfig>): void {
+   667→    Object.assign(this.config, updates);
+   668→  }
+   669→
+   670→  /**
+   671→   * Clear the cached issues.
+   672→   */
+   673→  clearCache(): void {
+   674→    this.cachedIssues = [];
+   675→  }
+   676→
+   677→  /**
+   678→   * Get the list of detected linter names.
+   679→   */
+   680→  getDetectedLinters(): string[] {
+   681→    this.ensureDetected();
+   682→    return Array.from(this.detectedLinters.keys());
+   683→  }
+   684→
+   685→  /**
+   686→   * Get the detected formatter name, or null.
+   687→   */
+   688→  getDetectedFormatter(): string | null {
+   689→    return this.detectedFormatter?.name ?? null;
+   690→  }
+   691→
+   692→  /**
+   693→   * Determine the primary language of a file based on its extension.
+   694→   */
+   695→  getLanguageForFile(filePath: string): string | null {
+   696→    const ext = extname(filePath).toLowerCase();
+   697→    for (const [lang, extensions] of Object.entries(LANGUAGE_EXTENSIONS)) {
+   698→      if (extensions.includes(ext)) return lang;
+   699→    }
+   700→    return null;
+   701→  }
+   702→
+   703→  /**
+   704→   * Check if a specific linter is available and configured.
+   705→   */
+   706→  isLinterAvailable(linterName: string): boolean {
+   707→    this.ensureDetected();
+   708→    return this.detectedLinters.has(linterName);
+   709→  }
+   710→
+   711→  /**
+   712→   * Print a summary of lint results.
+   713→   */
+   714→  printSummary(result: LintResult): void {
+   715→    const errors = result.issues.filter(i => i.severity === 'error').length;
+   716→    const warnings = result.issues.filter(i => i.severity === 'warning').length;
+   717→    const infos = result.issues.filter(i => i.severity === 'info').length;
+   718→
+   719→    console.log('');
+   720→    console.log('--- Lint Summary ---');
+   721→    console.log(`  Linter:    ${result.linter}`);
+   722→    console.log(`  Duration:  ${result.duration}ms`);
+   723→    console.log(`  Files:     ${result.totalFiles}`);
+   724→    console.log(`  Errors:    ${errors}`);
+   725→    console.log(`  Warnings:  ${warnings}`);
+   726→    console.log(`  Info:      ${infos}`);
+   727→    if (result.fixed > 0) {
+   728→      console.log(`  Auto-fixed:${result.fixed}`);
+   729→    }
+   730→    console.log(`  Status:    ${result.success ? 'PASS' : 'FAIL'}`);
+   731→    console.log('');
+   732→
+   733→    // Group issues by file
+   734→    const byFile = new Map<string, LintIssue[]>();
+   735→    for (const issue of result.issues) {
+   736→      const arr = byFile.get(issue.file) ?? [];
+   737→      arr.push(issue);
+   738→      byFile.set(issue.file, arr);
+   739→    }
+   740→
+   741→    if (byFile.size > 0) {
+   742→      for (const [file, issues] of byFile) {
+   743→        console.log(`  ${file}:`);
+   744→        for (const issue of issues.slice(0, 20)) {
+   745→          const sevLabel =
+   746→            issue.severity === 'error'
+   747→              ? 'E'
+   748→              : issue.severity === 'warning'
+   749→                ? 'W'
+   750→                : 'I';
+   751→          console.log(
+   752→            `    ${sevLabel}  ${issue.line}:${issue.column}  ${issue.rule} — ${issue.message}${issue.fixable ? ' [fixable]' : ''}`,
+   753→          );
+   754→        }
+   755→        if (issues.length > 20) {
+   756→          console.log(`    ... and ${issues.length - 20} more`);
+   757→        }
+   758→      }
+   759→      console.log('');
+   760→    }
+   761→  }
+   762→
+   763→  // ----------------------------------------------------------
+   764→  // Private helpers
+   765→  // ----------------------------------------------------------
+   766→
+   767→  private ensureDetected(): void {
+   768→    if (!this.lintersDetected) {
+   769→      this.detectLinter(this.projectRoot);
+   770→    }
+   771→  }
+   772→
+   773→  private emit(result: LintResult): void {
+   774→    for (const cb of this.callbacks) {
+   775→      try {
+   776→        cb(result);
+   777→      } catch {
+   778→        // Callback errors should not interrupt the flow
+   779→      }
+   780→    }
+   781→  }
+   782→
+   783→  private emptyResult(reason: string): LintResult {
+   784→    return {
+   785→      success: reason !== 'fail',
+   786→      issues: [],
+   787→      fixed: 0,
+   788→      totalFiles: 0,
+   789→      duration: 0,
+   790→      linter: reason,
+   791→    };
+   792→  }
+   793→
+   794→  private countLintedFiles(issues: LintIssue[]): number {
+   795→    const uniqueFiles = new Set(issues.map(i => i.file));
+   796→    return uniqueFiles.size;
+   797→  }
+   798→
+   799→  private filterExcludedIssues(issues: LintIssue[]): LintIssue[] {
+   800→    if (this.config.excludePatterns.length === 0) return issues;
+   801→
+   802→    return issues.filter(issue => {
+   803→      for (const pattern of this.config.excludePatterns) {
+   804→        const globRegex = this.globToRegex(pattern);
+   805→        if (globRegex.test(issue.file)) return false;
+   806→      }
+   807→      return true;
+   808→    });
+   809→  }
+   810→
+   811→  private globToRegex(pattern: string): RegExp {
+   812→    const escaped = pattern
+   813→      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+   814→      .replace(/\*\*/g, '{{GLOBSTAR}}')
+   815→      .replace(/\*/g, '[^/]*')
+   816→      .replace(/\?/g, '[^/]')
+   817→      .replace(/\{\{GLOBSTAR\}\}/g, '.*');
+   818→    return new RegExp('^' + escaped + '$');
+   819→  }
+   820→
+   821→  /**
+   822→   * Execute a command and return its output.
+   823→   * Rejects on spawn errors; resolves with stdout/stderr even on non-zero exit.
+   824→   */
+   825→  private execCommand(
+   826→    commandParts: string[],
+   827→    cwd: string,
+   828→    timeout: number,
+   829→  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+   830→    return new Promise((resolve, reject) => {
+   831→      const [cmd, ...args] = commandParts;
+   832→
+   833→      try {
+   834→        const result = execSync(`${cmd} ${args.map(a => `"${a}"`).join(' ')}`, {
+   835→          cwd,
+   836→          timeout,
+   837→          encoding: 'utf-8',
+   838→          maxBuffer: 50 * 1024 * 1024,
+   839→          stdio: ['pipe', 'pipe', 'pipe'],
+   840→        });
+   841→
+   842→        resolve({ stdout: result, stderr: '', exitCode: 0 });
+   843→      } catch (error: unknown) {
+   844→        const execError = error as Error & {
+   845→          stdout?: string | Buffer;
+   846→          stderr?: string | Buffer;
+   847→          status?: number;
+   848→        };
+   849→
+   850→        // Non-zero exit code from linter is normal (issues found)
+   851→        if (execError.stdout || execError.stderr) {
+   852→          resolve({
+   853→            stdout: typeof execError.stdout === 'string' ? execError.stdout : (execError.stdout?.toString('utf-8') ?? ''),
+   854→            stderr: typeof execError.stderr === 'string' ? execError.stderr : (execError.stderr?.toString('utf-8') ?? ''),
+   855→            exitCode: execError.status ?? 1,
+   856→          });
+   857→        } else {
+   858→          reject(error);
+   859→        }
+   860→      }
+   861→    });
+   862→  }
+   863→
+   864→  /**
+   865→   * Check if a command-line tool is available on the system PATH.
+   866→   */
+   867→  private isCommandAvailable(command: string): boolean {
+   868→    try {
+   869→      const isWin = process.platform === 'win32';
+   870→      const checkCmd = isWin ? `where ${command}` : `which ${command} 2>/dev/null`;
+   871→      execSync(checkCmd, { encoding: 'utf-8', timeout: 5_000, stdio: 'pipe' });
+   872→      return true;
+   873→    } catch {
+   874→      return false;
+   875→    }
+   876→  }
+   877→}
+   878→
