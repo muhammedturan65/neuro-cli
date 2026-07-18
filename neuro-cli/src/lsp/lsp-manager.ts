@@ -276,20 +276,26 @@ class LSPServer {
   }
 
   async getDiagnostics(filePath: string): Promise<LSPDiagnostic[]> {
-    // Request document symbols/diagnostics
+    // Read file content for proper diagnostics
+    let fileContent = '';
+    try {
+      const { readFileSync } = await import('fs');
+      fileContent = readFileSync(filePath.replace('file://', ''), 'utf-8');
+    } catch {}
+
     this.sendNotification('textDocument/didOpen', {
       textDocument: {
         uri: `file://${filePath}`,
         languageId: this.config.language,
         version: 1,
-        text: '',
+        text: fileContent,
       },
     });
 
     // Wait a bit for diagnostics
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    return this.diagnostics;
+    return this.diagnosticsByFile.get(filePath) || [];
   }
 
   async gotoDefinition(filePath: string, line: number, column: number): Promise<LSPDefinition | null> {
@@ -334,7 +340,7 @@ class LSPServer {
     return [];
   }
 
-  private diagnostics: LSPDiagnostic[] = [];
+  private diagnosticsByFile: Map<string, LSPDiagnostic[]> = new Map();
 
   private sendRequest(method: string, params: any): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -410,7 +416,7 @@ class LSPServer {
             code: d.code?.toString(),
           }));
 
-          this.diagnostics = diags;
+          this.diagnosticsByFile.set(uri.replace('file://', ''), diags);
         }
       } catch {}
     }

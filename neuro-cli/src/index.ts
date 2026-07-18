@@ -19,7 +19,7 @@ import { HeadlessMode } from './core/headless.js';
 import { ShellCompletionGenerator } from './core/shell-completion.js';
 import chalk from 'chalk';
 
-const VERSION = '3.0.0';
+const VERSION = '4.0.0';
 
 // ---- CLI Setup ----
 const program = new Command();

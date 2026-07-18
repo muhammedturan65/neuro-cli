@@ -1,5 +1,5 @@
 // ============================================================
-// NeuroCLI - NeuroEngine v4.0
+// NeuroCLI - NeuroEngine v4.0.0
 // The main engine that ties everything together
 // Now with: Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval,
 // Model Router, Prompt Cache, Undo/Redo, Output Styles,
