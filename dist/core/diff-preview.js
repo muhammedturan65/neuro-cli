@@ -3,6 +3,7 @@
 // Shows file changes before applying them
 // ============================================================
 import { readFileSync, existsSync } from 'fs';
+import { createInterface } from 'readline';
 import chalk from 'chalk';
 export class DiffPreview {
     /**
@@ -128,7 +129,7 @@ export class DiffPreview {
      */
     static async confirmDiff(diff) {
         DiffPreview.renderDiff(diff);
-        const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
         return new Promise((resolve) => {
             rl.question(chalk.cyan('  Apply these changes? [y/n]: '), (answer) => {
                 rl.close();

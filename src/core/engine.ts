@@ -1,5 +1,5 @@
 // ============================================================
-// NeuroCLI - NeuroEngine v4.1.1
+// NeuroCLI - NeuroEngine v4.1.2
 // The main engine that ties everything together
 // Now with: Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval,
 // Model Router, Prompt Cache, Undo/Redo, Output Styles,
@@ -571,7 +571,7 @@ export class NeuroEngine {
 
     // Auto-Updater
     this.updater = new AutoUpdater({
-      currentVersion: '4.1.1',
+      currentVersion: '4.1.2',
       autoCheck: true,
       autoUpdate: false,
     });

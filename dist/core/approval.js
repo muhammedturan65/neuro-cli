@@ -23,6 +23,7 @@ export class ApprovalSystem {
     persistDecisions = true;
     consecutiveAutoApproves = 0;
     rl = null;
+    mainRl = null;
     stats = new Map();
     pendingBatch = [];
     batchTimer = null;
@@ -333,10 +334,38 @@ export class ApprovalSystem {
     getAlwaysKey(toolName, args) {
         return `${toolName}:${this.getPattern(args)}`;
     }
+    /**
+     * Set the main readline interface from index.ts
+     * This prevents creating a second readline on the same stdin
+     */
+    setMainReadline(rl) {
+        this.mainRl = rl;
+    }
     readline(prompt) {
-        if (!this.rl)
-            this.rl = createInterface({ input: process.stdin, output: process.stdout });
-        return new Promise((resolve) => { this.rl.question(prompt, (answer) => resolve(answer)); });
+        // Pause the main readline to prevent it from also reading stdin input
+        // This is the root cause of double character input (YY instead of Y)
+        const mainInputStream = this.mainRl?.input;
+        const wasMainPaused = mainInputStream?.isPaused?.();
+        if (this.mainRl && mainInputStream && mainInputStream.isPaused()) {
+            // Already paused, skip
+        }
+        else if (this.mainRl) {
+            this.mainRl.pause();
+        }
+        return new Promise((resolve) => {
+            // Reuse the main readline if available, otherwise create a temporary one
+            const rl = this.mainRl || this.rl || createInterface({ input: process.stdin, output: process.stdout });
+            if (!this.rl && !this.mainRl)
+                this.rl = rl;
+            rl.question(prompt, (answer) => {
+                // Resume the main readline after getting the answer
+                if (this.mainRl) {
+                    this.mainRl.resume();
+                    this.mainRl.prompt();
+                }
+                resolve(answer);
+            });
+        });
     }
     close() {
         if (this.rl) {

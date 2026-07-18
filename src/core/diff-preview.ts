@@ -4,6 +4,7 @@
 // ============================================================
 
 import { readFileSync, existsSync } from 'fs';
+import { createInterface } from 'readline';
 import chalk from 'chalk';
 
 export interface DiffLine {
@@ -150,7 +151,7 @@ export class DiffPreview {
   static async confirmDiff(diff: FileDiff): Promise<boolean> {
     DiffPreview.renderDiff(diff);
 
-    const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
     return new Promise((resolve) => {
       rl.question(chalk.cyan('  Apply these changes? [y/n]: '), (answer: string) => {
         rl.close();

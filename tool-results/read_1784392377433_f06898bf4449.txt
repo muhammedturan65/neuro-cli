@@ -1,0 +1,854 @@
+     1→// ============================================================
+     2→// NeuroCLI - Vim Keybindings Mode
+     3→// Vim-like input mode (normal/insert/visual) with hjkl
+     4→// navigation, dd, yy, p, command mode (:), mode indicator
+     5→// Integration with readline
+     6→// ============================================================
+     7→
+     8→import chalk from 'chalk';
+     9→import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+    10→import { join } from 'path';
+    11→import { homedir } from 'os';
+    12→import { Interface as ReadLineInterface } from 'readline';
+    13→
+    14→// -----------------------------------------------------------
+    15→// Public interfaces
+    16→// -----------------------------------------------------------
+    17→
+    18→export type VimMode = 'normal' | 'insert' | 'visual' | 'command';
+    19→
+    20→export interface VimModeConfig {
+    21→  /** Whether vim mode is enabled */
+    22→  enabled: boolean;
+    23→  /** Show mode indicator in prompt */
+    24→  showModeIndicator: boolean;
+    25→  /** Custom key mappings */
+    26→  keyMappings: Record<string, string>;
+    27→  /** Bell on invalid key in normal mode */
+    28→  bellOnError: boolean;
+    29→}
+    30→
+    31→export interface VimKeyAction {
+    32→  mode: VimMode;
+    33→  key: string;
+    34→  action: string;
+    35→  description: string;
+    36→}
+    37→
+    38→export interface VimRegister {
+    39→  name: string;
+    40→  content: string;
+    41→  type: 'line' | 'char' | 'block';
+    42→}
+    43→
+    44→export interface VimCommand {
+    45→  name: string;
+    46→  pattern: RegExp;
+    47→  handler: (args: string, vimMode: VimModeManager) => void;
+    48→  description: string;
+    49→}
+    50→
+    51→// -----------------------------------------------------------
+    52→// Default config
+    53→// -----------------------------------------------------------
+    54→
+    55→const VIM_CONFIG_PATH = join(homedir(), '.neuro', 'vim-config.json');
+    56→
+    57→function defaultConfig(): VimModeConfig {
+    58→  return {
+    59→    enabled: false,
+    60→    showModeIndicator: true,
+    61→    keyMappings: {},
+    62→    bellOnError: true,
+    63→  };
+    64→}
+    65→
+    66→// -----------------------------------------------------------
+    67→// VimModeManager
+    68→// -----------------------------------------------------------
+    69→
+    70→export class VimModeManager {
+    71→  private config: VimModeConfig;
+    72→  private mode: VimMode = 'insert'; // Start in insert mode (user-friendly)
+    73→  private registers: Map<string, VimRegister> = new Map();
+    74→  private commandBuffer: string = '';
+    75→  private normalBuffer: string = '';
+    76→  private visualStart: number = 0;
+    77→  private cursorPosition: number = 0;
+    78→  private lineBuffer: string = '';
+    79→  private lastAction: string = '';
+    80→  private repeatCount: number = 0;
+    81→  private commandHistory: string[] = [];
+    82→  private commandHistoryIndex: number = -1;
+    83→  private rl: ReadLineInterface | null = null;
+    84→  private keyHandlerAttached: boolean = false;
+    85→
+    86→  constructor(config?: Partial<VimModeConfig>) {
+    87→    this.config = { ...defaultConfig(), ...config };
+    88→    this.loadConfig();
+    89→    if (this.config.enabled) {
+    90→      this.mode = 'insert'; // Start in insert for better UX
+    91→    }
+    92→  }
+    93→
+    94→  // ----------------------------------------------------------
+    95→  // Public API
+    96→  // ----------------------------------------------------------
+    97→
+    98→  /**
+    99→   * Check if vim mode is enabled
+   100→   */
+   101→  isEnabled(): boolean {
+   102→    return this.config.enabled;
+   103→  }
+   104→
+   105→  /**
+   106→   * Enable vim mode
+   107→   */
+   108→  enable(): void {
+   109→    this.config.enabled = true;
+   110→    this.mode = 'insert';
+   111→    this.saveConfig();
+   112→    console.log(chalk.green('Vim mode enabled. Press Esc to enter normal mode.'));
+   113→  }
+   114→
+   115→  /**
+   116→   * Disable vim mode
+   117→   */
+   118→  disable(): void {
+   119→    this.config.enabled = false;
+   120→    this.mode = 'insert';
+   121→    this.saveConfig();
+   122→    console.log(chalk.gray('Vim mode disabled. Standard readline bindings active.'));
+   123→  }
+   124→
+   125→  /**
+   126→   * Toggle vim mode
+   127→   */
+   128→  toggle(): boolean {
+   129→    if (this.config.enabled) this.disable();
+   130→    else this.enable();
+   131→    return this.config.enabled;
+   132→  }
+   133→
+   134→  /**
+   135→   * Get current mode
+   136→   */
+   137→  getMode(): VimMode {
+   138→    return this.mode;
+   139→  }
+   140→
+   141→  /**
+   142→   * Set current mode
+   143→   */
+   144→  setMode(mode: VimMode): void {
+   145→    this.mode = mode;
+   146→    this.commandBuffer = '';
+   147→    this.normalBuffer = '';
+   148→    this.repeatCount = 0;
+   149→  }
+   150→
+   151→  /**
+   152→   * Get mode indicator string for the prompt
+   153→   */
+   154→  getModeIndicator(): string {
+   155→    if (!this.config.enabled || !this.config.showModeIndicator) return '';
+   156→
+   157→    switch (this.mode) {
+   158→      case 'normal':
+   159→        return chalk.bgBlue.white.bold(' NORMAL ');
+   160→      case 'insert':
+   161→        return chalk.bgGreen.white.bold(' INSERT ');
+   162→      case 'visual':
+   163→        return chalk.bgMagenta.white.bold(' VISUAL ');
+   164→      case 'command':
+   165→        return chalk.bgYellow.black.bold(' CMD ');
+   166→      default:
+   167→        return '';
+   168→    }
+   169→  }
+   170→
+   171→  /**
+   172→   * Get the modified prompt with mode indicator
+   173→   */
+   174→  getModifiedPrompt(basePrompt: string): string {
+   175→    if (!this.config.enabled) return basePrompt;
+   176→    const indicator = this.getModeIndicator();
+   177→    return indicator ? `${indicator} ${basePrompt}` : basePrompt;
+   178→  }
+   179→
+   180→  /**
+   181→   * Attach to a readline interface for key handling
+   182→   */
+   183→  attachToReadline(rl: ReadLineInterface): void {
+   184→    if (!this.config.enabled) return;
+   185→    this.rl = rl;
+   186→
+   187→    if (!this.keyHandlerAttached && typeof process.stdin.setRawMode === 'function') {
+   188→      // We handle vim keys at a higher level via processKey
+   189→      this.keyHandlerAttached = true;
+   190→    }
+   191→  }
+   192→
+   193→  /**
+   194→   * Detach from readline interface
+   195→   */
+   196→  detachFromReadline(): void {
+   197→    this.rl = null;
+   198→    this.keyHandlerAttached = false;
+   199→  }
+   200→
+   201→  /**
+   202→   * Process a key press and return the action to take
+   203→   */
+   204→  processKey(key: string): VimKeyAction | null {
+   205→    if (!this.config.enabled) return null;
+   206→
+   207→    // Handle escape first
+   208→    if (key === '\x1b' || key === 'Escape') {
+   209→      return this.handleEscape();
+   210→    }
+   211→
+   212→    switch (this.mode) {
+   213→      case 'normal':
+   214→        return this.handleNormalKey(key);
+   215→      case 'insert':
+   216→        return this.handleInsertKey(key);
+   217→      case 'visual':
+   218→        return this.handleVisualKey(key);
+   219→      case 'command':
+   220→        return this.handleCommandKey(key);
+   221→      default:
+   222→        return null;
+   223→    }
+   224→  }
+   225→
+   226→  /**
+   227→   * Get all yanked text from a register
+   228→   */
+   229→  getRegister(name: string): string {
+   230→    const reg = this.registers.get(name);
+   231→    return reg ? reg.content : '';
+   232→  }
+   233→
+   234→  /**
+   235→   * Set register content
+   236→   */
+   237→  setRegister(name: string, content: string, type: 'line' | 'char' | 'block' = 'line'): void {
+   238→    this.registers.set(name, { name, content, type });
+   239→  }
+   240→
+   241→  /**
+   242→   * Get current line buffer
+   243→   */
+   244→  getLineBuffer(): string {
+   245→    return this.lineBuffer;
+   246→  }
+   247→
+   248→  /**
+   249→   * Set current line buffer
+   250→   */
+   251→  setLineBuffer(buffer: string): void {
+   252→    this.lineBuffer = buffer;
+   253→  }
+   254→
+   255→  /**
+   256→   * Get cursor position
+   257→   */
+   258→  getCursorPosition(): number {
+   259→    return this.cursorPosition;
+   260→  }
+   261→
+   262→  /**
+   263→   * Set cursor position
+   264→   */
+   265→  setCursorPosition(pos: number): void {
+   266→    this.cursorPosition = Math.max(0, Math.min(pos, this.lineBuffer.length));
+   267→  }
+   268→
+   269→  /**
+   270→   * Execute a vim command (e.g. :w, :q, :set)
+   271→   */
+   272→  executeCommand(cmd: string): void {
+   273→    const trimmed = cmd.trim();
+   274→
+   275→    // Built-in commands
+   276→    const commands: VimCommand[] = [
+   277→      {
+   278→        name: 'set',
+   279→        pattern: /^set\s+/,
+   280→        handler: (args) => this.handleSetCommand(args),
+   281→        description: 'Set vim options',
+   282→      },
+   283→      {
+   284→        name: 'w',
+   285→        pattern: /^w$/,
+   286→        handler: () => console.log(chalk.gray('Session auto-saved.')),
+   287→        description: 'Write/save (auto-saved in NeuroCLI)',
+   288→      },
+   289→      {
+   290→        name: 'q',
+   291→        pattern: /^q(!)?$/,
+   292→        handler: (args) => {
+   293→          if (args.includes('!')) {
+   294→            process.exit(0);
+   295→          } else {
+   296→            console.log(chalk.yellow('Use :q! to force quit.'));
+   297→          }
+   298→        },
+   299→        description: 'Quit',
+   300→      },
+   301→      {
+   302→        name: 'help',
+   303→        pattern: /^help$/,
+   304→        handler: () => this.printHelp(),
+   305→        description: 'Show vim mode help',
+   306→      },
+   307→      {
+   308→        name: 'registers',
+   309→        pattern: /^registers$/,
+   310→        handler: () => this.printRegisters(),
+   311→        description: 'Show register contents',
+   312→      },
+   313→      {
+   314→        name: 'mode',
+   315→        pattern: /^mode$/,
+   316→        handler: () => console.log(`Current mode: ${chalk.cyan(this.mode)}`),
+   317→        description: 'Show current mode',
+   318→      },
+   319→      {
+   320→        name: 'history',
+   321→        pattern: /^history$/,
+   322→        handler: () => this.printCommandHistory(),
+   323→        description: 'Show command history',
+   324→      },
+   325→    ];
+   326→
+   327→    for (const command of commands) {
+   328→      if (command.pattern.test(trimmed)) {
+   329→        const args = trimmed.replace(command.pattern, '');
+   330→        command.handler(args, this);
+   331→        this.commandHistory.push(trimmed);
+   332→        return;
+   333→      }
+   334→    }
+   335→
+   336→    console.log(chalk.yellow(`Unknown command: :${trimmed}. Type :help for vim mode help.`));
+   337→    this.commandHistory.push(trimmed);
+   338→  }
+   339→
+   340→  /**
+   341→   * Print vim mode help
+   342→   */
+   343→  printHelp(): void {
+   344→    console.log('');
+   345→    console.log(chalk.bold('--- NeuroCLI Vim Mode Help ---'));
+   346→    console.log('');
+   347→    console.log(chalk.cyan('  Mode Switching:'));
+   348→    console.log('    Esc          - Switch to Normal mode');
+   349→    console.log('    i            - Enter Insert mode');
+   350→    console.log('    a            - Enter Insert mode (after cursor)');
+   351→    console.log('    v            - Enter Visual mode');
+   352→    console.log('    :            - Enter Command mode');
+   353→    console.log('');
+   354→    console.log(chalk.cyan('  Normal Mode Navigation:'));
+   355→    console.log('    h            - Move cursor left');
+   356→    console.log('    j            - Next history entry');
+   357→    console.log('    k            - Previous history entry');
+   358→    console.log('    l            - Move cursor right');
+   359→    console.log('    0            - Move to start of line');
+   360→    console.log('    $            - Move to end of line');
+   361→    console.log('    w            - Move to next word');
+   362→    console.log('    b            - Move to previous word');
+   363→    console.log('');
+   364→    console.log(chalk.cyan('  Normal Mode Editing:'));
+   365→    console.log('    dd           - Delete entire line');
+   366→    console.log('    dw           - Delete word');
+   367→    console.log('    x            - Delete character under cursor');
+   368→    console.log('    yy           - Yank (copy) entire line');
+   369→    console.log('    yw           - Yank word');
+   370→    console.log('    p            - Paste after cursor');
+   371→    console.log('    P            - Paste before cursor');
+   372→    console.log('    u            - Undo');
+   373→    console.log('    Ctrl+r       - Redo');
+   374→    console.log('');
+   375→    console.log(chalk.cyan('  Command Mode:'));
+   376→    console.log('    :help        - Show this help');
+   377→    console.log('    :w           - Save session');
+   378→    console.log('    :q!          - Force quit');
+   379→    console.log('    :set <opt>   - Set option');
+   380→    console.log('    :registers   - Show registers');
+   381→    console.log('    :mode        - Show current mode');
+   382→    console.log('');
+   383→    console.log(chalk.bold('-------------------------------'));
+   384→    console.log('');
+   385→  }
+   386→
+   387→  /**
+   388→   * Print register contents
+   389→   */
+   390→  printRegisters(): void {
+   391→    console.log('');
+   392→    console.log(chalk.bold('--- Vim Registers ---'));
+   393→    for (const [name, reg] of this.registers) {
+   394→      const preview = reg.content.length > 40 ? reg.content.slice(0, 40) + '...' : reg.content;
+   395→      console.log(`  "${name}: ${chalk.cyan(preview)} (${reg.type})`);
+   396→    }
+   397→    if (this.registers.size === 0) {
+   398→      console.log(chalk.gray('  (no registers set)'));
+   399→    }
+   400→    console.log('');
+   401→  }
+   402→
+   403→  /**
+   404→   * Get config
+   405→   */
+   406→  getConfig(): VimModeConfig {
+   407→    return { ...this.config };
+   408→  }
+   409→
+   410→  // ----------------------------------------------------------
+   411→  // Private key handlers
+   412→  // ----------------------------------------------------------
+   413→
+   414→  private handleEscape(): VimKeyAction {
+   415→    if (this.mode === 'insert' || this.mode === 'visual') {
+   416→      this.mode = 'normal';
+   417→      this.normalBuffer = '';
+   418→      this.repeatCount = 0;
+   419→      return { mode: 'normal', key: '\x1b', action: 'switch_mode', description: 'Switch to normal mode' };
+   420→    }
+   421→    if (this.mode === 'command') {
+   422→      this.mode = 'normal';
+   423→      this.commandBuffer = '';
+   424→      return { mode: 'normal', key: '\x1b', action: 'switch_mode', description: 'Cancel command mode' };
+   425→    }
+   426→    return { mode: 'normal', key: '\x1b', action: 'no_op', description: 'Already in normal mode' };
+   427→  }
+   428→
+   429→  private handleNormalKey(key: string): VimKeyAction {
+   430→    // Accumulate repeat count
+   431→    if (/^[1-9]$/.test(key) && this.normalBuffer === '') {
+   432→      this.repeatCount = this.repeatCount * 10 + parseInt(key);
+   433→      return { mode: 'normal', key, action: 'repeat_count', description: `Repeat count: ${this.repeatCount}` };
+   434→    }
+   435→
+   436→    this.normalBuffer += key;
+   437→
+   438→    // Check for two-character commands
+   439→    if (this.normalBuffer.length === 1) {
+   440→      // Single-character commands
+   441→      switch (key) {
+   442→        case 'i':
+   443→          this.mode = 'insert';
+   444→          this.normalBuffer = '';
+   445→          return { mode: 'insert', key, action: 'switch_mode', description: 'Enter insert mode' };
+   446→        case 'a':
+   447→          this.mode = 'insert';
+   448→          this.cursorPosition++;
+   449→          this.normalBuffer = '';
+   450→          return { mode: 'insert', key, action: 'append', description: 'Append (insert after cursor)' };
+   451→        case 'A':
+   452→          this.mode = 'insert';
+   453→          this.cursorPosition = this.lineBuffer.length;
+   454→          this.normalBuffer = '';
+   455→          return { mode: 'insert', key, action: 'append_end', description: 'Append at end of line' };
+   456→        case 'I':
+   457→          this.mode = 'insert';
+   458→          this.cursorPosition = 0;
+   459→          this.normalBuffer = '';
+   460→          return { mode: 'insert', key, action: 'insert_start', description: 'Insert at start of line' };
+   461→        case 'v':
+   462→          this.mode = 'visual';
+   463→          this.visualStart = this.cursorPosition;
+   464→          this.normalBuffer = '';
+   465→          return { mode: 'visual', key, action: 'switch_mode', description: 'Enter visual mode' };
+   466→        case ':':
+   467→          this.mode = 'command';
+   468→          this.commandBuffer = '';
+   469→          this.normalBuffer = '';
+   470→          return { mode: 'command', key, action: 'switch_mode', description: 'Enter command mode' };
+   471→        case 'h':
+   472→          this.cursorPosition = Math.max(0, this.cursorPosition - 1);
+   473→          this.normalBuffer = '';
+   474→          return { mode: 'normal', key, action: 'cursor_left', description: 'Move cursor left' };
+   475→        case 'l':
+   476→          this.cursorPosition = Math.min(this.lineBuffer.length, this.cursorPosition + 1);
+   477→          this.normalBuffer = '';
+   478→          return { mode: 'normal', key, action: 'cursor_right', description: 'Move cursor right' };
+   479→        case 'j':
+   480→          this.normalBuffer = '';
+   481→          return { mode: 'normal', key, action: 'history_next', description: 'Next history entry' };
+   482→        case 'k':
+   483→          this.normalBuffer = '';
+   484→          return { mode: 'normal', key, action: 'history_prev', description: 'Previous history entry' };
+   485→        case '0':
+   486→          if (this.repeatCount === 0) {
+   487→            this.cursorPosition = 0;
+   488→            this.normalBuffer = '';
+   489→            return { mode: 'normal', key, action: 'cursor_start', description: 'Move to start of line' };
+   490→          }
+   491→          break;
+   492→        case '$':
+   493→          this.cursorPosition = this.lineBuffer.length;
+   494→          this.normalBuffer = '';
+   495→          return { mode: 'normal', key, action: 'cursor_end', description: 'Move to end of line' };
+   496→        case 'w':
+   497→          this.moveWordForward();
+   498→          this.normalBuffer = '';
+   499→          return { mode: 'normal', key, action: 'word_forward', description: 'Move to next word' };
+   500→        case 'b':
+   501→          this.moveWordBackward();
+   502→          this.normalBuffer = '';
+   503→          return { mode: 'normal', key, action: 'word_backward', description: 'Move to previous word' };
+   504→        case 'x':
+   505→          this.deleteCharAtCursor();
+   506→          this.normalBuffer = '';
+   507→          return { mode: 'normal', key, action: 'delete_char', description: 'Delete character under cursor' };
+   508→        case 'p':
+   509→          this.pasteAfter();
+   510→          this.normalBuffer = '';
+   511→          return { mode: 'normal', key, action: 'paste_after', description: 'Paste after cursor' };
+   512→        case 'P':
+   513→          this.pasteBefore();
+   514→          this.normalBuffer = '';
+   515→          return { mode: 'normal', key, action: 'paste_before', description: 'Paste before cursor' };
+   516→        case 'u':
+   517→          this.normalBuffer = '';
+   518→          return { mode: 'normal', key, action: 'undo', description: 'Undo' };
+   519→        case 'r':
+   520→          // Waiting for next key (replace char)
+   521→          return { mode: 'normal', key, action: 'waiting', description: 'Waiting for replace target' };
+   522→        case 'o':
+   523→          this.mode = 'insert';
+   524→          this.lineBuffer = '';
+   525→          this.cursorPosition = 0;
+   526→          this.normalBuffer = '';
+   527→          return { mode: 'insert', key, action: 'open_line_below', description: 'Open new line below' };
+   528→        case 'O':
+   529→          this.mode = 'insert';
+   530→          this.lineBuffer = '';
+   531→          this.cursorPosition = 0;
+   532→          this.normalBuffer = '';
+   533→          return { mode: 'insert', key, action: 'open_line_above', description: 'Open new line above' };
+   534→      }
+   535→    }
+   536→
+   537→    // Two-character commands
+   538→    if (this.normalBuffer.length === 2) {
+   539→      const cmd = this.normalBuffer;
+   540→      this.normalBuffer = '';
+   541→
+   542→      switch (cmd) {
+   543→        case 'dd':
+   544→          this.setRegister('', this.lineBuffer, 'line');
+   545→          this.lineBuffer = '';
+   546→          this.cursorPosition = 0;
+   547→          this.repeatCount = 0;
+   548→          return { mode: 'normal', key: cmd, action: 'delete_line', description: 'Delete entire line' };
+   549→        case 'yy':
+   550→          this.setRegister('', this.lineBuffer, 'line');
+   551→          this.repeatCount = 0;
+   552→          return { mode: 'normal', key: cmd, action: 'yank_line', description: 'Yank (copy) line' };
+   553→        case 'dw':
+   554→          this.deleteWordForward();
+   555→          this.repeatCount = 0;
+   556→          return { mode: 'normal', key: cmd, action: 'delete_word', description: 'Delete word' };
+   557→        case 'yw':
+   558→          this.yankWordForward();
+   559→          this.repeatCount = 0;
+   560→          return { mode: 'normal', key: cmd, action: 'yank_word', description: 'Yank word' };
+   561→        case 'cc':
+   562→          this.setRegister('', this.lineBuffer, 'line');
+   563→          this.lineBuffer = '';
+   564→          this.cursorPosition = 0;
+   565→          this.mode = 'insert';
+   566→          this.repeatCount = 0;
+   567→          return { mode: 'insert', key: cmd, action: 'change_line', description: 'Change entire line' };
+   568→        case 'cw':
+   569→          this.changeWordForward();
+   570→          this.mode = 'insert';
+   571→          this.repeatCount = 0;
+   572→          return { mode: 'insert', key: cmd, action: 'change_word', description: 'Change word' };
+   573→        default:
+   574→          // Handle replace char (r followed by char)
+   575→          if (cmd[0] === 'r' && cmd.length === 2) {
+   576→            this.replaceCharAtCursor(cmd[1]);
+   577→            this.repeatCount = 0;
+   578→            return { mode: 'normal', key: cmd, action: 'replace_char', description: `Replace char with '${cmd[1]}'` };
+   579→          }
+   580→          if (this.config.bellOnError) {
+   581→            return { mode: 'normal', key: cmd, action: 'bell', description: `Unknown command: ${cmd}` };
+   582→          }
+   583→          return { mode: 'normal', key: cmd, action: 'no_op', description: `Unknown command: ${cmd}` };
+   584→      }
+   585→    }
+   586→
+   587→    return { mode: 'normal', key, action: 'waiting', description: 'Waiting for next key' };
+   588→  }
+   589→
+   590→  private handleInsertKey(key: string): VimKeyAction {
+   591→    // In insert mode, most keys are passed through to readline
+   592→    // We only intercept special keys
+   593→    if (key === '\x1b' || key === 'Escape') {
+   594→      return this.handleEscape();
+   595→    }
+   596→    // Ctrl+C in insert mode goes to normal mode
+   597→    if (key === '\x03') {
+   598→      this.mode = 'normal';
+   599→      return { mode: 'normal', key, action: 'switch_mode', description: 'Ctrl+C: switch to normal mode' };
+   600→    }
+   601→    // Pass through to readline
+   602→    return { mode: 'insert', key, action: 'passthrough', description: 'Insert mode passthrough' };
+   603→  }
+   604→
+   605→  private handleVisualKey(key: string): VimKeyAction {
+   606→    switch (key) {
+   607→      case '\x1b':
+   608→      case 'Escape':
+   609→        this.mode = 'normal';
+   610→        return { mode: 'normal', key, action: 'switch_mode', description: 'Exit visual mode' };
+   611→      case 'h':
+   612→        this.cursorPosition = Math.max(0, this.cursorPosition - 1);
+   613→        return { mode: 'visual', key, action: 'cursor_left', description: 'Move selection left' };
+   614→      case 'l':
+   615→        this.cursorPosition = Math.min(this.lineBuffer.length, this.cursorPosition + 1);
+   616→        return { mode: 'visual', key, action: 'cursor_right', description: 'Move selection right' };
+   617→      case 'y':
+   618→        this.yankVisualSelection();
+   619→        this.mode = 'normal';
+   620→        return { mode: 'normal', key, action: 'yank_selection', description: 'Yank visual selection' };
+   621→      case 'd':
+   622→      case 'x':
+   623→        this.deleteVisualSelection();
+   624→        this.mode = 'normal';
+   625→        return { mode: 'normal', key, action: 'delete_selection', description: 'Delete visual selection' };
+   626→      default:
+   627→        return { mode: 'visual', key, action: 'no_op', description: `Unknown visual key: ${key}` };
+   628→    }
+   629→  }
+   630→
+   631→  private handleCommandKey(key: string): VimKeyAction {
+   632→    // Enter executes command
+   633→    if (key === '\r' || key === '\n') {
+   634→      const cmd = this.commandBuffer;
+   635→      this.commandBuffer = '';
+   636→      this.mode = 'normal';
+   637→      this.executeCommand(cmd);
+   638→      return { mode: 'normal', key, action: 'execute_command', description: `Execute: :${cmd}` };
+   639→    }
+   640→
+   641→    // Backspace
+   642→    if (key === '\x7f' || key === 'Backspace') {
+   643→      this.commandBuffer = this.commandBuffer.slice(0, -1);
+   644→      if (this.commandBuffer === '') {
+   645→        this.mode = 'normal';
+   646→        return { mode: 'normal', key, action: 'switch_mode', description: 'Cancel command' };
+   647→      }
+   648→      return { mode: 'command', key, action: 'backspace', description: 'Command backspace' };
+   649→    }
+   650→
+   651→    // Escape cancels
+   652→    if (key === '\x1b' || key === 'Escape') {
+   653→      this.commandBuffer = '';
+   654→      this.mode = 'normal';
+   655→      return { mode: 'normal', key, action: 'switch_mode', description: 'Cancel command' };
+   656→    }
+   657→
+   658→    // Up/Down for command history
+   659→    if (key === '\x1b[A' || key === 'ArrowUp') {
+   660→      if (this.commandHistory.length > 0) {
+   661→        this.commandHistoryIndex = Math.min(this.commandHistoryIndex + 1, this.commandHistory.length - 1);
+   662→        this.commandBuffer = this.commandHistory[this.commandHistory.length - 1 - this.commandHistoryIndex];
+   663→      }
+   664→      return { mode: 'command', key, action: 'history_prev', description: 'Previous command' };
+   665→    }
+   666→    if (key === '\x1b[B' || key === 'ArrowDown') {
+   667→      this.commandHistoryIndex = Math.max(this.commandHistoryIndex - 1, -1);
+   668→      if (this.commandHistoryIndex === -1) {
+   669→        this.commandBuffer = '';
+   670→      } else {
+   671→        this.commandBuffer = this.commandHistory[this.commandHistory.length - 1 - this.commandHistoryIndex];
+   672→      }
+   673→      return { mode: 'command', key, action: 'history_next', description: 'Next command' };
+   674→    }
+   675→
+   676→    // Regular character
+   677→    if (key.length === 1 && key.charCodeAt(0) >= 32) {
+   678→      this.commandBuffer += key;
+   679→      return { mode: 'command', key, action: 'type', description: `Command: :${this.commandBuffer}` };
+   680→    }
+   681→
+   682→    return { mode: 'command', key, action: 'no_op', description: 'Ignored key in command mode' };
+   683→  }
+   684→
+   685→  // ----------------------------------------------------------
+   686→  // Private text manipulation helpers
+   687→  // ----------------------------------------------------------
+   688→
+   689→  private moveWordForward(): void {
+   690→    const text = this.lineBuffer;
+   691→    let pos = this.cursorPosition;
+   692→    // Skip current word
+   693→    while (pos < text.length && /\w/.test(text[pos])) pos++;
+   694→    // Skip whitespace
+   695→    while (pos < text.length && /\s/.test(text[pos])) pos++;
+   696→    this.cursorPosition = pos;
+   697→  }
+   698→
+   699→  private moveWordBackward(): void {
+   700→    const text = this.lineBuffer;
+   701→    let pos = this.cursorPosition - 1;
+   702→    // Skip whitespace
+   703→    while (pos > 0 && /\s/.test(text[pos])) pos--;
+   704→    // Skip current word
+   705→    while (pos > 0 && /\w/.test(text[pos - 1])) pos--;
+   706→    this.cursorPosition = Math.max(0, pos);
+   707→  }
+   708→
+   709→  private deleteCharAtCursor(): void {
+   710→    if (this.cursorPosition < this.lineBuffer.length) {
+   711→      const deleted = this.lineBuffer[this.cursorPosition];
+   712→      this.lineBuffer = this.lineBuffer.slice(0, this.cursorPosition) + this.lineBuffer.slice(this.cursorPosition + 1);
+   713→      this.setRegister('', deleted, 'char');
+   714→    }
+   715→  }
+   716→
+   717→  private replaceCharAtCursor(char: string): void {
+   718→    if (this.cursorPosition < this.lineBuffer.length) {
+   719→      this.lineBuffer = this.lineBuffer.slice(0, this.cursorPosition) + char + this.lineBuffer.slice(this.cursorPosition + 1);
+   720→    }
+   721→  }
+   722→
+   723→  private deleteWordForward(): void {
+   724→    const start = this.cursorPosition;
+   725→    const text = this.lineBuffer;
+   726→    let end = start;
+   727→    while (end < text.length && /\w/.test(text[end])) end++;
+   728→    while (end < text.length && /\s/.test(text[end])) end++;
+   729→    const deleted = text.slice(start, end);
+   730→    this.setRegister('', deleted, 'char');
+   731→    this.lineBuffer = text.slice(0, start) + text.slice(end);
+   732→  }
+   733→
+   734→  private yankWordForward(): void {
+   735→    const start = this.cursorPosition;
+   736→    const text = this.lineBuffer;
+   737→    let end = start;
+   738→    while (end < text.length && /\w/.test(text[end])) end++;
+   739→    const yanked = text.slice(start, end);
+   740→    this.setRegister('', yanked, 'char');
+   741→  }
+   742→
+   743→  private changeWordForward(): void {
+   744→    const start = this.cursorPosition;
+   745→    const text = this.lineBuffer;
+   746→    let end = start;
+   747→    while (end < text.length && /\w/.test(text[end])) end++;
+   748→    const deleted = text.slice(start, end);
+   749→    this.setRegister('', deleted, 'char');
+   750→    this.lineBuffer = text.slice(0, start) + text.slice(end);
+   751→    this.cursorPosition = start;
+   752→  }
+   753→
+   754→  private pasteAfter(): void {
+   755→    const reg = this.registers.get('');
+   756→    if (!reg) return;
+   757→    if (reg.type === 'line') {
+   758→      this.lineBuffer += reg.content;
+   759→      this.cursorPosition = this.lineBuffer.length;
+   760→    } else {
+   761→      const pos = this.cursorPosition + 1;
+   762→      this.lineBuffer = this.lineBuffer.slice(0, pos) + reg.content + this.lineBuffer.slice(pos);
+   763→      this.cursorPosition = pos + reg.content.length;
+   764→    }
+   765→  }
+   766→
+   767→  private pasteBefore(): void {
+   768→    const reg = this.registers.get('');
+   769→    if (!reg) return;
+   770→    if (reg.type === 'line') {
+   771→      this.lineBuffer = reg.content + this.lineBuffer;
+   772→      this.cursorPosition = 0;
+   773→    } else {
+   774→      this.lineBuffer = this.lineBuffer.slice(0, this.cursorPosition) + reg.content + this.lineBuffer.slice(this.cursorPosition);
+   775→      this.cursorPosition += reg.content.length;
+   776→    }
+   777→  }
+   778→
+   779→  private yankVisualSelection(): void {
+   780→    const start = Math.min(this.visualStart, this.cursorPosition);
+   781→    const end = Math.max(this.visualStart, this.cursorPosition);
+   782→    const yanked = this.lineBuffer.slice(start, end);
+   783→    this.setRegister('', yanked, 'char');
+   784→  }
+   785→
+   786→  private deleteVisualSelection(): void {
+   787→    const start = Math.min(this.visualStart, this.cursorPosition);
+   788→    const end = Math.max(this.visualStart, this.cursorPosition);
+   789→    const deleted = this.lineBuffer.slice(start, end);
+   790→    this.setRegister('', deleted, 'char');
+   791→    this.lineBuffer = this.lineBuffer.slice(0, start) + this.lineBuffer.slice(end);
+   792→    this.cursorPosition = start;
+   793→  }
+   794→
+   795→  private handleSetCommand(args: string): void {
+   796→    const parts = args.trim().split(/\s+/);
+   797→    if (parts.length === 0) return;
+   798→
+   799→    switch (parts[0]) {
+   800→      case 'number':
+   801→      case 'nu':
+   802→        this.config.showModeIndicator = true;
+   803→        console.log(chalk.gray('Mode indicator enabled.'));
+   804→        break;
+   805→      case 'nonumber':
+   806→      case 'nonu':
+   807→        this.config.showModeIndicator = false;
+   808→        console.log(chalk.gray('Mode indicator disabled.'));
+   809→        break;
+   810→      case 'bell':
+   811→        this.config.bellOnError = true;
+   812→        console.log(chalk.gray('Bell on error enabled.'));
+   813→        break;
+   814→      case 'nobell':
+   815→        this.config.bellOnError = false;
+   816→        console.log(chalk.gray('Bell on error disabled.'));
+   817→        break;
+   818→      default:
+   819→        console.log(chalk.yellow(`Unknown option: ${parts[0]}`));
+   820→    }
+   821→    this.saveConfig();
+   822→  }
+   823→
+   824→  private printCommandHistory(): void {
+   825→    console.log('');
+   826→    console.log(chalk.bold('--- Command History ---'));
+   827→    for (let i = this.commandHistory.length - 1; i >= Math.max(0, this.commandHistory.length - 20); i--) {
+   828→      console.log(`  :${this.commandHistory[i]}`);
+   829→    }
+   830→    if (this.commandHistory.length === 0) {
+   831→      console.log(chalk.gray('  (no commands in history)'));
+   832→    }
+   833→    console.log('');
+   834→  }
+   835→
+   836→  private saveConfig(): void {
+   837→    try {
+   838→      const dir = join(VIM_CONFIG_PATH, '..');
+   839→      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+   840→      writeFileSync(VIM_CONFIG_PATH, JSON.stringify(this.config, null, 2), 'utf-8');
+   841→    } catch { /* Silently fail */ }
+   842→  }
+   843→
+   844→  private loadConfig(): void {
+   845→    try {
+   846→      if (existsSync(VIM_CONFIG_PATH)) {
+   847→        const raw = readFileSync(VIM_CONFIG_PATH, 'utf-8');
+   848→        const saved = JSON.parse(raw) as Partial<VimModeConfig>;
+   849→        this.config = { ...this.config, ...saved };
+   850→      }
+   851→    } catch { /* Silently fail */ }
+   852→  }
+   853→}
+   854→

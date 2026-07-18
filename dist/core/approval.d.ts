@@ -1,3 +1,4 @@
+import { Interface as ReadLineInterface } from 'readline';
 export type PermissionMode = 'manual' | 'auto' | 'plan' | 'yolo';
 export interface ApprovalResult {
     approved: boolean;
@@ -39,6 +40,7 @@ export declare class ApprovalSystem {
     private persistDecisions;
     private consecutiveAutoApproves;
     private rl;
+    private mainRl;
     private stats;
     private pendingBatch;
     private batchTimer;
@@ -65,6 +67,11 @@ export declare class ApprovalSystem {
     private isWhitelisted;
     private getPattern;
     private getAlwaysKey;
+    /**
+     * Set the main readline interface from index.ts
+     * This prevents creating a second readline on the same stdin
+     */
+    setMainReadline(rl: ReadLineInterface): void;
     private readline;
     close(): void;
     addAutoApprove(toolName: string): void;

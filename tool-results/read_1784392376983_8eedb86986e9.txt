@@ -1,0 +1,795 @@
+     1→// ============================================================
+     2→// NeuroCLI - Interactive Terminal UX (GAP-38)
+     3→// OSC 52 Clipboard, Embedded Interactive Commands, Split Pane
+     4→// TUI, Terminal-native Syntax Highlighting, Inline Diffs,
+     5→// Progress Indicators — using only Node.js built-ins + chalk.
+     6→// ============================================================
+     7→
+     8→import { spawn } from 'child_process';
+     9→import chalk from 'chalk';
+    10→
+    11→// ---- Exported Interfaces ----
+    12→
+    13→export interface TerminalCapabilities {
+    14→  osc52: boolean;
+    15→  trueColor: boolean;
+    16→  unicode: boolean;
+    17→  iterm2: boolean;
+    18→  kitty: boolean;
+    19→  sixel: boolean;
+    20→  title: boolean;
+    21→  hyperlinks: boolean;
+    22→}
+    23→
+    24→export interface TerminalSize {
+    25→  rows: number;
+    26→  cols: number;
+    27→}
+    28→
+    29→export interface SplitPane {
+    30→  id: string;
+    31→  label: string;
+    32→  content: string[];
+    33→  width: number;   // character width
+    34→  height: number;  // character height
+    35→  scrollOffset: number;
+    36→}
+    37→
+    38→export interface SplitPaneLayout {
+    39→  panes: SplitPane[];
+    40→  gap: number;
+    41→  borderStyle: 'single' | 'double' | 'round' | 'none';
+    42→}
+    43→
+    44→export interface ProgressBarOptions {
+    45→  total: number;
+    46→  current: number;
+    47→  width?: number;
+    48→  label?: string;
+    49→  completeChar?: string;
+    50→  incompleteChar?: string;
+    51→  showPercent?: boolean;
+    52→  showETA?: boolean;
+    53→  startTime?: number;
+    54→}
+    55→
+    56→export interface SpinnerOptions {
+    57→  frames?: string[];
+    58→  interval?: number;
+    59→  label?: string;
+    60→  color?: 'cyan' | 'green' | 'yellow' | 'red' | 'magenta' | 'blue';
+    61→}
+    62→
+    63→// ---- Constants ----
+    64→
+    65→const TUI_COMMANDS = new Set([
+    66→  'vim', 'vi', 'nvim', 'nano', 'emacs',
+    67→  'top', 'htop', 'btop', 'btm',
+    68→  'less', 'more',
+    69→  'tmux', 'screen',
+    70→  'mc', 'ranger',
+    71→  'tig', 'lazygit',
+    72→  'watch',
+    73→]);
+    74→
+    75→const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    76→
+    77→const BORDER_CHARS = {
+    78→  single: { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' },
+    79→  double: { tl: '╔', tr: '╗', bl: '╚', br: '╝', h: '═', v: '║' },
+    80→  round:  { tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '─', v: '│' },
+    81→  none:   { tl: ' ', tr: ' ', bl: ' ', br: ' ', h: ' ', v: ' ' },
+    82→};
+    83→
+    84→// ---- Syntax Highlighting Token Maps ----
+    85→
+    86→const KEYWORDS: Record<string, Set<string>> = {
+    87→  typescript: new Set([
+    88→    'abstract', 'as', 'assert', 'async', 'await', 'break', 'case', 'catch',
+    89→    'class', 'const', 'constructor', 'continue', 'debugger', 'default',
+    90→    'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally',
+    91→    'for', 'from', 'function', 'if', 'implements', 'import', 'in',
+    92→    'instanceof', 'interface', 'let', 'new', 'null', 'of', 'package',
+    93→    'private', 'protected', 'public', 'readonly', 'return', 'static',
+    94→    'super', 'switch', 'this', 'throw', 'true', 'try', 'type', 'typeof',
+    95→    'undefined', 'unique', 'unknown', 'var', 'void', 'while', 'with', 'yield',
+    96→  ]),
+    97→  javascript: new Set([
+    98→    'abstract', 'async', 'await', 'break', 'case', 'catch', 'class', 'const',
+    99→    'continue', 'debugger', 'default', 'delete', 'do', 'else', 'export',
+   100→    'extends', 'false', 'finally', 'for', 'from', 'function', 'if',
+   101→    'implements', 'import', 'in', 'instanceof', 'let', 'new', 'null', 'of',
+   102→    'package', 'private', 'protected', 'public', 'return', 'static', 'super',
+   103→    'switch', 'this', 'throw', 'true', 'try', 'typeof', 'undefined', 'var',
+   104→    'void', 'while', 'with', 'yield',
+   105→  ]),
+   106→  python: new Set([
+   107→    'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue',
+   108→    'def', 'del', 'elif', 'else', 'except', 'False', 'finally', 'for',
+   109→    'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'None',
+   110→    'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'True', 'try',
+   111→    'while', 'with', 'yield',
+   112→  ]),
+   113→  rust: new Set([
+   114→    'as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn',
+   115→    'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in',
+   116→    'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return',
+   117→    'self', 'Self', 'static', 'struct', 'super', 'trait', 'true', 'type',
+   118→    'unsafe', 'use', 'where', 'while', 'yield',
+   119→  ]),
+   120→  go: new Set([
+   121→    'break', 'case', 'chan', 'const', 'continue', 'default', 'defer',
+   122→    'else', 'fallthrough', 'for', 'func', 'go', 'goto', 'if', 'import',
+   123→    'interface', 'map', 'package', 'range', 'return', 'select', 'struct',
+   124→    'switch', 'type', 'var',
+   125→  ]),
+   126→  bash: new Set([
+   127→    'if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while',
+   128→    'until', 'do', 'done', 'in', 'function', 'select', 'time', 'coproc',
+   129→    'return', 'exit', 'export', 'local', 'readonly', 'declare', 'typeset',
+   130→    'unset', 'shift', 'source', 'alias', 'bg', 'fg', 'jobs', 'kill',
+   131→    'wait', 'read', 'echo', 'printf', 'set', 'trap', 'true', 'false',
+   132→  ]),
+   133→  sql: new Set([
+   134→    'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET',
+   135→    'DELETE', 'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'JOIN', 'INNER',
+   136→    'LEFT', 'RIGHT', 'OUTER', 'ON', 'AND', 'OR', 'NOT', 'NULL', 'IS',
+   137→    'IN', 'BETWEEN', 'LIKE', 'ORDER', 'BY', 'GROUP', 'HAVING', 'LIMIT',
+   138→    'OFFSET', 'UNION', 'ALL', 'AS', 'DISTINCT', 'COUNT', 'SUM', 'AVG',
+   139→    'MIN', 'MAX', 'EXISTS', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+   140→    'BEGIN', 'COMMIT', 'ROLLBACK', 'GRANT', 'REVOKE', 'PRIMARY', 'KEY',
+   141→    'FOREIGN', 'REFERENCES', 'CONSTRAINT', 'DEFAULT', 'CHECK', 'UNIQUE',
+   142→  ]),
+   143→};
+   144→
+   145→const COMMENT_PATTERNS: Record<string, { single: string; multiStart?: string; multiEnd?: string }> = {
+   146→  typescript: { single: '//', multiStart: '/*', multiEnd: '*/' },
+   147→  javascript: { single: '//', multiStart: '/*', multiEnd: '*/' },
+   148→  python:     { single: '#',  multiStart: '"""', multiEnd: '"""' },
+   149→  rust:       { single: '//', multiStart: '/*', multiEnd: '*/' },
+   150→  go:         { single: '//', multiStart: '/*', multiEnd: '*/' },
+   151→  bash:       { single: '#' },
+   152→  sql:        { single: '--', multiStart: '/*', multiEnd: '*/' },
+   153→};
+   154→
+   155→const STRING_DELIMITERS: Record<string, string[]> = {
+   156→  typescript: ["'", '"', '`'],
+   157→  javascript: ["'", '"', '`'],
+   158→  python:     ["'", '"'],
+   159→  rust:       ['"'],
+   160→  go:         ['"', '`'],
+   161→  bash:       ["'", '"'],
+   162→  sql:        ["'"],
+   163→};
+   164→
+   165→// ============================================================
+   166→// TerminalUX Class
+   167→// ============================================================
+   168→
+   169→export class TerminalUX {
+   170→  private capabilities: TerminalCapabilities;
+   171→  private spinnerInterval: ReturnType<typeof setInterval> | null = null;
+   172→  private spinnerActive = false;
+   173→
+   174→  constructor() {
+   175→    this.capabilities = this.detectCapabilities();
+   176→  }
+   177→
+   178→  // ============================================================
+   179→  // OSC 52 Clipboard
+   180→  // ============================================================
+   181→
+   182→  /**
+   183→   * Copy text to the terminal clipboard using the OSC 52 escape sequence.
+   184→   * Works in remote SSH sessions when the terminal emulator supports it.
+   185→   * Returns true if the sequence was written, false if OSC 52 is unsupported.
+   186→   */
+   187→  copyToClipboard(text: string): boolean {
+   188→    if (!this.capabilities.osc52) {
+   189→      return false;
+   190→    }
+   191→
+   192→    const encoded = Buffer.from(text, 'utf-8').toString('base64');
+   193→    // OSC 52: ESC ] 52 ; c ; <base64-data> BEL
+   194→    const sequence = `\x1b]52;c;${encoded}\x07`;
+   195→
+   196→    try {
+   197→      process.stdout.write(sequence);
+   198→      return true;
+   199→    } catch {
+   200→      return false;
+   201→    }
+   202→  }
+   203→
+   204→  /**
+   205→   * Check whether the current terminal supports OSC 52 clipboard operations.
+   206→   */
+   207→  isOSC52Supported(): boolean {
+   208→    return this.capabilities.osc52;
+   209→  }
+   210→
+   211→  // ============================================================
+   212→  // Embedded Interactive Commands
+   213→  // ============================================================
+   214→
+   215→  /**
+   216→   * Launch an interactive TUI command (e.g. vim, top, htop) and capture its
+   217→   * exit code and any output. The child process inherits stdio so the user
+   218→   * can interact with the TUI directly.
+   219→   */
+   220→  async launchInteractive(
+   221→    command: string,
+   222→    options?: { rows?: number; cols?: number }
+   223→  ): Promise<{ exitCode: number; output: string }> {
+   224→    const parts = this.parseCommand(command);
+   225→    const cmd = parts[0];
+   226→    const args = parts.slice(1);
+   227→
+   228→    const rows = options?.rows ?? process.stdout.rows ?? 24;
+   229→    const cols = options?.cols ?? process.stdout.columns ?? 80;
+   230→
+   231→    // Set terminal size via COLUMNS/LINES env vars for the child
+   232→    const env = {
+   233→      ...process.env,
+   234→      COLUMNS: String(cols),
+   235→      LINES: String(rows),
+   236→      TERM: process.env.TERM || 'xterm-256color',
+   237→    };
+   238→
+   239→    return new Promise((resolve) => {
+   240→      const outputChunks: Buffer[] = [];
+   241→
+   242→      const child = spawn(cmd, args, {
+   243→        stdio: ['pipe', 'pipe', 'pipe'],
+   244→        env,
+   245→        // Provide a pseudo-TTY–like experience by setting COLUMNS/LINES.
+   246→        // In production, node-pty would be used; here we capture output.
+   247→      });
+   248→
+   249→      child.stdout?.on('data', (chunk: Buffer) => {
+   250→        outputChunks.push(chunk);
+   251→      });
+   252→
+   253→      child.stderr?.on('data', (chunk: Buffer) => {
+   254→        outputChunks.push(chunk);
+   255→      });
+   256→
+   257→      child.on('close', (code) => {
+   258→        const output = Buffer.concat(outputChunks).toString('utf-8');
+   259→        resolve({ exitCode: code ?? 0, output });
+   260→      });
+   261→
+   262→      child.on('error', (err) => {
+   263→        resolve({ exitCode: 1, output: err.message });
+   264→      });
+   265→    });
+   266→  }
+   267→
+   268→  /**
+   269→   * Detect whether a command is a known TUI / interactive application.
+   270→   */
+   271→  isTUIApp(command: string): boolean {
+   272→    const base = command.split(/\s+/)[0];
+   273→    const name = base.split('/').pop() ?? base;
+   274→    return TUI_COMMANDS.has(name);
+   275→  }
+   276→
+   277→  // ============================================================
+   278→  // Split Pane TUI
+   279→  // ============================================================
+   280→
+   281→  /**
+   282→   * Render a split-pane layout to a string. Each pane has a label and content
+   283→   * lines, rendered side-by-side with borders.
+   284→   */
+   285→  renderSplitPane(layout: SplitPaneLayout): string {
+   286→    const { panes, gap, borderStyle } = layout;
+   287→    if (panes.length === 0) return '';
+   288→
+   289→    const border = BORDER_CHARS[borderStyle] ?? BORDER_CHARS.single;
+   290→    const totalWidth = process.stdout.columns ?? 80;
+   291→    const totalGapWidth = gap * (panes.length - 1);
+   292→    const availableWidth = totalWidth - totalGapWidth;
+   293→    const paneWidth = Math.floor(availableWidth / panes.length);
+   294→    const contentWidth = Math.max(1, paneWidth - 2); // minus borders
+   295→    const rows = process.stdout.rows ?? 24;
+   296→    const contentHeight = Math.max(1, rows - 2); // minus top/bottom borders
+   297→
+   298→    const renderedPanes: string[][] = [];
+   299→
+   300→    for (const pane of panes) {
+   301→      const lines: string[] = [];
+   302→
+   303→      // Top border with label
+   304→      const labelText = ` ${pane.label} `;
+   305→      const labelPadLeft = Math.max(0, Math.floor((contentWidth - labelText.length) / 2));
+   306→      const labelPadRight = Math.max(0, contentWidth - labelText.length - labelPadLeft);
+   307→      const topLine = border.tl + border.h.repeat(labelPadLeft) + labelText + border.h.repeat(labelPadRight) + border.tr;
+   308→      lines.push(this.truncateToWidth(topLine, paneWidth));
+   309→
+   310→      // Content lines
+   311→      const visibleLines = pane.content.slice(pane.scrollOffset, pane.scrollOffset + contentHeight);
+   312→      for (let i = 0; i < contentHeight; i++) {
+   313→        const line = i < visibleLines.length ? visibleLines[i] : '';
+   314→        const truncated = this.truncateToWidth(line, contentWidth);
+   315→        const padded = truncated.padEnd(contentWidth);
+   316→        lines.push(border.v + padded + border.v);
+   317→      }
+   318→
+   319→      // Bottom border
+   320→      const bottomLine = border.bl + border.h.repeat(contentWidth) + border.br;
+   321→      lines.push(this.truncateToWidth(bottomLine, paneWidth));
+   322→
+   323→      renderedPanes.push(lines);
+   324→    }
+   325→
+   326→    // Combine panes side-by-side
+   327→    const maxLines = Math.max(...renderedPanes.map((p) => p.length));
+   328→    const outputLines: string[] = [];
+   329→
+   330→    for (let row = 0; row < maxLines; row++) {
+   331→      const parts: string[] = [];
+   332→      for (let p = 0; p < renderedPanes.length; p++) {
+   333→        const paneLines = renderedPanes[p];
+   334→        const line = row < paneLines.length ? paneLines[row] : ' '.repeat(paneWidth);
+   335→        parts.push(line);
+   336→        if (p < renderedPanes.length - 1) {
+   337→          parts.push(' '.repeat(gap));
+   338→        }
+   339→      }
+   340→      outputLines.push(parts.join(''));
+   341→    }
+   342→
+   343→    return outputLines.join('\n');
+   344→  }
+   345→
+   346→  // ============================================================
+   347→  // Syntax Highlighting
+   348→  // ============================================================
+   349→
+   350→  /**
+   351→   * Apply chalk-based syntax highlighting to a code string for the given language.
+   352→   * Returns a chalk-colored string suitable for terminal output.
+   353→   */
+   354→  highlight(code: string, language: string): string {
+   355→    const lang = language.toLowerCase();
+   356→    const keywords = KEYWORDS[lang];
+   357→    const commentInfo = COMMENT_PATTERNS[lang];
+   358→    const stringDels = STRING_DELIMITERS[lang] ?? ['"', "'"];
+   359→
+   360→    if (!keywords && !commentInfo) {
+   361→      // No rules for this language — return as-is with minimal styling
+   362→      return chalk.white(code);
+   363→    }
+   364→
+   365→    const lines = code.split('\n');
+   366→    const highlighted: string[] = [];
+   367→
+   368→    for (const line of lines) {
+   369→      highlighted.push(this.highlightLine(line, keywords, commentInfo, stringDels));
+   370→    }
+   371→
+   372→    return highlighted.join('\n');
+   373→  }
+   374→
+   375→  /**
+   376→   * Highlight a unified diff string with color coding.
+   377→   * - Added lines: green
+   378→   * - Removed lines: red
+   379→   * - Header lines (---, +++, @@): cyan
+   380→   * - Context lines: dim gray
+   381→   */
+   382→  highlightDiff(diff: string): string {
+   383→    const lines = diff.split('\n');
+   384→    const result: string[] = [];
+   385→
+   386→    for (const line of lines) {
+   387→      if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) {
+   388→        result.push(chalk.cyan.bold(line));
+   389→      } else if (line.startsWith('+')) {
+   390→        result.push(chalk.green(line));
+   391→      } else if (line.startsWith('-')) {
+   392→        result.push(chalk.red(line));
+   393→      } else if (line.startsWith('diff ') || line.startsWith('index ')) {
+   394→        result.push(chalk.cyan.dim(line));
+   395→      } else {
+   396→        result.push(chalk.gray(line));
+   397→      }
+   398→    }
+   399→
+   400→    return result.join('\n');
+   401→  }
+   402→
+   403→  // ============================================================
+   404→  // Terminal Detection
+   405→  // ============================================================
+   406→
+   407→  /**
+   408→   * Return detected terminal capabilities.
+   409→   */
+   410→  getTerminalCapabilities(): TerminalCapabilities {
+   411→    return { ...this.capabilities };
+   412→  }
+   413→
+   414→  /**
+   415→   * Return the current terminal dimensions.
+   416→   */
+   417→  getTerminalSize(): TerminalSize {
+   418→    return {
+   419→      rows: process.stdout.rows ?? 24,
+   420→      cols: process.stdout.columns ?? 80,
+   421→    };
+   422→  }
+   423→
+   424→  /**
+   425→   * Check whether the terminal supports 24-bit true color.
+   426→   */
+   427→  supportsTrueColor(): boolean {
+   428→    return this.capabilities.trueColor;
+   429→  }
+   430→
+   431→  /**
+   432→   * Check whether the terminal supports Unicode characters (beyond ASCII).
+   433→   */
+   434→  supportsUnicode(): boolean {
+   435→    return this.capabilities.unicode;
+   436→  }
+   437→
+   438→  // ============================================================
+   439→  // Progress Indicators
+   440→  // ============================================================
+   441→
+   442→  /**
+   443→   * Render a progress bar as a string.
+   444→   */
+   445→  renderProgressBar(options: ProgressBarOptions): string {
+   446→    const {
+   447→      total,
+   448→      current,
+   449→      width = 30,
+   450→      label = '',
+   451→      completeChar = '█',
+   452→      incompleteChar = '░',
+   453→      showPercent = true,
+   454→      showETA = false,
+   455→      startTime,
+   456→    } = options;
+   457→
+   458→    const ratio = total > 0 ? Math.min(current / total, 1) : 0;
+   459→    const filled = Math.round(ratio * width);
+   460→    const empty = width - filled;
+   461→
+   462→    const bar = chalk.green(completeChar.repeat(filled)) + chalk.gray(incompleteChar.repeat(empty));
+   463→    const percent = showPercent ? ` ${Math.round(ratio * 100)}%` : '';
+   464→    const count = ` ${current}/${total}`;
+   465→
+   466→    let eta = '';
+   467→    if (showETA && startTime && current > 0 && current < total) {
+   468→      const elapsed = Date.now() - startTime;
+   469→      const perItem = elapsed / current;
+   470→      const remaining = perItem * (total - current);
+   471→      eta = ` ETA: ${this.formatDuration(remaining)}`;
+   472→    }
+   473→
+   474→    const labelStr = label ? chalk.bold(label) + ' ' : '';
+   475→
+   476→    return `${labelStr}${bar}${percent}${count}${eta}`;
+   477→  }
+   478→
+   479→  /**
+   480→   * Start a spinner animation on the terminal.
+   481→   * Returns a stop function.
+   482→   */
+   483→  startSpinner(options?: SpinnerOptions): { stop: (finalMessage?: string) => void } {
+   484→    if (this.spinnerActive) {
+   485→      return { stop: () => {} };
+   486→    }
+   487→
+   488→    const frames = options?.frames ?? SPINNER_FRAMES;
+   489→    const interval = options?.interval ?? 80;
+   490→    const label = options?.label ?? '';
+   491→    const color = options?.color ?? 'cyan';
+   492→    let frameIndex = 0;
+   493→
+   494→    this.spinnerActive = true;
+   495→
+   496→    const colorFn = chalk[color] ?? chalk.cyan;
+   497→
+   498→    this.spinnerInterval = setInterval(() => {
+   499→      const frame = frames[frameIndex % frames.length];
+   500→      process.stdout.write(`\r${colorFn(frame)} ${label}`);
+   501→      frameIndex++;
+   502→    }, interval);
+   503→
+   504→    return {
+   505→      stop: (finalMessage?: string) => {
+   506→        if (this.spinnerInterval) {
+   507→          clearInterval(this.spinnerInterval);
+   508→          this.spinnerInterval = null;
+   509→        }
+   510→        this.spinnerActive = false;
+   511→        // Clear the spinner line
+   512→        process.stdout.write('\r' + ' '.repeat((label.length || 20) + 4) + '\r');
+   513→        if (finalMessage) {
+   514→          process.stdout.write(finalMessage + '\n');
+   515→        }
+   516→      },
+   517→    };
+   518→  }
+   519→
+   520→  /**
+   521→   * Render a multi-step progress indicator (checklist).
+   522→   */
+   523→  renderStepProgress(steps: Array<{ label: string; status: 'pending' | 'running' | 'done' | 'failed' }>): string {
+   524→    const lines: string[] = [];
+   525→    for (const step of steps) {
+   526→      switch (step.status) {
+   527→        case 'done':
+   528→          lines.push(chalk.green('  ✓ ') + chalk.white(step.label));
+   529→          break;
+   530→        case 'running':
+   531→          lines.push(chalk.cyan('  ◉ ') + chalk.cyan(step.label));
+   532→          break;
+   533→        case 'failed':
+   534→          lines.push(chalk.red('  ✗ ') + chalk.red(step.label));
+   535→          break;
+   536→        case 'pending':
+   537→          lines.push(chalk.dim('  ○ ') + chalk.dim(step.label));
+   538→          break;
+   539→      }
+   540→    }
+   541→    return lines.join('\n');
+   542→  }
+   543→
+   544→  // ============================================================
+   545→  // Private Helpers — Capability Detection
+   546→  // ============================================================
+   547→
+   548→  private detectCapabilities(): TerminalCapabilities {
+   549→    const term = (process.env.TERM ?? '').toLowerCase();
+   550→    const termProgram = (process.env.TERM_PROGRAM ?? '').toLowerCase();
+   551→    const colorterm = (process.env.COLORTERM ?? '').toLowerCase();
+   552→    const kittyWindowId = process.env.KITTY_WINDOW_ID;
+   553→    const itermSessionId = process.env.ITERM_SESSION_ID;
+   554→    const wtSession = process.env.WT_SESSION;
+   555→
+   556→    // OSC 52: supported by most modern terminals, but some (like screen) block it.
+   557→    // tmux passes it through if allow-passthrough is on.
+   558→    // We check for known-good environments and default to true for modern terminals.
+   559→    let osc52 = false;
+   560→    if (kittyWindowId) {
+   561→      osc52 = true;
+   562→    } else if (itermSessionId) {
+   563→      osc52 = true;
+   564→    } else if (termProgram.includes('wezterm')) {
+   565→      osc52 = true;
+   566→    } else if (termProgram.includes('alacritty')) {
+   567→      osc52 = true;
+   568→    } else if (termProgram.includes('foot')) {
+   569→      osc52 = true;
+   570→    } else if (wtSession) {
+   571→      osc52 = true; // Windows Terminal
+   572→    } else if (term.includes('xterm') || term.includes('vte') || colorterm.includes('truecolor')) {
+   573→      osc52 = true;
+   574→    }
+   575→
+   576→    // True color: check COLORTERM or known terminals
+   577→    const trueColor = colorterm.includes('truecolor') || colorterm.includes('24bit') ||
+   578→      !!kittyWindowId || !!itermSessionId ||
+   579→      termProgram.includes('wezterm') || termProgram.includes('alacritty') ||
+   580→      termProgram.includes('foot') || !!wtSession;
+   581→
+   582→    // Unicode: most modern terminals support it; assume true except for very old TERM values
+   583→    const unicode = !term.includes('ascii') && !term.includes('dumb');
+   584→
+   585→    // iTerm2 specific
+   586→    const iterm2 = !!itermSessionId || termProgram === 'iterm.app';
+   587→
+   588→    // Kitty specific
+   589→    const kitty = !!kittyWindowId;
+   590→
+   591→    // Sixel graphics: only a few terminals
+   592→    const sixel = termProgram.includes('wezterm') || !!kittyWindowId ||
+   593→      term.includes('sixel');
+   594→
+   595→    // Window title: most xterm-compatible terminals support it
+   596→    const title = term.includes('xterm') || term.includes('screen') || term.includes('tmux') ||
+   597→      !!itermSessionId || !!kittyWindowId || !!wtSession;
+   598→
+   599→    // Hyperlinks (OSC 8): supported by many modern terminals
+   600→    const hyperlinks = !!kittyWindowId || !!itermSessionId ||
+   601→      termProgram.includes('wezterm') || termProgram.includes('alacritty') ||
+   602→      !!wtSession || termProgram.includes('foot');
+   603→
+   604→    return {
+   605→      osc52,
+   606→      trueColor,
+   607→      unicode,
+   608→      iterm2,
+   609→      kitty,
+   610→      sixel,
+   611→      title,
+   612→      hyperlinks,
+   613→    };
+   614→  }
+   615→
+   616→  // ============================================================
+   617→  // Private Helpers — Syntax Highlighting
+   618→  // ============================================================
+   619→
+   620→  private highlightLine(
+   621→    line: string,
+   622→    keywords: Set<string> | undefined,
+   623→    commentInfo: { single: string; multiStart?: string; multiEnd?: string } | undefined,
+   624→    stringDels: string[]
+   625→  ): string {
+   626→    // Simple tokeniser approach: scan character by character to detect
+   627→    // strings, comments, and keywords.
+   628→
+   629→    const result: string[] = [];
+   630→    let i = 0;
+   631→    let inSingleComment = false;
+   632→
+   633→    while (i < line.length) {
+   634→      // ---- Single-line comment ----
+   635→      if (commentInfo && !inSingleComment) {
+   636→        const single = commentInfo.single;
+   637→        if (line.substring(i, i + single.length) === single) {
+   638→          // Rest of line is a comment
+   639→          result.push(chalk.gray(line.substring(i)));
+   640→          inSingleComment = true;
+   641→          break;
+   642→        }
+   643→      }
+   644→
+   645→      // ---- String literals ----
+   646→      if (!inSingleComment) {
+   647→        let matchedDelim: string | null = null;
+   648→        for (const delim of stringDels) {
+   649→          if (line[i] === delim[0]) {
+   650→            // Check full delimiter (e.g. """ for python)
+   651→            if (line.substring(i, i + delim.length) === delim) {
+   652→              matchedDelim = delim;
+   653→              break;
+   654→            }
+   655→          }
+   656→        }
+   657→
+   658→        if (matchedDelim) {
+   659→          const start = i;
+   660→          i += matchedDelim.length;
+   661→          // Find closing delimiter
+   662→          while (i < line.length) {
+   663→            if (line[i] === '\\' && i + 1 < line.length) {
+   664→              i += 2; // skip escape
+   665→              continue;
+   666→            }
+   667→            if (line.substring(i, i + matchedDelim.length) === matchedDelim) {
+   668→              i += matchedDelim.length;
+   669→              break;
+   670→            }
+   671→            i++;
+   672→          }
+   673→          result.push(chalk.yellow(line.substring(start, i)));
+   674→          continue;
+   675→        }
+   676→      }
+   677→
+   678→      // ---- Numbers ----
+   679→      if (!inSingleComment && /[0-9]/.test(line[i])) {
+   680→        const start = i;
+   681→        while (i < line.length && /[0-9.xXa-fA-F_]/.test(line[i])) {
+   682→          i++;
+   683→        }
+   684→        result.push(chalk.magenta(line.substring(start, i)));
+   685→        continue;
+   686→      }
+   687→
+   688→      // ---- Identifiers / keywords ----
+   689→      if (!inSingleComment && /[a-zA-Z_$@]/.test(line[i])) {
+   690→        const start = i;
+   691→        while (i < line.length && /[a-zA-Z0-9_$]/.test(line[i])) {
+   692→          i++;
+   693→        }
+   694→        const word = line.substring(start, i);
+   695→
+   696→        if (keywords?.has(word)) {
+   697→          result.push(chalk.blue.bold(word));
+   698→        } else if (word === 'true' || word === 'false' || word === 'null' || word === 'True' || word === 'False' || word === 'None') {
+   699→          result.push(chalk.magenta(word));
+   700→        } else if (word.startsWith('@') || word.startsWith('$')) {
+   701→          result.push(chalk.cyan(word));
+   702→        } else {
+   703→          result.push(chalk.white(word));
+   704→        }
+   705→        continue;
+   706→      }
+   707→
+   708→      // ---- Operators / punctuation ----
+   709→      if (!inSingleComment && /[=+\-*/<>!&|^~%?:]/.test(line[i])) {
+   710→        result.push(chalk.red(line[i]));
+   711→        i++;
+   712→        continue;
+   713→      }
+   714→
+   715→      // ---- Everything else (whitespace, brackets, etc.) ----
+   716→      result.push(line[i]);
+   717→      i++;
+   718→    }
+   719→
+   720→    return result.join('');
+   721→  }
+   722→
+   723→  // ============================================================
+   724→  // Private Helpers — General Utilities
+   725→  // ============================================================
+   726→
+   727→  private parseCommand(command: string): string[] {
+   728→    // Simple shell-like command parser that respects basic quoting
+   729→    const parts: string[] = [];
+   730→    let current = '';
+   731→    let inSingle = false;
+   732→    let inDouble = false;
+   733→
+   734→    for (let i = 0; i < command.length; i++) {
+   735→      const ch = command[i];
+   736→      if (ch === "'" && !inDouble) {
+   737→        inSingle = !inSingle;
+   738→      } else if (ch === '"' && !inSingle) {
+   739→        inDouble = !inDouble;
+   740→      } else if (ch === ' ' && !inSingle && !inDouble) {
+   741→        if (current.length > 0) {
+   742→          parts.push(current);
+   743→          current = '';
+   744→        }
+   745→      } else {
+   746→        current += ch;
+   747→      }
+   748→    }
+   749→
+   750→    if (current.length > 0) {
+   751→      parts.push(current);
+   752→    }
+   753→
+   754→    return parts;
+   755→  }
+   756→
+   757→  private truncateToWidth(str: string, maxWidth: number): string {
+   758→    // Strip ANSI escape codes for width calculation
+   759→    const stripped = str.replace(/\x1b\[[0-9;]*m/g, '');
+   760→    if (stripped.length <= maxWidth) return str;
+   761→
+   762→    // Truncate visible characters while preserving ANSI codes
+   763→    let visibleLen = 0;
+   764→    let result = '';
+   765→    let i = 0;
+   766→    while (i < str.length && visibleLen < maxWidth) {
+   767→      if (str[i] === '\x1b') {
+   768→        // Consume the full escape sequence
+   769→        const seqStart = i;
+   770→        i++;
+   771→        while (i < str.length && str[i] !== 'm') i++;
+   772→        if (i < str.length) i++;
+   773→        result += str.substring(seqStart, i);
+   774→      } else {
+   775→        result += str[i];
+   776→        visibleLen++;
+   777→        i++;
+   778→      }
+   779→    }
+   780→
+   781→    return result;
+   782→  }
+   783→
+   784→  private formatDuration(ms: number): string {
+   785→    const seconds = Math.floor(ms / 1000);
+   786→    if (seconds < 60) return `${seconds}s`;
+   787→    const minutes = Math.floor(seconds / 60);
+   788→    const remainingSeconds = seconds % 60;
+   789→    if (minutes < 60) return `${minutes}m${remainingSeconds}s`;
+   790→    const hours = Math.floor(minutes / 60);
+   791→    const remainingMinutes = minutes % 60;
+   792→    return `${hours}h${remainingMinutes}m`;
+   793→  }
+   794→}
+   795→
