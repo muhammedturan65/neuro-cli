@@ -439,27 +439,35 @@ export class ApprovalSystem {
   private readline(prompt: string): Promise<string> {
     // Pause the main readline to prevent it from also reading stdin input
     // This is the root cause of double character input (YY instead of Y)
-    const mainInputStream = (this.mainRl as any)?.input;
-    const wasMainPaused = mainInputStream?.isPaused?.();
-    if (this.mainRl && mainInputStream && mainInputStream.isPaused()) {
-      // Already paused, skip
-    } else if (this.mainRl) {
-      this.mainRl.pause();
+    if (this.mainRl) {
+      const mainInputStream = (this.mainRl as any)?.input;
+      if (mainInputStream && !mainInputStream.isPaused()) {
+        this.mainRl.pause();
+      }
     }
 
     return new Promise((resolve) => {
-      // Reuse the main readline if available, otherwise create a temporary one
-      const rl = this.mainRl || this.rl || createInterface({ input: process.stdin, output: process.stdout });
-      if (!this.rl && !this.mainRl) this.rl = rl;
-
-      rl.question(prompt, (answer) => {
-        // Resume the main readline after getting the answer
-        if (this.mainRl) {
-          this.mainRl.resume();
-          this.mainRl.prompt();
-        }
-        resolve(answer);
-      });
+      // Use the main readline's question method directly - it handles pause/resume internally
+      if (this.mainRl) {
+        this.mainRl.question(prompt, (answer) => {
+          // Resume the main readline after getting the answer
+          if (this.mainRl) {
+            this.mainRl.resume();
+            this.mainRl.prompt();
+          }
+          resolve(answer);
+        });
+      } else if (this.rl) {
+        this.rl.question(prompt, (answer) => {
+          resolve(answer);
+        });
+      } else {
+        const tempRl = createInterface({ input: process.stdin, output: process.stdout });
+        this.rl = tempRl;
+        tempRl.question(prompt, (answer) => {
+          resolve(answer);
+        });
+      }
     });
   }
 

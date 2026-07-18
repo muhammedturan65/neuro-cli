@@ -1,0 +1,252 @@
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/common/Device.d.ts:21: * const iPhone = KnownDevices['iPhone 15 Pro'];
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/common/Device.d.ts:33:export declare const KnownDevices: Readonly<Record<"Blackberry PlayBook" | "Blackberry PlayBook landscape" | "BlackBerry Z30" | "BlackBerry Z30 landscape" | "Galaxy Note 3" | "Galaxy Note 3 landscape" | "Galaxy Note II" | "Galaxy Note II landscape" | "Galaxy S III" | "Galaxy S III landscape" | "Galaxy S5" | "Galaxy S5 landscape" | "Galaxy S8" | "Galaxy S8 landscape" | "Galaxy S9+" | "Galaxy S9+ landscape" | "Galaxy Tab S4" | "Galaxy Tab S4 landscape" | "iPad" | "iPad landscape" | "iPad (gen 6)" | "iPad (gen 6) landscape" | "iPad (gen 7)" | "iPad (gen 7) landscape" | "iPad Mini" | "iPad Mini landscape" | "iPad Pro" | "iPad Pro landscape" | "iPad Pro 11" | "iPad Pro 11 landscape" | "iPhone 4" | "iPhone 4 landscape" | "iPhone 5" | "iPhone 5 landscape" | "iPhone 6" | "iPhone 6 landscape" | "iPhone 6 Plus" | "iPhone 6 Plus landscape" | "iPhone 7" | "iPhone 7 landscape" | "iPhone 7 Plus" | "iPhone 7 Plus landscape" | "iPhone 8" | "iPhone 8 landscape" | "iPhone 8 Plus" | "iPhone 8 Plus landscape" | "iPhone SE" | "iPhone SE landscape" | "iPhone X" | "iPhone X landscape" | "iPhone XR" | "iPhone XR landscape" | "iPhone 11" | "iPhone 11 landscape" | "iPhone 11 Pro" | "iPhone 11 Pro landscape" | "iPhone 11 Pro Max" | "iPhone 11 Pro Max landscape" | "iPhone 12" | "iPhone 12 landscape" | "iPhone 12 Pro" | "iPhone 12 Pro landscape" | "iPhone 12 Pro Max" | "iPhone 12 Pro Max landscape" | "iPhone 12 Mini" | "iPhone 12 Mini landscape" | "iPhone 13" | "iPhone 13 landscape" | "iPhone 13 Pro" | "iPhone 13 Pro landscape" | "iPhone 13 Pro Max" | "iPhone 13 Pro Max landscape" | "iPhone 13 Mini" | "iPhone 13 Mini landscape" | "iPhone 14" | "iPhone 14 landscape" | "iPhone 14 Plus" | "iPhone 14 Plus landscape" | "iPhone 14 Pro" | "iPhone 14 Pro landscape" | "iPhone 14 Pro Max" | "iPhone 14 Pro Max landscape" | "iPhone 15" | "iPhone 15 landscape" | "iPhone 15 Plus" | "iPhone 15 Plus landscape" | "iPhone 15 Pro" | "iPhone 15 Pro landscape" | "iPhone 15 Pro Max" | "iPhone 15 Pro Max landscape" | "JioPhone 2" | "JioPhone 2 landscape" | "Kindle Fire HDX" | "Kindle Fire HDX landscape" | "LG Optimus L70" | "LG Optimus L70 landscape" | "Microsoft Lumia 550" | "Microsoft Lumia 950" | "Microsoft Lumia 950 landscape" | "Nexus 10" | "Nexus 10 landscape" | "Nexus 4" | "Nexus 4 landscape" | "Nexus 5" | "Nexus 5 landscape" | "Nexus 5X" | "Nexus 5X landscape" | "Nexus 6" | "Nexus 6 landscape" | "Nexus 6P" | "Nexus 6P landscape" | "Nexus 7" | "Nexus 7 landscape" | "Nokia Lumia 520" | "Nokia Lumia 520 landscape" | "Nokia N9" | "Nokia N9 landscape" | "Pixel 2" | "Pixel 2 landscape" | "Pixel 2 XL" | "Pixel 2 XL landscape" | "Pixel 3" | "Pixel 3 landscape" | "Pixel 4" | "Pixel 4 landscape" | "Pixel 4a (5G)" | "Pixel 4a (5G) landscape" | "Pixel 5" | "Pixel 5 landscape" | "Moto G4" | "Moto G4 landscape", Device>>;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/api/Page.d.ts:1626:     * const iPhone = KnownDevices['iPhone 15 Pro'];
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/es5-iife/puppeteer-core-browser.d.ts:4809: * const iPhone = KnownDevices['iPhone 15 Pro'];
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/es5-iife/puppeteer-core-browser.d.ts:4905:    | 'iPhone 15'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/es5-iife/puppeteer-core-browser.d.ts:4906:    | 'iPhone 15 landscape'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/es5-iife/puppeteer-core-browser.d.ts:4907:    | 'iPhone 15 Plus'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/es5-iife/puppeteer-core-browser.d.ts:4908:    | 'iPhone 15 Plus landscape'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/es5-iife/puppeteer-core-browser.d.ts:4909:    | 'iPhone 15 Pro'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/es5-iife/puppeteer-core-browser.d.ts:4910:    | 'iPhone 15 Pro landscape'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/es5-iife/puppeteer-core-browser.d.ts:4911:    | 'iPhone 15 Pro Max'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/es5-iife/puppeteer-core-browser.d.ts:4912:    | 'iPhone 15 Pro Max landscape'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/es5-iife/puppeteer-core-browser.d.ts:6738:   * const iPhone = KnownDevices['iPhone 15 Pro'];
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/types.d.ts:4809: * const iPhone = KnownDevices['iPhone 15 Pro'];
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/types.d.ts:4905:    | 'iPhone 15'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/types.d.ts:4906:    | 'iPhone 15 landscape'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/types.d.ts:4907:    | 'iPhone 15 Plus'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/types.d.ts:4908:    | 'iPhone 15 Plus landscape'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/types.d.ts:4909:    | 'iPhone 15 Pro'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/types.d.ts:4910:    | 'iPhone 15 Pro landscape'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/types.d.ts:4911:    | 'iPhone 15 Pro Max'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/types.d.ts:4912:    | 'iPhone 15 Pro Max landscape'
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/types.d.ts:6738:   * const iPhone = KnownDevices['iPhone 15 Pro'];
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:281:      'Mozilla/5.0 (iPad; CPU OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:294:      'Mozilla/5.0 (iPad; CPU OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:307:      'Mozilla/5.0 (iPad; CPU OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:320:      'Mozilla/5.0 (iPad; CPU OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:385:      'Mozilla/5.0 (iPad; CPU OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:398:      'Mozilla/5.0 (iPad; CPU OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:671:      'Mozilla/5.0 (iPhone; CPU iPhone OS 12_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.0 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:684:      'Mozilla/5.0 (iPhone; CPU iPhone OS 12_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.0 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:697:      'Mozilla/5.0 (iPhone; CPU iPhone OS 13_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:710:      'Mozilla/5.0 (iPhone; CPU iPhone OS 13_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:723:      'Mozilla/5.0 (iPhone; CPU iPhone OS 13_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:736:      'Mozilla/5.0 (iPhone; CPU iPhone OS 13_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:749:      'Mozilla/5.0 (iPhone; CPU iPhone OS 13_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:762:      'Mozilla/5.0 (iPhone; CPU iPhone OS 13_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:775:      'Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:788:      'Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:801:      'Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:814:      'Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:827:      'Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:840:      'Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:853:      'Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:866:      'Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:879:      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:892:      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:905:      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:918:      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:931:      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:944:      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:957:      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:970:      'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:983:      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:996:      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1009:      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1022:      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1035:      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1048:      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1061:      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1074:      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1085:    name: 'iPhone 15',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1087:      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1098:    name: 'iPhone 15 landscape',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1100:      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1111:    name: 'iPhone 15 Plus',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1113:      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1124:    name: 'iPhone 15 Plus landscape',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1126:      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1137:    name: 'iPhone 15 Pro',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1139:      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1150:    name: 'iPhone 15 Pro landscape',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1152:      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1163:    name: 'iPhone 15 Pro Max',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1165:      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1176:    name: 'iPhone 15 Pro Max landscape',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1178:      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1191:      'Mozilla/5.0 (Mobile; LYF/F300B/LYF-F300B-001-01-15-130718-i;Android; rv:48.0) Gecko/48.0 Firefox/48.0 KAIOS/2.5',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1204:      'Mozilla/5.0 (Mobile; LYF/F300B/LYF-F300B-001-01-15-130718-i;Android; rv:48.0) Gecko/48.0 Firefox/48.0 KAIOS/2.5',
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/common/Device.ts:1739: * const iPhone = KnownDevices['iPhone 15 Pro'];
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/api/Page.ts:2092:   * const iPhone = KnownDevices['iPhone 15 Pro'];
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/cytoscape/index.d.ts:4798:            "pie-15-background-color": PropertyValueNode<Colour>;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/cytoscape/index.d.ts:4802:            "pie-15-background-size": PropertyValueNode<number>;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/cytoscape/index.d.ts:4806:            "pie-15-background-opacity": PropertyValueNode<number>;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/cytoscape/index.d.ts:5022:            "stripe-15-background-color": PropertyValueNode<Colour>;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/cytoscape/index.d.ts:5026:            "stripe-15-background-size": PropertyValueNode<number>;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/cytoscape/index.d.ts:5030:            "stripe-15-background-opacity": PropertyValueNode<number>;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/cytoscape/index.d.ts:5289:             * A series of values that provide the radii of the different points positioned by segment-distances and segment-weights, e.g. 15 0 5.
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/khroma/src/color/hex.ts:35:    const mask = isFullLength ? 255 : 15;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:79:c-10,12,-21,25,-33,39s-32,39,-32,39c-6,-5.3,-15,-14,-27,-26s25,-30,25,-30
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:90:c0,-2,-10.7,14.3,-32,49c-4.7,7.3,-9.8,15.7,-15.5,25c-5.7,9.3,-9.8,16,-12.5,20
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:201: 157.5 9.3 8 15.3 12.3 18 13h6c12-.7 18-4 18-10 0-2-1.7-7-5-15-23.3-46-52-87
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:211:-17.3-128.2-47.8-180.5-91.5-52.3-43.7-93.8-96.2-124.5-157.5-9.3-8-15.3-12.3-18
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:212:-13h-6c-12 .7-18 4-18 10 0 2 1.7 7 5 15 23.3 46 52 87 86 123l10 10H0v40h399782
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:218: 135-202 4-14.7 6-23 6-25 0-7.3-7-11-21-11-8 0-13.2.8-15.5 2.5-2.3 1.7-4.2 5.8
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:227:-45 179-50h399577v120H403c-43.3 7-81 15-113 26-100.7 33-179.7 91-237 174-2.7
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:246:-3.3 10.2-9.5 20.5-18.5s17.8-15.8 22.5-20.5c50.7-52 88-110.3 112-175 4-11.3 5
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:247:-18.3 3-21-1.3-4-7.3-6-18-6-8 0-13 .7-15 2s-4.7 6.7-8 16c-42 98.7-107.3 174.7
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:251: 20.5-18.5s17.8-15.8 22.5-20.5c50.7-52 88-110.3 112-175 4-11.3 5-18.3 3-21-1.3
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:252:-4-7.3-6-18-6-8 0-13 .7-15 2s-4.7 6.7-8 16c-42 98.7-107.3 174.7-196 228-6.7 4.7
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:269:-68.7 15.7-86 37-10 12-15 25.3-15 40 0 22.7 9.8 40.7 29.5 54 19.7 13.3 43.5 21
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:322: 11 8 0 13.2-.8 15.5-2.5 2.3-1.7 4.2-5.5 5.5-11.5 2-13.3 5.7-27 11-41 14.7-44.7
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:323: 39-84.5 73-119.5s73.7-60.2 119-75.5c6-2 9-5.7 9-11s-3-9-9-11c-45.3-15.3-85
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:325:-12.5-2.3-1.7-7.5-2.5-15.5-2.5-14 0-21 3.7-21 11 0 2 2 10.3 6 25 20.7 83.3 67
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:334: 28.7-117 45-179 50H-300V214h399897c43.3-7 81-15 113-26 100.7-33 179.7-91 237
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:344:-3.7-15.3-11-18-92.7-56.7-159-133.7-199-231-3.3-9.3-6-14.7-8-16-2-1.3-7-2-15-2
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:345:-10.7 0-16.7 2-18 6-2 2.7-1 9.7 3 21 15.3 42 36.7 81.8 64 119.5 27.3 37.7 58
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:348:    rightharpoonplus: `M0 241v40h399993c4.7-4.7 7-9.3 7-14 0-9.3-3.7-15.3-11
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:349:-18-92.7-56.7-159-133.7-199-231-3.3-9.3-6-14.7-8-16-2-1.3-7-2-15-2-10.7 0-16.7
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:350: 2-18 6-2 2.7-1 9.7 3 21 15.3 42 36.7 81.8 64 119.5 27.3 37.7 58 69.2 92 94.5z
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:353:    rightharpoondown: `M399747 511c0 7.3 6.7 11 20 11 8 0 13-.8 15-2.5s4.7-6.8
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:354: 8-15.5c40-94 99.3-166.3 178-217 13.3-8 20.3-12.3 21-13 5.3-3.3 8.5-5.8 9.5
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:359: 15-2.5s4.7-6.8 8-15.5c40-94 99.3-166.3 178-217 13.3-8 20.3-12.3 21-13 5.3-3.3
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:364:    righthook: `M399859 241c-764 0 0 0 0 0 40-3.3 68.7-15.7 86-37 10-12 15-25.3
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:365: 15-40 0-22.7-9.8-40.7-29.5-54-19.7-13.3-43.5-21-71.5-23-17.3-1.3-26-8-26-20 0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:375:    rightToFrom: `M400000 167c-70.7-42-118-97.7-142-167h-23c-15.3 0-23 .3-23
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:389:c-68-40-115.7-95.7-143-167h-22c-15.3 0-23 .3-23 1 0 1.3 5.3 13.7 16 37 18 35.3
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:410:-11-10.37L.15 138c-1-7 3-12 10-13l19.2-6.4C378.4 40.7 634.3 0 804.3 0c337 0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:412: 16.595-6.697 17.492l-21.052 7.31c-367.9 98.146-609.15 122.696-778.15 122.696
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:416:-11-10.035L.15 143c-1-7 3-12 10-13l22-6.7C381.2 35 637.15 0 807.15 0c337 0 409
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:426:-7 1c-4.667 0-9.167-1.833-13.5-5.5S337 184 337 178c0-12.667 15.667-32.333 47-59
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:436:-11 10h-1L1182 67 15 220h-1c-6 0-10-4-11-10l-2-23c-1-6 4-11 10-11z`,
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:439:-11 10h-1L1182 67 15 280h-1c-6 0-10-4-11-10l-2-23c-1-6 4-11 10-11z`,
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:442:-11 10h-1L1182 67 15 340h-1c-6 0-10-4-11-10l-2-23c-1-6 4-11 10-11z`,
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:462:c4 -14.7 6 -23 6 -25c0 -7.3 -7 -11 -21 -11c-8 0 -13.2 0.8 -15.5 2.5
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:473:13.2-.8 15.5-2.5 2.3-1.7 4.2-5.5 5.5-11.5 2-13.3 5.7-27 11-41 14.7-44.7 39
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:474:-84.5 73-119.5s73.7-60.2 119-75.5c6-2 9-5.7 9-11s-3-9-9-11c-45.3-15.3-85-40.5
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:476:-12.5-2.3-1.7-7.5-2.5-15.5-2.5-14 0-21 3.7-21 11 0 2 2 10.3 6 25 20.7 83.3 67
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:489:c4.7,-4.7,7,-9.3,7,-14c0,-9.3,-3.7,-15.3,-11,-18c-92.7,-56.7,-159,-133.7,-199,
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:490:-231c-3.3,-9.3,-6,-14.7,-8,-16c-2,-1.3,-7,-2,-15,-2c-10.7,0,-16.7,2,-18,6
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:501:c4.7,-4.7,7,-9.3,7,-14c0,-9.3,-3.7,-15.3,-11,-18c-92.7,-56.7,-159,-133.7,-199,
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:502:-231c-3.3,-9.3,-6,-14.7,-8,-16c-2,-1.3,-7,-2,-15,-2c-10.7,0,-16.7,2,-18,6
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:516:            return `M145 15 v585 v${midHeight} v585 c2.667,10,9.667,15,21,15
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:517:c10,0,16.667,-5,20,-15 v-585 v${-midHeight} v-585 c-2.667,-10,-9.667,-15,-21,-15
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:518:c-10,0,-16.667,5,-20,15z M188 15 H145 v585 v${midHeight} v585 h43z`;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:520:            return `M145 15 v585 v${midHeight} v585 c2.667,10,9.667,15,21,15
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:521:c10,0,16.667,-5,20,-15 v-585 v${-midHeight} v-585 c-2.667,-10,-9.667,-15,-21,-15
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:522:c-10,0,-16.667,5,-20,15z M188 15 H145 v585 v${midHeight} v585 h43z
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:523:M367 15 v585 v${midHeight} v585 c2.667,10,9.667,15,21,15
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:524:c10,0,16.667,-5,20,-15 v-585 v${-midHeight} v-585 c-2.667,-10,-9.667,-15,-21,-15
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:525:c-10,0,-16.667,5,-20,15z M410 15 H367 v585 v${midHeight} v585 h43z`;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:540:c-5.3,5.3,-10.3,11,-15,17c-242.7,294.7,-395.3,682,-458,1162c-21.3,163.3,-33.3,349,
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:542:949.7,470,1265c4.7,6,9.7,11.7,15,17c0.7,0.7,7,1,19,1c0,0,18,0,18,0c4,-4,6,-7,6,-9
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:546:-210,155.3,-396.3,270,-559c6.7,-9.3,10,-15.3,10,-18z`;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:553:c0,7.3,5.7,11,17,11c0,0,11,0,11,0c9.3,0,14.3,-0.3,15,-1c5.3,-5.3,10.3,-11,15,-17
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/svgGeometry.ts:556:-470,-1265c-4.7,-6,-9.7,-11.7,-15,-17c-0.7,-0.7,-6.7,-1,-18,-1z`;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/functions/genfrac.ts:15:    // Fractions are handled in the TeXbook on pages 444-445, rules 15(a-e).
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/macros.ts:94:    "d": 13, "D": 13, "e": 14, "E": 14, "f": 15, "F": 15,
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/ParseError.ts:51:            if (start > 15) {
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/ParseError.ts:52:                left = "…" + input.slice(start - 15, start);
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/ParseError.ts:57:            if (end + 15 < input.length) {
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/katex/src/ParseError.ts:58:                right = input.slice(end, end + 15) + "…";
+/home/z/node_modules/sharp/lib/index.d.ts:1408:        /** Maximum encoding error, between 0 (highest quality) and 15 (lowest quality) (optional, default 1.0) */
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/tailwindcss/dist/default-theme.d.ts:647:        '15%': string;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/tailwindcss/dist/default-theme.d.ts:821:        15: string;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/tailwindcss/dist/default-theme.d.ts:923:        15: string;
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/dns.d.ts:655:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/test.d.ts:735:                 * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/test.d.ts:750:                 * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/test.d.ts:949:             * @since v22.2.0, v20.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/web-globals/domexception.d.ts:22:    readonly INVALID_ACCESS_ERR: 15;
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/web-globals/domexception.d.ts:56:            readonly INVALID_ACCESS_ERR: 15;
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/module.d.ts:244:         * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/http.d.ts:680:         * @since v19.6.0, v18.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/dns/promises.d.ts:318:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/readline.d.ts:213:         * @since v22.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@internationalized/date/dist/types/src/calendars/IslamicCalendar.d.ts:27: * Thursday, July 15 622 CE (Julian) as the epoch. Each year has 12 months, with either 354 or 355
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/console.d.ts:26: * //     at [eval]:5:15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/console.d.ts:382:         * //     at [eval]:5:15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/fs.d.ts:186:     * @since v19.6.0, v18.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/fs.d.ts:1164:     * @since v19.6.0, v18.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/fs.d.ts:1213:     * @since v19.6.0, v18.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/fs.d.ts:3826:     * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/fs.d.ts:3863:     * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/sqlite.d.ts:334:         * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/sqlite.d.ts:397:         * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/sqlite.d.ts:592:         * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/fs/promises.d.ts:837:     * @since v19.6.0, v18.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/util.d.ts:179:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/os.d.ts:57:     * Returns an array containing the 1, 5, and 15 minute load averages.
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/stream.d.ts:878:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/crypto.d.ts:656:         * @since v17.7.0, v16.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/process.d.ts:1376:                 *   unicode: '15.0',
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/process.d.ts:1481:                 * @since v0.1.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/process.d.ts:1583:                 * @since v19.6.0, v18.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/process.d.ts:1968:                 * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/tls.d.ts:1214:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/v8.d.ts:187:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/v8.d.ts:434:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/v8.d.ts:590:     * @since v19.6.0, v18.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/v8.d.ts:595:         * @since v19.6.0, v18.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/v8.d.ts:674:         * @since v19.6.0, v18.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@internationalized/date/src/calendars/IslamicCalendar.ts:20:const ASTRONOMICAL_EPOC = 1948439; // CE 622 July 15 Thursday (Julian calendar)
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@internationalized/date/src/calendars/IslamicCalendar.ts:109: * Thursday, July 15 622 CE (Julian) as the epoch. Each year has 12 months, with either 354 or 355
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/zlib.d.ts:274:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/zlib.d.ts:282:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/zlib.d.ts:352:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/zlib.d.ts:357:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/zlib.d.ts:480:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/zlib.d.ts:490:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/zlib.d.ts:495:     * @since v22.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/zlib.d.ts:505:     * @since v22.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@internationalized/date/src/calendars/EthiopicCalendar.ts:202:    // BCE 9999-01-01 coptic is BC 9716-06-15 gregorian.
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:68:     * @since v19.6.0, v18.15.0
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:769:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:790:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:873:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:899:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:921:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:942:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:1175:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:1190:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:1207:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:1222:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:1582:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:1602:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:1622:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:1642:             * @since v0.11.15
+/home/z/node_modules/pptxgenjs/node_modules/@types/node/buffer.d.ts:1796:             * // Prints: 15 (97 is the decimal ASCII value for 'a')
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@iconify/utils/lib/emoji/parse.d.ts:28: * Test data should be fetched from 'https://unicode.org/Public/emoji/15.1/emoji-test.txt'
+/home/z/node_modules/pdf-lib/cjs/api/PDFPage.d.ts:144:     * page.setMediaBox(15, 5, mediaBox.width - 50, mediaBox.height - 100)
+/home/z/node_modules/pdf-lib/cjs/api/PDFPage.d.ts:162:     * page.setCropBox(15, 5, cropBox.width - 50, cropBox.height - 100)
+/home/z/node_modules/pdf-lib/cjs/api/PDFPage.d.ts:180:     * page.setBleedBox(15, 5, bleedBox.width - 50, bleedBox.height - 100)
+/home/z/node_modules/pdf-lib/cjs/api/PDFPage.d.ts:198:     * page.setTrimBox(15, 5, trimBox.width - 50, trimBox.height - 100)
+/home/z/node_modules/pdf-lib/cjs/api/PDFPage.d.ts:216:     * page.setArtBox(15, 5, artBox.width - 50, artBox.height - 100)
+/home/z/node_modules/pdf-lib/cjs/api/PDFPage.d.ts:506:     * page.setFontColor(cmyk(0.4, 0.7, 0.39, 0.15))
+/home/z/node_modules/pdf-lib/cjs/api/PDFPage.d.ts:820:     *   rotate: degrees(-15),
+/home/z/node_modules/pdf-lib/cjs/api/PDFPage.d.ts:840:     *   rotate: degrees(-15),
+/home/z/node_modules/pdf-lib/cjs/api/form/PDFTextField.d.ts:204:     * textField.setFontSize(15.7)
+/home/z/node_modules/pdf-lib/cjs/api/form/PDFOptionList.d.ts:159:     * optionList.setFontSize(15.7)
+/home/z/node_modules/pdf-lib/cjs/api/form/PDFDropdown.d.ts:159:     * dropdown.setFontSize(15.7)
+/home/z/node_modules/pdf-lib/cjs/api/form/PDFButton.d.ts:56:     * button.setFontSize(15.7)
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/points-on-curve/src/index.ts:126:export function pointsOnBezierCurves(points: Point[], tolerance: number = 0.15, distance?: number): Point[] {
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:1049:     * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:1168:     * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:1317:         * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:1428:    const Snippet: 15;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:1441:declare type CompletionItemKind = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:1447: * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:2725:     * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:2873: * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:2896: * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:3194:     * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:5220:     * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:7741:declare type MinusOne<N extends number> = [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20][N];
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:8734:     * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:8746:     * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:9933:     * @since 3.15.0
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:10333:    const String: 15;
+/home/z/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/dist/src/index.d.ts:10347:declare type SymbolKind = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26;
+
+[Showing results with pagination = limit: 250]

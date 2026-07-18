@@ -23,7 +23,7 @@ export const DEFAULT_CONFIG: NeuroConfig = {
       temperature: 0.7,
       maxTokens: 4096,
       tools: ['read_file', 'search_files', 'list_directory'],
-      maxIterations: 3,
+      maxIterations: 10,
     },
     coder: {
       name: 'Coder',
@@ -33,7 +33,7 @@ export const DEFAULT_CONFIG: NeuroConfig = {
       temperature: 0.4,
       maxTokens: 16384,
       tools: ['read_file', 'write_file', 'edit_file', 'search_files', 'list_directory', 'run_command', 'apply_diff'],
-      maxIterations: 15,
+      maxIterations: 50,
     },
     reviewer: {
       name: 'Reviewer',
@@ -43,7 +43,7 @@ export const DEFAULT_CONFIG: NeuroConfig = {
       temperature: 0.3,
       maxTokens: 8192,
       tools: ['read_file', 'search_files', 'list_directory'],
-      maxIterations: 5,
+      maxIterations: 15,
     },
     researcher: {
       name: 'Researcher',
@@ -53,7 +53,7 @@ export const DEFAULT_CONFIG: NeuroConfig = {
       temperature: 0.5,
       maxTokens: 8192,
       tools: ['read_file', 'search_files', 'list_directory', 'web_search', 'web_fetch'],
-      maxIterations: 8,
+      maxIterations: 20,
     },
     tester: {
       name: 'Tester',
@@ -63,7 +63,7 @@ export const DEFAULT_CONFIG: NeuroConfig = {
       temperature: 0.3,
       maxTokens: 8192,
       tools: ['read_file', 'write_file', 'search_files', 'run_command', 'list_directory'],
-      maxIterations: 10,
+      maxIterations: 25,
     },
     debugger: {
       name: 'Debugger',
@@ -73,7 +73,7 @@ export const DEFAULT_CONFIG: NeuroConfig = {
       temperature: 0.2,
       maxTokens: 8192,
       tools: ['read_file', 'edit_file', 'search_files', 'run_command', 'list_directory', 'apply_diff'],
-      maxIterations: 12,
+      maxIterations: 20,
     },
     architect: {
       name: 'Architect',
@@ -83,7 +83,7 @@ export const DEFAULT_CONFIG: NeuroConfig = {
       temperature: 0.7,
       maxTokens: 8192,
       tools: ['read_file', 'search_files', 'list_directory'],
-      maxIterations: 5,
+      maxIterations: 15,
     },
     devops: {
       name: 'DevOps',
@@ -93,7 +93,7 @@ export const DEFAULT_CONFIG: NeuroConfig = {
       temperature: 0.3,
       maxTokens: 8192,
       tools: ['read_file', 'write_file', 'edit_file', 'run_command', 'search_files', 'list_directory'],
-      maxIterations: 10,
+      maxIterations: 25,
     },
   },
   tools: {

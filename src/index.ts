@@ -20,7 +20,7 @@ import { ShellCompletionGenerator } from './core/shell-completion.js';
 import chalk from 'chalk';
 import { AutoUpdater } from './core/updater.js';
 
-const VERSION = '4.1.3';
+const VERSION = '4.2.0';
 
 // ---- Global Error Handlers (prevent crashes) ----
 process.on('unhandledRejection', (reason) => {
@@ -447,11 +447,6 @@ async function startInteractive(options: any) {
     const input = line.trim();
     if (!input) { rl.prompt(); return; }
 
-    // Prevent input while processing (approval prompt may be active)
-    if (isProcessing) {
-      return;
-    }
-
     // Add to history
     completionEngine.addHistory(input);
 
@@ -858,7 +853,7 @@ async function startInteractive(options: any) {
           break;
 
         case 'doctor':
-          console.log(chalk.bold('\nNeuroCLI v4.1.2 Health Check:\n'));
+          console.log(chalk.bold('\nNeuroCLI v' + VERSION + ' Health Check:\n'));
           console.log(`  API Key: ${config.apiKey ? chalk.green('configured') : chalk.red('MISSING')}`);
           console.log(`  Default Model: ${chalk.cyan(config.defaultModel)} ${MODELS[config.defaultModel] ? chalk.green('valid') : chalk.red('INVALID')}`);
           console.log(`  MCP Servers: ${chalk.cyan(String(engine.mcpClient.listServers().length))}`);
@@ -1041,6 +1036,12 @@ async function startInteractive(options: any) {
     }
 
     // Process message with the engine
+    if (isProcessing) {
+      engine.ui.warning('Still processing previous request. Please wait...');
+      rl.prompt();
+      return;
+    }
+
     try {
       isProcessing = true;
       await engine.processMessage(input, currentMode, currentAgent);
@@ -1070,7 +1071,7 @@ async function startInteractive(options: any) {
 
 function printHelp(engine: NeuroEngine): void {
   const t = engine.ui.theme;
-  console.log(`\n  ${t.bold('NeuroCLI v4.1.2 Commands:')}\n`);
+  console.log(`\n  ${t.bold(`NeuroCLI v${VERSION} Commands:`)}\n`);
   console.log(`  ${t.tool('/help')}            Show this help message`);
   console.log(`  ${t.tool('/model [id]')}      Switch or list models`);
   console.log(`  ${t.tool('/agent [name]')}    Switch or list agents`);

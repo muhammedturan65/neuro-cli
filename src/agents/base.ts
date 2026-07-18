@@ -254,7 +254,7 @@ export class BaseAgent {
 
     if (iteration > maxIter && execution.status === 'running') {
       execution.status = 'completed';
-      execution.result = 'Max iterations reached';
+      execution.result = `Max iterations reached (${maxIter}). The task may not be fully completed. Consider using a higher effort level or switching to /orchestrate mode for complex tasks.`;
     }
 
     execution.endTime = Date.now();

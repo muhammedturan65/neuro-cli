@@ -158,6 +158,10 @@ export declare class NeuroEngine {
      */
     private assessComplexity;
     /**
+     * Select the best agent for a given task category
+     */
+    private selectAgentForCategory;
+    /**
      * Switch the active model
      */
     switchModel(modelId: string): boolean;

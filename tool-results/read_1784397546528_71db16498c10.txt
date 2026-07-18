@@ -1,0 +1,625 @@
+   501→   501→   501→        riskThresholds: {
+   502→   502→   502→          autoApprove: 0.3,
+   503→   503→   503→          askUser: 0.7,
+   504→   504→   504→        },
+   505→   505→   505→        learning: {
+   506→   506→   506→          enabled: false,
+   507→   507→   507→          storagePath: join(homedir(), '.neuro', 'monitor-learning'),
+   508→   508→   508→          minSamples: 10,
+   509→   509→   509→        },
+   510→   510→   510→        escalationRules: [],
+   511→   511→   511→        contextAwareness: {
+   512→   512→   512→          checkGitStatus: true,
+   513→   513→   513→          checkTestCoverage: false,
+   514→   514→   514→          checkProductionFiles: true,
+   515→   515→   515→          protectedPaths: ['prod', 'production', 'main'],
+   516→   516→   516→        },
+   517→   517→   517→      },
+   518→   518→   518→      this.client,
+   519→   519→   519→    );
+   520→   520→   520→
+   521→   521→   521→    // Outcome Grading (rubric-based quality evaluation with revision loops)
+   522→   522→   522→    this.outcomeGrading = new OutcomeGrader(this.client, {
+   523→   523→   523→      defaultEvaluatorModel: config.defaultModel,
+   524→   524→   524→      globalMaxRevisions: 3,
+   525→   525→   525→      rubricsDir: join(homedir(), '.neuro', 'rubrics'),
+   526→   526→   526→      persistHistory: true,
+   527→   527→   527→      historyDir: join(homedir(), '.neuro', 'grading-history'),
+   528→   528→   528→      evaluatorTemperature: 0.3,
+   529→   529→   529→      evaluatorTimeoutMs: 30000,
+   530→   530→   530→    });
+   531→   531→   531→
+   532→   532→   532→    // Observability (OpenTelemetry OTLP JSON export)
+   533→   533→   533→    this.observability = new ObservabilityManager({
+   534→   534→   534→      enabled: false,
+   535→   535→   535→      serviceName: 'neuro-cli',
+   536→   536→   536→      endpoint: 'http://localhost:4318',
+   537→   537→   537→      headers: {},
+   538→   538→   538→      exportInterval: 30000,
+   539→   539→   539→      maxBatchSize: 64,
+   540→   540→   540→      consoleExporter: false,
+   541→   541→   541→      sampleRate: 1.0,
+   542→   542→   542→    });
+   543→   543→   543→
+   544→   544→   544→    // Auto-Compact (model-aware context compaction)
+   545→   545→   545→    this.autoCompact = new AutoCompactManager({
+   546→   546→   546→      enabled: true,
+   547→   547→   547→      warningThreshold: 0.7,
+   548→   548→   548→      compactThreshold: 0.85,
+   549→   549→   549→      emergencyThreshold: 0.95,
+   550→   550→   550→      preserveRecentCount: 5,
+   551→   551→   551→      preserveSystemPrompt: true,
+   552→   552→   552→      compactStrategy: 'summarize',
+   553→   553→   553→      tokenBudget: {
+   554→   554→   554→        systemPrompt: 2048,
+   555→   555→   555→        conversation: 8192,
+   556→   556→   556→        tools: 2048,
+   557→   557→   557→        output: 2048,
+   558→   558→   558→      },
+   559→   559→   559→    });
+   560→   560→   560→
+   561→   561→   561→    // Terminal UX (OSC 52, TUI, syntax highlighting)
+   562→   562→   562→    this.terminalUX = new TerminalUX();
+   563→   563→   563→
+   564→   564→   564→    // Multi-Session (parallel independent sessions)
+   565→   565→   565→    this.multiSession = new MultiSessionManager({
+   566→   566→   566→      maxConcurrent: 10,
+   567→   567→   567→    });
+   568→   568→   568→
+   569→   569→   569→    // Git Worktree (agent-worktree binding)
+   570→   570→   570→    this.gitWorktree = new GitWorktreeManager(process.cwd());
+   571→   571→   571→
+   572→   572→   572→    // Auto-Updater
+   573→   573→   573→    this.updater = new AutoUpdater({
+   574→   574→   574→      currentVersion: '4.1.3',
+   575→   575→   575→      autoCheck: true,
+   576→   576→   576→      autoUpdate: false,
+   577→   577→   577→    });
+   578→   578→   578→
+   579→   579→   579→    // --- End v4.1 ---
+   580→   580→   580→
+   581→   581→   581→    // --- End v4.0 ---
+   582→   582→   582→
+   583→   583→   583→    // --- End P2/P3 ---
+   584→   584→   584→
+   585→   585→   585→    // --- End v3.0 ---
+   586→   586→   586→
+   587→   587→   587→    // Connect MCP servers if configured
+   588→   588→   588→    if (config.mcp.autoConnect) {
+   589→   589→   589→      this.mcpClient.connectAll().then(count => {
+   590→   590→   590→        if (count > 0) this.ui.info(`MCP: ${count} server(s) connected`);
+   591→   591→   591→      }).catch(() => {});
+   592→   592→   592→    }
+   593→   593→   593→
+   594→   594→   594→    // Load plugins
+   595→   595→   595→    this.pluginManager.loadAll().then(count => {
+   596→   596→   596→      if (count > 0) this.ui.info(`Plugins: ${count} loaded`);
+   597→   597→   597→    }).catch(() => {});
+   598→   598→   598→
+   599→   599→   599→    // Register plugin tools with the tool registry
+   600→   600→   600→    this.registerPluginTools();
+   601→   601→   601→
+   602→   602→   602→    // Register custom tools
+   603→   603→   603→    this.registerCustomTools();
+   604→   604→   604→
+   605→   605→   605→    // Initialize agents from config
+   606→   606→   606→    this.initializeAgents();
+   607→   607→   607→
+   608→   608→   608→    // Load custom agents from .neuro/agents/
+   609→   609→   609→    this.loadCustomAgents();
+   610→   610→   610→
+   611→   611→   611→    // Create orchestrator
+   612→   612→   612→    const orchestratorConfig = {
+   613→   613→   613→      name: 'Orchestrator',
+   614→   614→   614→      description: 'Central coordinator that manages sub-agents for complex tasks',
+   615→   615→   615→      systemPrompt: `You are the Orchestrator, the central coordinator of the NeuroCLI multi-agent system. Your job is to analyze tasks and delegate them to the appropriate specialist agents. You ensure tasks are completed efficiently and correctly.
+   616→   616→   616→
+   617→   617→   617→Key responsibilities:
+   618→   618→   618→- Analyze complex tasks and break them into sub-tasks
+   619→   619→   619→- Assign sub-tasks to the most appropriate specialist agent
+   620→   620→   620→- Manage dependencies between sub-tasks
+   621→   621→   621→- Synthesize results from multiple agents
+   622→   622→   622→- Handle errors and re-plan if needed
+   623→   623→   623→
+   624→   624→   624→Always consider the strengths of each agent when delegating:
+   625→   625→   625→- Planner: For task decomposition and architecture decisions
+   626→   626→   626→- Coder: For writing and modifying code
+   627→   627→   627→- Reviewer: For code quality assurance
+   628→   628→   628→- Researcher: For information gathering and documentation
+   629→   629→   629→- Tester: For writing and running tests
+   630→   630→   630→- Debugger: For investigating and fixing bugs
+   631→   631→   631→- Architect: For system design and technology decisions
+   632→   632→   632→- DevOps: For deployment and infrastructure`,
+   633→   633→   633→      model: 'qwen/qwen3-coder:free',
+   634→   634→   634→      temperature: 0.7,
+   635→   635→   635→      maxTokens: 4096,
+   636→   636→   636→      tools: [],
+   637→   637→   637→      maxIterations: 5,
+   638→   638→   638→    };
+   639→   639→   639→
+   640→   640→   640→    this.orchestrator = new Orchestrator(
+   641→   641→   641→      orchestratorConfig,
+   642→   642→   642→      this.client,
+   643→   643→   643→      this.registry,
+   644→   644→   644→      process.cwd(),
+   645→   645→   645→      this.sessionManager.getCurrent()?.id || 'default',
+   646→   646→   646→    );
+   647→   647→   647→
+   648→   648→   648→    // Register all agents with orchestrator
+   649→   649→   649→    for (const [name, agent] of this.agents) {
+   650→   650→   650→      this.orchestrator.registerAgent(agent);
+   651→   651→   651→    }
+   652→   652→   652→  }
+   653→   653→   653→
+   654→   654→   654→  /**
+   655→   655→   655→   * Register plugin tools with the tool registry
+   656→   656→   656→   */
+   657→   657→   657→  private registerPluginTools(): void {
+   658→   658→   658→    const pluginTools = this.pluginManager.getToolDefinitions();
+   659→   659→   659→    for (const toolDef of pluginTools) {
+   660→   660→   660→      this.registry.register({
+   661→   661→   661→        name: toolDef.name,
+   662→   662→   662→        risk: toolDef.risk,
+   663→   663→   663→        execute: async (args, context) => {
+   664→   664→   664→          const result = await this.pluginManager.executeTool(toolDef.name, args, {
+   665→   665→   665→            workingDirectory: context.workingDirectory,
+   666→   666→   666→            sessionId: context.sessionId,
+   667→   667→   667→            agentName: context.agentName,
+   668→   668→   668→            onProgress: context.onProgress || (() => {}),
+   669→   669→   669→            callTool: async (name, callArgs) => {
+   670→   670→   670→              return this.registry.execute(name, callArgs, context);
+   671→   671→   671→            },
+   672→   672→   672→            memory: {
+   673→   673→   673→              get: () => undefined,
+   674→   674→   674→              set: () => {},
+   675→   675→   675→              delete: () => {},
+   676→   676→   676→              list: () => [],
+   677→   677→   677→            },
+   678→   678→   678→          });
+   679→   679→   679→          return result.content;
+   680→   680→   680→        },
+   681→   681→   681→      });
+   682→   682→   682→    }
+   683→   683→   683→  }
+   684→   684→   684→
+   685→   685→   685→  /**
+   686→   686→   686→   * Register custom tools from .neuro/tools/
+   687→   687→   687→   */
+   688→   688→   688→  private registerCustomTools(): void {
+   689→   689→   689→    const customTools = this.customToolLoader.getAll();
+   690→   690→   690→    for (const toolDef of customTools) {
+   691→   691→   691→      const executor = this.customToolLoader.createExecutor(toolDef);
+   692→   692→   692→      this.registry.register({
+   693→   693→   693→        name: `custom_${toolDef.name}`,
+   694→   694→   694→        risk: toolDef.risk || 'medium',
+   695→   695→   695→        execute: async (args) => {
+   696→   696→   696→          try {
+   697→   697→   697→            const result = await executor(args);
+   698→   698→   698→            return typeof result === 'string' ? result : JSON.stringify(result);
+   699→   699→   699→          } catch (error) {
+   700→   700→   700→            return `Custom tool error: ${error instanceof Error ? error.message : String(error)}`;
+   701→   701→   701→          }
+   702→   702→   702→        },
+   703→   703→   703→      });
+   704→   704→   704→    }
+   705→   705→   705→  }
+   706→   706→   706→
+   707→   707→   707→  /**
+   708→   708→   708→   * Load custom agents from .neuro/agents/
+   709→   709→   709→   */
+   710→   710→   710→  private loadCustomAgents(): void {
+   711→   711→   711→    const customAgents = this.customAgentLoader.getAll();
+   712→   712→   712→    const cwd = process.cwd();
+   713→   713→   713→    const sessionId = this.sessionManager.getCurrent()?.id || 'default';
+   714→   714→   714→
+   715→   715→   715→    for (const def of customAgents) {
+   716→   716→   716→      const agentConfig = this.customAgentLoader.toAgentConfig(def, this.config.defaultModel);
+   717→   717→   717→      const agent = new BaseAgent(agentConfig, this.client, this.registry, cwd, sessionId);
+   718→   718→   718→      this.agents.set(def.name, agent);
+   719→   719→   719→
+   720→   720→   720→      // Save to config custom agents
+   721→   721→   721→      if (!this.config.customAgents) this.config.customAgents = {};
+   722→   722→   722→      this.config.customAgents[def.name] = agentConfig;
+   723→   723→   723→    }
+   724→   724→   724→  }
+   725→   725→   725→
+   726→   726→   726→  /**
+   727→   727→   727→   * Initialize all agents from config
+   728→   728→   728→   */
+   729→   729→   729→  private initializeAgents(): void {
+   730→   730→   730→    const sessionId = 'init';
+   731→   731→   731→    const cwd = process.cwd();
+   732→   732→   732→
+   733→   733→   733→    // Built-in agents
+   734→   734→   734→    for (const [key, agentConfig] of Object.entries(this.config.agents)) {
+   735→   735→   735→      const overrideConfig = { ...agentConfig, model: this.config.defaultModel };
+   736→   736→   736→      const agent = new BaseAgent(
+   737→   737→   737→        overrideConfig,
+   738→   738→   738→        this.client,
+   739→   739→   739→        this.registry,
+   740→   740→   740→        cwd,
+   741→   741→   741→        sessionId,
+   742→   742→   742→      );
+   743→   743→   743→      this.agents.set(agentConfig.name, agent);
+   744→   744→   744→    }
+   745→   745→   745→
+   746→   746→   746→    // Custom agents from config
+   747→   747→   747→    for (const [key, agentConfig] of Object.entries(this.config.customAgents || {})) {
+   748→   748→   748→      const overrideConfig = { ...agentConfig, model: this.config.defaultModel, isCustom: true };
+   749→   749→   749→      const agent = new BaseAgent(
+   750→   750→   750→        overrideConfig,
+   751→   751→   751→        this.client,
+   752→   752→   752→        this.registry,
+   753→   753→   753→        cwd,
+   754→   754→   754→        sessionId,
+   755→   755→   755→      );
+   756→   756→   756→      this.agents.set(agentConfig.name, agent);
+   757→   757→   757→    }
+   758→   758→   758→  }
+   759→   759→   759→
+   760→   760→   760→  /**
+   761→   761→   761→   * Process a user message
+   762→   762→   762→   */
+   763→   763→   763→  async processMessage(
+   764→   764→   764→    message: string,
+   765→   765→   765→    mode: 'auto' | 'agent' | 'direct' = 'auto',
+   766→   766→   766→    targetAgent?: string,
+   767→   767→   767→  ): Promise<{ content: string; usage: TokenUsage; execution?: AgentExecution }> {
+   768→   768→   768→    // Check spending limit via spending monitor
+   769→   769→   769→    const limitCheck = this.spendingMonitor.checkLimit();
+   770→   770→   770→    if (!limitCheck.allowed) {
+   771→   771→   771→      this.ui.error(`Spending limit reached (${limitCheck.limitReached}). Use /spending to check or /config to adjust.`);
+   772→   772→   772→      return { content: 'Spending limit reached.', usage: { inputTokens: 0, outputTokens: 0, cost: 0 } };
+   773→   773→   773→    }
+   774→   774→   774→
+   775→   775→   775→    // Auto-activate skills based on prompt
+   776→   776→   776→    const activatedSkills = this.skillSystem.autoActivate(message);
+   777→   777→   777→    if (activatedSkills.length > 0) {
+   778→   778→   778→      for (const skill of activatedSkills) {
+   779→   779→   779→        this.ui.info(`Skill activated: ${skill.skill.name} (${skill.activatedBy})`);
+   780→   780→   780→      }
+   781→   781→   781→    }
+   782→   782→   782→
+   783→   783→   783→    // Model routing (if auto mode)
+   784→   784→   784→    let routeDecision: RoutingDecision | null = null;
+   785→   785→   785→    if (mode === 'auto') {
+   786→   786→   786→      routeDecision = this.modelRouter.route(message);
+   787→   787→   787→      if (routeDecision.model !== this.config.defaultModel) {
+   788→   788→   788→        this.ui.info(`Model router: ${routeDecision.complexity} task -> ${MODELS[routeDecision.model]?.name || routeDecision.model}`);
+   789→   789→   789→      }
+   790→   790→   790→    }
+   791→   791→   791→
+   792→   792→   792→    // Check prompt cache
+   793→   793→   793→    if (this.promptCache && this.config.promptCache.enabled) {
+   794→   794→   794→      const session = this.sessionManager.getCurrent();
+   795→   795→   795→      if (session) {
+   796→   796→   796→        const cached = this.promptCache.get(
+   797→   797→   797→          routeDecision?.model || this.config.defaultModel,
+   798→   798→   798→          session.messages,
+   799→   799→   799→        );
+   800→   800→   800→        if (cached) {
+   801→   801→   801→          this.ui.info('Cache hit - using cached response');
+   802→   802→   802→          return {
+   803→   803→   803→            content: cached.response,
+   804→   804→   804→            usage: { inputTokens: cached.inputTokens, outputTokens: cached.outputTokens, cost: 0 },
+   805→   805→   805→          };
+   806→   806→   806→        }
+   807→   807→   807→      }
+   808→   808→   808→    }
+   809→   809→   809→
+   810→   810→   810→    // Start or get session
+   811→   811→   811→    let session = this.sessionManager.getCurrent();
+   812→   812→   812→    if (!session) {
+   813→   813→   813→      session = this.sessionManager.create(process.cwd(), this.config.defaultModel);
+   814→   814→   814→    }
+   815→   815→   815→
+   816→   816→   816→    // Add user message to session
+   817→   817→   817→    this.sessionManager.addMessage({
+   818→   818→   818→      role: 'user',
+   819→   819→   819→      content: message,
+   820→   820→   820→      timestamp: Date.now(),
+   821→   821→   821→    });
+   822→   822→   822→
+   823→   823→   823→    // Build system prompt additions from skills and styles
+   824→   824→   824→    const skillAdditions = this.skillSystem.getSystemPromptAdditions();
+   825→   825→   825→    const styleAddition = this.styleManager.getSystemPromptAddition();
+   826→   826→   826→    const thinkingAddition = this.extendedThinking.getSystemPromptAddition();
+   827→   827→   827→
+   828→   828→   828→    // Build UI callbacks
+   829→   829→   829→    const callbacks: AgentCallbacks = {
+   830→   830→   830→      onThinking: (thinking) => this.ui.thinking(thinking),
+   831→   831→   831→      onToken: (token) => this.ui.streamingToken(token),
+   832→   832→   832→      onToolCall: (name, args) => {
+   833→   833→   833→        // Check .neuroignore for file paths
+   834→   834→   834→        if (args.path && typeof args.path === 'string' && this.neuroIgnore.isIgnored(args.path)) {
+   835→   835→   835→          this.ui.warning(`Ignored path: ${args.path} (matches .neuroignore rule)`);
+   836→   836→   836→          return;
+   837→   837→   837→        }
+   838→   838→   838→        // Sandbox check before tool execution
+   839→   839→   839→        if (this.sandbox.isEnabled() && !this.checkSandboxForTool(name, args)) {
+   840→   840→   840→          return;
+   841→   841→   841→        }
+   842→   842→   842→        this.ui.toolCall(name, args);
+   843→   843→   843→
+   844→   844→   844→        // Record in undo/redo for file modification tools
+   845→   845→   845→        if (['write_file', 'edit_file', 'apply_diff', 'delete_file'].includes(name)) {
+   846→   846→   846→          // The undo/redo push will happen in the tool execution result handler
+   847→   847→   847→        }
+   848→   848→   848→      },
+   849→   849→   849→      onToolResult: (name, result, isError) => this.ui.toolResult(name, result, isError),
+   850→   850→   850→      onApprovalNeeded: async (name, args, risk) => {
+   851→   851→   851→        return this.handleApproval(name, args, risk as 'low' | 'medium' | 'high');
+   852→   852→   852→      },
+   853→   853→   853→      onIteration: (i, max) => {
+   854→   854→   854→        this.ui.info(`Iteration ${i}/${max}`);
+   855→   855→   855→      },
+   856→   856→   856→    };
+   857→   857→   857→
+   858→   858→   858→    let result;
+   859→   859→   859→    const activeModel = routeDecision?.model || this.config.defaultModel;
+   860→   860→   860→
+   861→   861→   861→    if (mode === 'direct' && targetAgent) {
+   862→   862→   862→      const agent = this.agents.get(targetAgent);
+   863→   863→   863→      if (!agent) {
+   864→   864→   864→        this.ui.error(`Agent not found: ${targetAgent}`);
+   865→   865→   865→        return { content: '', usage: { inputTokens: 0, outputTokens: 0, cost: 0 } };
+   866→   866→   866→      }
+   867→   867→   867→      // Override agent model if defaultModel differs from agent's model
+   868→   868→   868→      const originalModel = agent.configModel;
+   869→   869→   869→      if (this.config.defaultModel !== originalModel) {
+   870→   870→   870→        agent.configModel = this.config.defaultModel;
+   871→   871→   871→      }
+   872→   872→   872→      this.ui.startStreaming();
+   873→   873→   873→      try {
+   874→   874→   874→        result = await agent.run(message, callbacks);
+   875→   875→   875→      } finally {
+   876→   876→   876→        this.ui.endStreaming();
+   877→   877→   877→      }
+   878→   878→   878→      // Restore original model
+   879→   879→   879→      agent.configModel = originalModel;
+   880→   880→   880→    } else if (mode === 'agent') {
+   881→   881→   881→      const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
+   882→   882→   882→      result = {
+   883→   883→   883→        content: orchestrateResult.content,
+   884→   884→   884→        toolCallsMade: 0,
+   885→   885→   885→        iterations: orchestrateResult.execution.iterations,
+   886→   886→   886→        usage: orchestrateResult.totalUsage,
+   887→   887→   887→        execution: orchestrateResult.execution,
+   888→   888→   888→      };
+   889→   889→   889→    } else {
+   890→   890→   890→      const complexity = routeDecision?.complexity || this.assessComplexity(message);
+   891→   891→   891→      if (complexity === 'simple') {
+   892→   892→   892→        const agent = this.agents.get('Coder');
+   893→   893→   893→        if (agent) {
+   894→   894→   894→          this.ui.startStreaming();
+   895→   895→   895→          try {
+   896→   896→   896→            result = await agent.run(message, callbacks);
+   897→   897→   897→          } finally {
+   898→   898→   898→            this.ui.endStreaming();
+   899→   899→   899→          }
+   900→   900→   900→        } else {
+   901→   901→   901→          // Fallback to orchestration instead of crashing
+   902→   902→   902→          this.ui.warning('Coder agent not initialized, using orchestration mode');
+   903→   903→   903→          const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
+   904→   904→   904→          result = {
+   905→   905→   905→            content: orchestrateResult.content,
+   906→   906→   906→            toolCallsMade: 0,
+   907→   907→   907→            iterations: orchestrateResult.execution.iterations,
+   908→   908→   908→            usage: orchestrateResult.totalUsage,
+   909→   909→   909→            execution: orchestrateResult.execution,
+   910→   910→   910→          };
+   911→   911→   911→        }
+   912→   912→   912→      } else {
+   913→   913→   913→        this.ui.thinking('Analyzing task complexity... Using multi-agent orchestration');
+   914→   914→   914→        const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
+   915→   915→   915→        result = {
+   916→   916→   916→          content: orchestrateResult.content,
+   917→   917→   917→          toolCallsMade: 0,
+   918→   918→   918→          iterations: orchestrateResult.execution.iterations,
+   919→   919→   919→          usage: orchestrateResult.totalUsage,
+   920→   920→   920→          execution: orchestrateResult.execution,
+   921→   921→   921→        };
+   922→   922→   922→      }
+   923→   923→   923→    }
+   924→   924→   924→
+   925→   925→   925→    // Parse extended thinking blocks from response
+   926→   926→   926→    const thinkingResult = this.extendedThinking.parseResponse(result.content);
+   927→   927→   927→    if (thinkingResult.hadThinking && this.extendedThinking.isDisplayEnabled()) {
+   928→   928→   928→      // Thinking blocks were already displayed during streaming
+   929→   929→   929→    }
+   930→   930→   930→    // Use cleaned response (without thinking blocks) if thinking is hidden
+   931→   931→   931→    if (thinkingResult.hadThinking && !this.extendedThinking.isDisplayEnabled()) {
+   932→   932→   932→      result.content = thinkingResult.cleanedResponse;
+   933→   933→   933→    }
+   934→   934→   934→
+   935→   935→   935→    // Record spending
+   936→   936→   936→    const spendResult = this.spendingMonitor.record({
+   937→   937→   937→      model: activeModel,
+   938→   938→   938→      inputTokens: result.usage.inputTokens,
+   939→   939→   939→      outputTokens: result.usage.outputTokens,
+   940→   940→   940→      cost: result.usage.cost,
+   941→   941→   941→      sessionId: this.sessionManager.getCurrent()?.id || 'unknown',
+   942→   942→   942→    });
+   943→   943→   943→    if (spendResult.warning) {
+   944→   944→   944→      this.ui.warning(spendResult.warning);
+   945→   945→   945→    }
+   946→   946→   946→    if (!spendResult.allowed) {
+   947→   947→   947→      this.ui.error('Spending limit reached. Operation completed but further requests may be blocked.');
+   948→   948→   948→    }
+   949→   949→   949→
+   950→   950→   950→    // Cache the response if caching is enabled
+   951→   951→   951→    if (this.promptCache && this.config.promptCache.enabled && session) {
+   952→   952→   952→      this.promptCache.set(activeModel, session.messages, result.content, result.usage);
+   953→   953→   953→    }
+   954→   954→   954→
+   955→   955→   955→    // Print usage
+   956→   956→   956→    this.ui.tokenUsage(result.usage, activeModel);
+   957→   957→   957→
+   958→   958→   958→    // Update session
+   959→   959→   959→    this.sessionManager.addMessage({
+   960→   960→   960→      role: 'assistant',
+   961→   961→   961→      content: result.content,
+   962→   962→   962→      timestamp: Date.now(),
+   963→   963→   963→    });
+   964→   964→   964→    this.sessionManager.updateUsage(
+   965→   965→   965→      result.usage.inputTokens,
+   966→   966→   966→      result.usage.outputTokens,
+   967→   967→   967→      result.usage.cost,
+   968→   968→   968→    );
+   969→   969→   969→    this.sessionManager.save();
+   970→   970→   970→
+   971→   971→   971→    return {
+   972→   972→   972→      content: result.content,
+   973→   973→   973→      usage: result.usage,
+   974→   974→   974→      execution: result.execution,
+   975→   975→   975→    };
+   976→   976→   976→  }
+   977→   977→   977→
+   978→   978→   978→  /**
+   979→   979→   979→   * Check sandbox permissions for a tool call
+   980→   980→   980→   */
+   981→   981→   981→  private checkSandboxForTool(toolName: string, args: Record<string, unknown>): boolean {
+   982→   982→   982→    // File operations
+   983→   983→   983→    if (['write_file', 'edit_file', 'apply_diff'].includes(toolName)) {
+   984→   984→   984→      const path = args.path as string;
+   985→   985→   985→      if (path && !this.sandbox.canWrite(path)) {
+   986→   986→   986→        this.ui.warning(`Sandbox: Write access denied for ${path}`);
+   987→   987→   987→        return false;
+   988→   988→   988→      }
+   989→   989→   989→      // Check neuroignore
+   990→   990→   990→      if (path && this.neuroIgnore.isIgnored(path)) {
+   991→   991→   991→        this.ui.warning(`Ignored: ${path} is in .neuroignore`);
+   992→   992→   992→        return false;
+   993→   993→   993→      }
+   994→   994→   994→      // Backup file before modification
+   995→   995→   995→      if (path) this.sandbox.backupFile(path);
+   996→   996→   996→    }
+   997→   997→   997→
+   998→   998→   998→    if (['delete_file'].includes(toolName)) {
+   999→   999→   999→      const path = args.path as string;
+  1000→  1000→  1000→      if (path && !this.sandbox.canDelete(path)) {
+  1001→  1001→  1001→        this.ui.warning(`Sandbox: Delete access denied for ${path}`);
+  1002→  1002→  1002→        return false;
+  1003→  1003→  1003→      }
+  1004→  1004→  1004→      if (path && this.neuroIgnore.isIgnored(path)) {
+  1005→  1005→  1005→        this.ui.warning(`Ignored: ${path} is in .neuroignore`);
+  1006→  1006→  1006→        return false;
+  1007→  1007→  1007→      }
+  1008→  1008→  1008→    }
+  1009→  1009→  1009→
+  1010→  1010→  1010→    if (['read_file', 'search_files', 'list_directory'].includes(toolName)) {
+  1011→  1011→  1011→      const path = (args.path || args.directory) as string;
+  1012→  1012→  1012→      if (path && !this.sandbox.canRead(path)) {
+  1013→  1013→  1013→        this.ui.warning(`Sandbox: Read access denied for ${path}`);
+  1014→  1014→  1014→        return false;
+  1015→  1015→  1015→      }
+  1016→  1016→  1016→      if (path && this.neuroIgnore.isIgnored(path)) {
+  1017→  1017→  1017→        this.ui.warning(`Ignored: ${path} is in .neuroignore`);
+  1018→  1018→  1018→        return false;
+  1019→  1019→  1019→      }
+  1020→  1020→  1020→    }
+  1021→  1021→  1021→
+  1022→  1022→  1022→    // Command execution
+  1023→  1023→  1023→    if (['run_command', 'bash'].includes(toolName)) {
+  1024→  1024→  1024→      const command = args.command as string;
+  1025→  1025→  1025→      if (command && !this.sandbox.canRunCommand(command)) {
+  1026→  1026→  1026→        this.ui.warning('Sandbox: Command execution denied');
+  1027→  1027→  1027→        return false;
+  1028→  1028→  1028→      }
+  1029→  1029→  1029→    }
+  1030→  1030→  1030→
+  1031→  1031→  1031→    // Network access
+  1032→  1032→  1032→    if (['web_search', 'web_fetch'].includes(toolName)) {
+  1033→  1033→  1033→      if (!this.sandbox.canAccessNetwork()) {
+  1034→  1034→  1034→        this.ui.warning('Sandbox: Network access denied');
+  1035→  1035→  1035→        return false;
+  1036→  1036→  1036→      }
+  1037→  1037→  1037→    }
+  1038→  1038→  1038→
+  1039→  1039→  1039→    return true;
+  1040→  1040→  1040→  }
+  1041→  1041→  1041→
+  1042→  1042→  1042→  /**
+  1043→  1043→  1043→   * Handle tool approval using the enhanced ApprovalSystem
+  1044→  1044→  1044→   */
+  1045→  1045→  1045→  private async handleApproval(
+  1046→  1046→  1046→    toolName: string,
+  1047→  1047→  1047→    args: Record<string, unknown>,
+  1048→  1048→  1048→    risk: 'low' | 'medium' | 'high',
+  1049→  1049→  1049→  ): Promise<boolean> {
+  1050→  1050→  1050→    if (this.autoApproveSet.has(toolName)) return true;
+  1051→  1051→  1051→
+  1052→  1052→  1052→    const result = await this.approval.requestApproval(toolName, args, risk);
+  1053→  1053→  1053→    return result.approved;
+  1054→  1054→  1054→  }
+  1055→  1055→  1055→
+  1056→  1056→  1056→  /**
+  1057→  1057→  1057→   * Assess task complexity to decide execution mode
+  1058→  1058→  1058→   * Now delegates to ModelRouter for more sophisticated analysis
+  1059→  1059→  1059→   */
+  1060→  1060→  1060→  private assessComplexity(message: string): 'simple' | 'moderate' | 'complex' {
+  1061→  1061→  1061→    const decision = this.modelRouter.route(message);
+  1062→  1062→  1062→    return decision.complexity;
+  1063→  1063→  1063→  }
+  1064→  1064→  1064→
+  1065→  1065→  1065→  /**
+  1066→  1066→  1066→   * Switch the active model
+  1067→  1067→  1067→   */
+  1068→  1068→  1068→  switchModel(modelId: string): boolean {
+  1069→  1069→  1069→    if (!MODELS[modelId]) {
+  1070→  1070→  1070→      this.ui.error(`Unknown model: ${modelId}`);
+  1071→  1071→  1071→      return false;
+  1072→  1072→  1072→    }
+  1073→  1073→  1073→    this.config.defaultModel = modelId;
+  1074→  1074→  1074→    this.contextManager = new ContextManager(modelId, this.config.context.maxTokens);
+  1075→  1075→  1075→    this.ui.success(`Switched to ${MODELS[modelId].name}`);
+  1076→  1076→  1076→    return true;
+  1077→  1077→  1077→  }
+  1078→  1078→  1078→
+  1079→  1079→  1079→  /**
+  1080→  1080→  1080→   * Get current session stats
+  1081→  1081→  1081→   */
+  1082→  1082→  1082→  getSessionStats(): { inputTokens: number; outputTokens: number; cost: number; messages: number } {
+  1083→  1083→  1083→    const session = this.sessionManager.getCurrent();
+  1084→  1084→  1084→    if (!session) return { inputTokens: 0, outputTokens: 0, cost: 0, messages: 0 };
+  1085→  1085→  1085→    return {
+  1086→  1086→  1086→      inputTokens: session.totalInputTokens,
+  1087→  1087→  1087→      outputTokens: session.totalOutputTokens,
+  1088→  1088→  1088→      cost: session.totalCost,
+  1089→  1089→  1089→      messages: session.messages.length,
+  1090→  1090→  1090→    };
+  1091→  1091→  1091→  }
+  1092→  1092→  1092→
+  1093→  1093→  1093→  /**
+  1094→  1094→  1094→   * Register a custom agent
+  1095→  1095→  1095→   */
+  1096→  1096→  1096→  registerCustomAgent(name: string, config: { description: string; systemPrompt: string; tools?: string[]; maxIterations?: number }): void {
+  1097→  1097→  1097→    const agentConfig = {
+  1098→  1098→  1098→      name,
+  1099→  1099→  1099→      description: config.description,
+  1100→  1100→  1100→      systemPrompt: config.systemPrompt,
+  1101→  1101→  1101→      model: this.config.defaultModel,
+  1102→  1102→  1102→      temperature: 0.5,
+  1103→  1103→  1103→      maxTokens: 8192,
+  1104→  1104→  1104→      tools: config.tools || [],
+  1105→  1105→  1105→      maxIterations: config.maxIterations || 10,
+  1106→  1106→  1106→      isCustom: true,
+  1107→  1107→  1107→    };
+  1108→  1108→  1108→
+  1109→  1109→  1109→    const agent = new BaseAgent(
+  1110→  1110→  1110→      agentConfig,
+  1111→  1111→  1111→      this.client,
+  1112→  1112→  1112→      this.registry,
+  1113→  1113→  1113→      process.cwd(),
+  1114→  1114→  1114→      this.sessionManager.getCurrent()?.id || 'default',
+  1115→  1115→  1115→    );
+  1116→  1116→  1116→
+  1117→  1117→  1117→    this.agents.set(name, agent);
+  1118→  1118→  1118→    this.orchestrator.registerAgent(agent);
+  1119→  1119→  1119→
+  1120→  1120→  1120→    // Save to config
+  1121→  1121→  1121→    if (!this.config.customAgents) this.config.customAgents = {};
+  1122→  1122→  1122→    this.config.customAgents[name] = agentConfig;
+  1123→  1123→  1123→  }
+  1124→  1124→  1124→}
+  1125→  1125→  1125→

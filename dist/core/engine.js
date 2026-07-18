@@ -537,7 +537,7 @@ Always consider the strengths of each agent when delegating:
             temperature: 0.7,
             maxTokens: 4096,
             tools: [],
-            maxIterations: 5,
+            maxIterations: 20,
         };
         this.orchestrator = new Orchestrator(orchestratorConfig, this.client, this.registry, process.cwd(), this.sessionManager.getCurrent()?.id || 'default');
         // Register all agents with orchestrator
@@ -622,7 +622,7 @@ Always consider the strengths of each agent when delegating:
         const cwd = process.cwd();
         // Built-in agents
         for (const [key, agentConfig] of Object.entries(this.config.agents)) {
-            const overrideConfig = { ...agentConfig, model: this.config.defaultModel };
+            const overrideConfig = { ...agentConfig };
             const agent = new BaseAgent(overrideConfig, this.client, this.registry, cwd, sessionId);
             this.agents.set(agentConfig.name, agent);
         }
@@ -750,9 +750,13 @@ Always consider the strengths of each agent when delegating:
         }
         else {
             const complexity = routeDecision?.complexity || this.assessComplexity(message);
+            const category = routeDecision?.category || this.modelRouter.getCategory(message);
             if (complexity === 'simple') {
-                const agent = this.agents.get('Coder');
+                // Route to the best agent based on task category
+                const targetAgentName = this.selectAgentForCategory(category);
+                const agent = this.agents.get(targetAgentName);
                 if (agent) {
+                    this.ui.info(`Using ${targetAgentName} agent (${category} task)`);
                     this.ui.startStreaming();
                     try {
                         result = await agent.run(message, callbacks);
@@ -762,16 +766,28 @@ Always consider the strengths of each agent when delegating:
                     }
                 }
                 else {
-                    // Fallback to orchestration instead of crashing
-                    this.ui.warning('Coder agent not initialized, using orchestration mode');
-                    const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
-                    result = {
-                        content: orchestrateResult.content,
-                        toolCallsMade: 0,
-                        iterations: orchestrateResult.execution.iterations,
-                        usage: orchestrateResult.totalUsage,
-                        execution: orchestrateResult.execution,
-                    };
+                    // Fallback to Coder
+                    const coderAgent = this.agents.get('Coder');
+                    if (coderAgent) {
+                        this.ui.startStreaming();
+                        try {
+                            result = await coderAgent.run(message, callbacks);
+                        }
+                        finally {
+                            this.ui.endStreaming();
+                        }
+                    }
+                    else {
+                        this.ui.warning('No agents initialized, using orchestration mode');
+                        const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
+                        result = {
+                            content: orchestrateResult.content,
+                            toolCallsMade: 0,
+                            iterations: orchestrateResult.execution.iterations,
+                            usage: orchestrateResult.totalUsage,
+                            execution: orchestrateResult.execution,
+                        };
+                    }
                 }
             }
             else {
@@ -904,6 +920,22 @@ Always consider the strengths of each agent when delegating:
     assessComplexity(message) {
         const decision = this.modelRouter.route(message);
         return decision.complexity;
+    }
+    /**
+     * Select the best agent for a given task category
+     */
+    selectAgentForCategory(category) {
+        const categoryAgentMap = {
+            code: 'Coder',
+            reasoning: 'Architect',
+            creative: 'Coder',
+            analysis: 'Researcher',
+            conversation: 'Coder',
+            debugging: 'Debugger',
+            review: 'Reviewer',
+            refactoring: 'Coder',
+        };
+        return categoryAgentMap[category] || 'Coder';
     }
     /**
      * Switch the active model

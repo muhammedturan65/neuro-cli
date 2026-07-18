@@ -72,7 +72,7 @@ const COMPLEXITY_SIGNALS = {
             /\b(hello|hi|thanks|yes|no|ok|sure|done|correct|right|please)\b/i,
         ],
         lengthThreshold: 80,
-        maxSteps: 1,
+        maxSteps: 5,
     },
     moderate: {
         patterns: [
@@ -83,7 +83,7 @@ const COMPLEXITY_SIGNALS = {
             /\b(refactor|clean|simplify|optimize|restructure)\b/i,
         ],
         lengthThreshold: 300,
-        maxSteps: 3,
+        maxSteps: 15,
     },
     complex: {
         patterns: [
@@ -97,7 +97,7 @@ const COMPLEXITY_SIGNALS = {
             /\b(security\s+(audit|review|hardening)|performance\s+(optim|tuning|profiling)|scalab(ility|le))\b/i,
         ],
         lengthThreshold: 500,
-        maxSteps: 6,
+        maxSteps: 30,
     },
 };
 // ---------------------------------------------------------------------------
