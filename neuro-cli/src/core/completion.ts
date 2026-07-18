@@ -5,7 +5,7 @@
 // ============================================================
 
 import { CompleterResult } from 'readline';
-import { readdirSync, statSync, existsSync, readFileSync } from 'fs';
+import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, basename, dirname, extname } from 'path';
 import { homedir } from 'os';
 import { MODELS } from '../api/models.js';
@@ -371,6 +371,4 @@ export class CompletionEngine {
   }
 }
 
-// Import required for saveHistory
-import { writeFileSync as writeFileSync2, mkdirSync as mkdirSync2 } from 'fs';
-import { dirname } from 'path';
+

@@ -28,6 +28,7 @@ export class SessionManager {
       totalOutputTokens: 0,
       totalCost: 0,
       agentHistory: [],
+      tags: [],
     };
     this.save();
     return this.currentSession;

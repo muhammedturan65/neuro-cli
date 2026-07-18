@@ -132,10 +132,10 @@ export class DiffPreview {
     console.log();
     console.log(`  ${chalk.bold.cyan('━━━ Changes Summary ━━━')}`);
     for (const diff of diffs) {
-      const status = diff.added > 0 && diff.removed === 0 ? chalk.green('created') :
+      const statusLabel = diff.added > 0 && diff.removed === 0 ? chalk.green('created') :
                      diff.added === 0 && diff.removed > 0 ? chalk.red('deleted') :
                      chalk.yellow('modified');
-      console.log(`  ${status(diff.filePath.padEnd(40))} ${chalk.green(`+${diff.added}`)} ${chalk.red(`-${diff.removed}`)}`);
+      console.log(`  ${statusLabel} ${diff.filePath.padEnd(40)} ${chalk.green(`+${diff.added}`)} ${chalk.red(`-${diff.removed}`)}`);
     }
     const totalAdded = diffs.reduce((s, d) => s + d.added, 0);
     const totalRemoved = diffs.reduce((s, d) => s + d.removed, 0);

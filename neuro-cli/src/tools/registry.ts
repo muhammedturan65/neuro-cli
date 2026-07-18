@@ -7,7 +7,9 @@ import { ToolDefinition, ToolResult, ApprovalRequest } from '../core/types.js';
 
 export interface ToolExecutor {
   name: string;
-  definition: ToolDefinition;
+  definition?: ToolDefinition;
+  description?: string;
+  parameters?: ToolDefinition['parameters'];
   execute: (args: Record<string, unknown>, context: ToolContext) => Promise<string>;
   getApprovalRequest?: (args: Record<string, unknown>) => ApprovalRequest;
   risk: 'low' | 'medium' | 'high';
@@ -45,7 +47,7 @@ export class ToolRegistry {
         .map(name => this.tools.get(name)?.definition)
         .filter((d): d is ToolDefinition => d !== undefined);
     }
-    return this.getAll().map(t => t.definition);
+    return this.getAll().map(t => t.definition).filter((d): d is ToolDefinition => d !== undefined);
   }
 
   async execute(

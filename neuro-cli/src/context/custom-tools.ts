@@ -704,8 +704,7 @@ export class CustomToolLoader {
         return output.trim();
       } catch (err: unknown) {
         if (err instanceof Error) {
-          const stderr =
-            (err as NodeJS.ErrnoException).stderr || err.message;
+          const stderr = (err as any).stderr || err.message;
           throw new Error(
             `[custom-tools] Shell command failed for tool "${def.name}": ${stderr}`,
           );

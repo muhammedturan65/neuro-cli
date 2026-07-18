@@ -251,15 +251,13 @@ Always consider the strengths of each agent when delegating:
     for (const toolDef of pluginTools) {
       this.registry.register({
         name: toolDef.name,
-        description: toolDef.description,
-        parameters: toolDef.parameters,
         risk: toolDef.risk,
         execute: async (args, context) => {
-          return this.pluginManager.executeTool(toolDef.name, args, {
+          const result = await this.pluginManager.executeTool(toolDef.name, args, {
             workingDirectory: context.workingDirectory,
             sessionId: context.sessionId,
             agentName: context.agentName,
-            onProgress: context.onProgress,
+            onProgress: context.onProgress || (() => {}),
             callTool: async (name, callArgs) => {
               return this.registry.execute(name, callArgs, context);
             },
@@ -270,6 +268,7 @@ Always consider the strengths of each agent when delegating:
               list: () => [],
             },
           });
+          return result.content;
         },
       });
     }
@@ -284,13 +283,11 @@ Always consider the strengths of each agent when delegating:
       const executor = this.customToolLoader.createExecutor(toolDef);
       this.registry.register({
         name: `custom_${toolDef.name}`,
-        description: toolDef.description,
-        parameters: toolDef.parameters,
         risk: toolDef.risk || 'medium',
         execute: async (args) => {
           try {
             const result = await executor(args);
-            return result;
+            return typeof result === 'string' ? result : JSON.stringify(result);
           } catch (error) {
             return `Custom tool error: ${error instanceof Error ? error.message : String(error)}`;
           }

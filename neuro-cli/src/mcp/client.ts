@@ -367,7 +367,7 @@ export class MCPClient {
 
     return new Promise((resolve, reject) => {
       try {
-        const url = new URL(config.url);
+        const url = new URL(config.url!);
         const headers: Record<string, string> = {
           'Accept': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -659,7 +659,13 @@ export class MCPClient {
       }, this.servers.get(serverName)?.timeout || 30000);
 
       this.pendingRequests.set(id, { resolve, reject, timer: timeout });
-      proc.stdin.write(JSON.stringify(request) + '\n');
+      if (proc.stdin) {
+        proc.stdin.write(JSON.stringify(request) + '\n');
+      } else {
+        clearTimeout(timeout);
+        this.pendingRequests.delete(id);
+        reject(new Error(`MCP server ${serverName} stdin not available`));
+      }
     });
   }
 
@@ -682,7 +688,7 @@ export class MCPClient {
       this.pendingRequests.set(id, { resolve, reject, timer: timeout });
 
       // Send via HTTP POST to the same endpoint
-      const postUrl = config.url.replace(/\/sse$/, '/message') || config.url;
+      const postUrl = (config.url || '').replace(/\/sse$/, '/message') || config.url || '';
       fetch(postUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...config.headers },
