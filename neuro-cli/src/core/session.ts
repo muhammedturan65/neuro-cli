@@ -140,6 +140,130 @@ export class SessionManager {
   }
 
   /**
+   * Fork a session (create a copy with new ID)
+   */
+  fork(sessionId: string): Session | null {
+    const source = this.load(sessionId);
+    if (!source) return null;
+
+    const forked: Session = {
+      ...source,
+      id: `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messages: [...source.messages],
+      agentHistory: [...source.agentHistory],
+      totalInputTokens: source.totalInputTokens,
+      totalOutputTokens: source.totalOutputTokens,
+      totalCost: source.totalCost,
+      forkedFrom: source.id,
+      parentSessionId: source.id,
+    };
+
+    this.currentSession = forked;
+    this.save();
+    return forked;
+  }
+
+  /**
+   * Get the most recent session
+   */
+  getMostRecent(): Session | null {
+    const sessions = this.list();
+    if (sessions.length === 0) return null;
+    return this.load(sessions[0].id);
+  }
+
+  /**
+   * Search sessions by content
+   */
+  search(query: string): Array<{ id: string; createdAt: number; messageCount: number; model: string; cost: number; matchPreview: string }> {
+    if (!existsSync(SESSION_DIR)) return [];
+
+    const results: Array<{ id: string; createdAt: number; messageCount: number; model: string; cost: number; matchPreview: string }> = [];
+    const lowerQuery = query.toLowerCase();
+
+    for (const file of readdirSync(SESSION_DIR)) {
+      if (!file.endsWith('.json')) continue;
+      try {
+        const data = JSON.parse(readFileSync(join(SESSION_DIR, file), 'utf-8'));
+        // Search in messages
+        const matchMsg = data.messages?.find((m: Message) =>
+          m.content?.toLowerCase().includes(lowerQuery)
+        );
+        if (matchMsg) {
+          const preview = matchMsg.content.slice(0, 80).replace(/\n/g, ' ');
+          results.push({
+            id: data.id,
+            createdAt: data.createdAt,
+            messageCount: data.messages?.length || 0,
+            model: data.model,
+            cost: data.totalCost || 0,
+            matchPreview: preview,
+          });
+        }
+      } catch {}
+    }
+
+    return results.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  /**
+   * Export a session to a portable JSON format
+   */
+  exportSession(sessionId: string, outputPath: string): boolean {
+    const session = this.load(sessionId);
+    if (!session) return false;
+
+    const exportData = {
+      version: '3.0.0',
+      exportedAt: Date.now(),
+      session,
+      neuroVersion: '3.0.0',
+    };
+
+    try {
+      writeFileSync(outputPath, JSON.stringify(exportData, null, 2), 'utf-8');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Import a session from a JSON file
+   */
+  importSession(filePath: string): Session | null {
+    try {
+      const content = readFileSync(filePath, 'utf-8');
+      const importData = JSON.parse(content);
+      const sessionData = importData.session || importData;
+
+      const newSession: Session = {
+        id: `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: sessionData.messages || [],
+        workingDirectory: sessionData.workingDirectory || process.cwd(),
+        model: sessionData.model || 'qwen/qwen3-coder:free',
+        totalInputTokens: sessionData.totalInputTokens || 0,
+        totalOutputTokens: sessionData.totalOutputTokens || 0,
+        totalCost: sessionData.totalCost || 0,
+        agentHistory: sessionData.agentHistory || [],
+        tags: sessionData.tags || [],
+        description: sessionData.description || `Imported from ${filePath}`,
+        parentSessionId: sessionData.id,
+      };
+
+      this.currentSession = newSession;
+      this.save();
+      return newSession;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Get session statistics
    */
   getStats(): { totalSessions: number; totalMessages: number; totalCost: number; totalTokens: number } {

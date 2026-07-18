@@ -21,6 +21,12 @@ export class CompletionEngine {
   private permissionModes: string[] = ['manual', 'auto', 'plan', 'yolo'];
   private themes: string[] = ['dracula', 'dark', 'nord', 'light'];
   private mcpSubcommands: string[] = ['list', 'add', 'remove', 'connect', 'disconnect', 'health'];
+  private skillSubcommands: string[] = ['list', 'activate', 'deactivate', 'clear'];
+  private cacheSubcommands: string[] = ['on', 'off', 'clear', 'stats'];
+  private ignoreSubcommands: string[] = ['list', 'add', 'check'];
+  private styleNames: string[] = ['default', 'concise', 'explanatory', 'learning', 'narrative', 'technical', 'review', 'debug'];
+  private thinkingModes: string[] = ['none', 'brief', 'full', 'ultrathink'];
+  private effortLevels: string[] = ['low', 'medium', 'high', 'ultrathink'];
   private fileExtensions: Map<string, string[]> = new Map([
     ['typescript', ['.ts', '.tsx', '.d.ts']],
     ['javascript', ['.js', '.jsx', '.mjs', '.cjs']],
@@ -38,7 +44,7 @@ export class CompletionEngine {
     this.modelIds = Object.keys(MODELS);
     this.historyPath = join(homedir(), '.neuro', 'history');
 
-    // Built-in slash commands with descriptions
+    // Built-in slash commands with descriptions (v3.0 expanded)
     const commands: [string, string][] = [
       ['help', 'Show help message'],
       ['model', 'Switch or list models'],
@@ -57,6 +63,7 @@ export class CompletionEngine {
       ['compact', 'Compact conversation context'],
       ['undo', 'Undo last change'],
       ['redo', 'Redo undone change'],
+      ['rewind', 'Rewind n changes'],
       ['mcp', 'Manage MCP servers'],
       ['fork', 'Fork current session'],
       ['init', 'Initialize NEURO.md for this project'],
@@ -68,6 +75,19 @@ export class CompletionEngine {
       ['sandbox', 'Toggle sandbox mode'],
       ['whitelist', 'Manage tool whitelist'],
       ['blacklist', 'Manage tool blacklist'],
+      // v3.0 new commands
+      ['style', 'Switch output style (concise, explanatory, learning, etc.)'],
+      ['thinking', 'Toggle thinking mode (none|brief|full|ultrathink)'],
+      ['effort', 'Set effort level (low|medium|high|ultrathink)'],
+      ['skills', 'Manage skills (list|activate|deactivate|clear)'],
+      ['cache', 'Manage prompt cache (on|off|clear|stats)'],
+      ['spending', 'Show detailed spending report'],
+      ['ignore', 'Manage .neuroignore rules'],
+      ['ollama', 'List Ollama local models'],
+      ['cost', 'Show spending and cache report'],
+      ['commit-push-pr', 'Commit + push + create PR'],
+      ['code-review', 'Multi-agent code review'],
+      ['feedback', 'Give feedback'],
     ];
     for (const [cmd, desc] of commands) {
       this.slashCommands.set(cmd, desc);
@@ -200,6 +220,35 @@ export class CompletionEngine {
 
       case 'import':
         return this.completeFilePath(argPartial || './');
+
+      // v3.0 new command completions
+      case 'style':
+        return [this.styleNames.filter(s => s.startsWith(argPartial)), line];
+
+      case 'thinking':
+        if (argPartial === 'toggle') return [['toggle'], line];
+        return [this.thinkingModes.filter(m => m.startsWith(argPartial)), line];
+
+      case 'effort':
+        return [this.effortLevels.filter(l => l.startsWith(argPartial)), line];
+
+      case 'skills':
+        if (parts.length === 2) {
+          return [this.skillSubcommands.filter(c => c.startsWith(argPartial)), line];
+        }
+        return [[], line];
+
+      case 'cache':
+        if (parts.length === 2) {
+          return [this.cacheSubcommands.filter(c => c.startsWith(argPartial)), line];
+        }
+        return [[], line];
+
+      case 'ignore':
+        if (parts.length === 2) {
+          return [this.ignoreSubcommands.filter(c => c.startsWith(argPartial)), line];
+        }
+        return [[], line];
 
       default:
         return [[], line];

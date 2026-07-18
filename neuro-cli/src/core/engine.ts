@@ -1,7 +1,10 @@
 // ============================================================
-// NeuroCLI - NeuroEngine v2.0
+// NeuroCLI - NeuroEngine v3.0
 // The main engine that ties everything together
-// Now with Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval
+// Now with: Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval,
+// Model Router, Prompt Cache, Undo/Redo, Output Styles,
+// Skill System, Custom Agents, Custom Tools, Ollama,
+// Extended Thinking, Spending Monitor, NeuroIgnore
 // ============================================================
 
 import { NeuroConfig, Message, AgentExecution, PermissionMode } from '../core/types.js';
@@ -20,6 +23,17 @@ import { DoomLoopProtection } from '../core/doom-loop.js';
 import { FallbackChain } from '../core/fallback.js';
 import { Sandbox } from '../core/sandbox.js';
 import { PluginManager } from '../core/plugin-sdk.js';
+import { UndoRedoSystem } from './undo-redo.js';
+import { PromptCache } from './prompt-cache.js';
+import { ModelRouter, RoutingDecision, EffortLevel } from './model-router.js';
+import { StyleManager, OutputStyle } from './output-styles.js';
+import { ExtendedThinking, ThinkingMode } from './extended-thinking.js';
+import { SpendingMonitor, SpendingConfig } from './spending-warnings.js';
+import { SkillSystem } from '../context/skill-system.js';
+import { CustomAgentLoader, CustomAgentDefinition } from '../context/custom-agents.js';
+import { CustomToolLoader, CustomToolDefinition } from '../context/custom-tools.js';
+import { NeuroIgnore } from '../context/neuroignore.js';
+import { OllamaProvider, OllamaConfig } from '../api/ollama.js';
 
 export class NeuroEngine {
   public config: NeuroConfig;
@@ -37,6 +51,19 @@ export class NeuroEngine {
   public sandbox: Sandbox;
   public pluginManager: PluginManager;
 
+  // v3.0 new systems
+  public undoRedo: UndoRedoSystem;
+  public promptCache: PromptCache;
+  public modelRouter: ModelRouter;
+  public styleManager: StyleManager;
+  public extendedThinking: ExtendedThinking;
+  public spendingMonitor: SpendingMonitor;
+  public skillSystem: SkillSystem;
+  public customAgentLoader: CustomAgentLoader;
+  public customToolLoader: CustomToolLoader;
+  public neuroIgnore: NeuroIgnore;
+  public ollamaProvider: OllamaProvider;
+
   private autoApproveSet: Set<string>;
   private requireApprovalSet: Set<string>;
 
@@ -51,7 +78,7 @@ export class NeuroEngine {
     this.autoApproveSet = new Set(config.tools.autoApprove);
     this.requireApprovalSet = new Set(config.tools.requireApproval);
 
-    // Initialize all systems
+    // Initialize core systems
     this.approval = new ApprovalSystem(config.permissionMode, {
       showDiffPreview: config.diffPreview,
       whitelist: config.tools.autoApprove,
@@ -73,6 +100,82 @@ export class NeuroEngine {
     // Plugin system
     this.pluginManager = new PluginManager();
 
+    // --- v3.0 Systems ---
+
+    // Undo/Redo system
+    this.undoRedo = new UndoRedoSystem();
+
+    // Prompt cache
+    this.promptCache = new PromptCache({
+      cacheDir: config.promptCache.cacheDir,
+      maxEntries: config.promptCache.maxEntries,
+      ttlMs: config.promptCache.ttlMs,
+      similarityThreshold: config.promptCache.similarityThreshold,
+      enabled: config.promptCache.enabled,
+    });
+
+    // Model router
+    this.modelRouter = new ModelRouter(
+      {
+        defaultModel: config.defaultModel,
+        simpleModel: 'google/gemma-4-31b-it:free',
+        moderateModel: 'qwen/qwen3-coder:free',
+        complexModel: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+        effortModels: {
+          low: 'google/gemma-4-31b-it:free',
+          medium: 'qwen/qwen3-coder:free',
+          high: 'nvidia/nemotron-3-super-120b-a12b:free',
+          ultrathink: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+        },
+        categoryOverrides: {},
+        maxTokenBudget: config.context.maxTokens,
+      },
+      Object.fromEntries(
+        Object.entries(MODELS).map(([id, m]) => [id, { name: m.name, contextWindow: m.contextWindow, maxOutput: m.maxOutput }])
+      ),
+    );
+
+    // Output styles
+    this.styleManager = new StyleManager(process.cwd());
+
+    // Extended thinking
+    this.extendedThinking = new ExtendedThinking({
+      mode: 'none',
+      showThinking: false,
+    });
+
+    // Spending monitor
+    this.spendingMonitor = new SpendingMonitor({
+      dailyLimit: config.spendingLimit > 0 ? config.spendingLimit : 0,
+      sessionLimit: 0,
+      autoStopAtLimit: config.spendingLimit > 0,
+      trackByModel: true,
+    });
+
+    // Skill system
+    this.skillSystem = new SkillSystem(process.cwd());
+    this.skillSystem.discover();
+
+    // Custom agents
+    this.customAgentLoader = new CustomAgentLoader(process.cwd());
+    this.customAgentLoader.discover();
+
+    // Custom tools
+    this.customToolLoader = new CustomToolLoader(process.cwd());
+    this.customToolLoader.discover();
+
+    // .neuroignore
+    this.neuroIgnore = new NeuroIgnore(process.cwd());
+    this.neuroIgnore.load();
+
+    // Ollama provider
+    this.ollamaProvider = new OllamaProvider({
+      baseUrl: process.env.OLLAMA_HOST || 'http://localhost:11434',
+      defaultModel: 'llama3',
+    });
+
+    // --- End v3.0 ---
+
     // Connect MCP servers if configured
     if (config.mcp.autoConnect) {
       this.mcpClient.connectAll().then(count => {
@@ -88,8 +191,14 @@ export class NeuroEngine {
     // Register plugin tools with the tool registry
     this.registerPluginTools();
 
+    // Register custom tools
+    this.registerCustomTools();
+
     // Initialize agents from config
     this.initializeAgents();
+
+    // Load custom agents from .neuro/agents/
+    this.loadCustomAgents();
 
     // Create orchestrator
     const orchestratorConfig = {
@@ -140,7 +249,6 @@ Always consider the strengths of each agent when delegating:
   private registerPluginTools(): void {
     const pluginTools = this.pluginManager.getToolDefinitions();
     for (const toolDef of pluginTools) {
-      // Plugin tools are registered with the registry so the AI can use them
       this.registry.register({
         name: toolDef.name,
         description: toolDef.description,
@@ -168,6 +276,49 @@ Always consider the strengths of each agent when delegating:
   }
 
   /**
+   * Register custom tools from .neuro/tools/
+   */
+  private registerCustomTools(): void {
+    const customTools = this.customToolLoader.getAll();
+    for (const toolDef of customTools) {
+      const executor = this.customToolLoader.createExecutor(toolDef);
+      this.registry.register({
+        name: `custom_${toolDef.name}`,
+        description: toolDef.description,
+        parameters: toolDef.parameters,
+        risk: toolDef.risk || 'medium',
+        execute: async (args) => {
+          try {
+            const result = await executor(args);
+            return result;
+          } catch (error) {
+            return `Custom tool error: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        },
+      });
+    }
+  }
+
+  /**
+   * Load custom agents from .neuro/agents/
+   */
+  private loadCustomAgents(): void {
+    const customAgents = this.customAgentLoader.getAll();
+    const cwd = process.cwd();
+    const sessionId = this.sessionManager.getCurrent()?.id || 'default';
+
+    for (const def of customAgents) {
+      const agentConfig = this.customAgentLoader.toAgentConfig(def, this.config.defaultModel);
+      const agent = new BaseAgent(agentConfig, this.client, this.registry, cwd, sessionId);
+      this.agents.set(def.name, agent);
+
+      // Save to config custom agents
+      if (!this.config.customAgents) this.config.customAgents = {};
+      this.config.customAgents[def.name] = agentConfig;
+    }
+  }
+
+  /**
    * Initialize all agents from config
    */
   private initializeAgents(): void {
@@ -187,7 +338,7 @@ Always consider the strengths of each agent when delegating:
       this.agents.set(agentConfig.name, agent);
     }
 
-    // Custom agents
+    // Custom agents from config
     for (const [key, agentConfig] of Object.entries(this.config.customAgents || {})) {
       const overrideConfig = { ...agentConfig, model: this.config.defaultModel, isCustom: true };
       const agent = new BaseAgent(
@@ -209,12 +360,45 @@ Always consider the strengths of each agent when delegating:
     mode: 'auto' | 'agent' | 'direct' = 'auto',
     targetAgent?: string,
   ): Promise<{ content: string; usage: TokenUsage; execution?: AgentExecution }> {
-    // Check spending limit
-    if (this.config.spendingLimit > 0) {
-      const currentSession = this.sessionManager.getCurrent();
-      if (currentSession && currentSession.totalCost >= this.config.spendingLimit) {
-        this.ui.error(`Spending limit reached ($${this.config.spendingLimit.toFixed(4)}). Use /config to adjust.`);
-        return { content: 'Spending limit reached.', usage: { inputTokens: 0, outputTokens: 0, cost: 0 } };
+    // Check spending limit via spending monitor
+    const limitCheck = this.spendingMonitor.checkLimit();
+    if (!limitCheck.allowed) {
+      this.ui.error(`Spending limit reached (${limitCheck.limitReached}). Use /spending to check or /config to adjust.`);
+      return { content: 'Spending limit reached.', usage: { inputTokens: 0, outputTokens: 0, cost: 0 } };
+    }
+
+    // Auto-activate skills based on prompt
+    const activatedSkills = this.skillSystem.autoActivate(message);
+    if (activatedSkills.length > 0) {
+      for (const skill of activatedSkills) {
+        this.ui.info(`Skill activated: ${skill.skill.name} (${skill.activatedBy})`);
+      }
+    }
+
+    // Model routing (if auto mode)
+    let routeDecision: RoutingDecision | null = null;
+    if (mode === 'auto') {
+      routeDecision = this.modelRouter.route(message);
+      if (routeDecision.model !== this.config.defaultModel) {
+        this.ui.info(`Model router: ${routeDecision.complexity} task -> ${MODELS[routeDecision.model]?.name || routeDecision.model}`);
+      }
+    }
+
+    // Check prompt cache
+    if (this.promptCache && this.config.promptCache.enabled) {
+      const session = this.sessionManager.getCurrent();
+      if (session) {
+        const cached = this.promptCache.get(
+          routeDecision?.model || this.config.defaultModel,
+          session.messages,
+        );
+        if (cached) {
+          this.ui.info('Cache hit - using cached response');
+          return {
+            content: cached.response,
+            usage: { inputTokens: cached.inputTokens, outputTokens: cached.outputTokens, cost: 0 },
+          };
+        }
       }
     }
 
@@ -231,16 +415,31 @@ Always consider the strengths of each agent when delegating:
       timestamp: Date.now(),
     });
 
+    // Build system prompt additions from skills and styles
+    const skillAdditions = this.skillSystem.getSystemPromptAdditions();
+    const styleAddition = this.styleManager.getSystemPromptAddition();
+    const thinkingAddition = this.extendedThinking.getSystemPromptAddition();
+
     // Build UI callbacks
     const callbacks: AgentCallbacks = {
       onThinking: (thinking) => this.ui.thinking(thinking),
       onToken: (token) => this.ui.streamingToken(token),
       onToolCall: (name, args) => {
+        // Check .neuroignore for file paths
+        if (args.path && typeof args.path === 'string' && this.neuroIgnore.isIgnored(args.path)) {
+          this.ui.warning(`Ignored path: ${args.path} (matches .neuroignore rule)`);
+          return;
+        }
         // Sandbox check before tool execution
         if (this.sandbox.isEnabled() && !this.checkSandboxForTool(name, args)) {
-          return; // Sandbox blocked this tool call
+          return;
         }
         this.ui.toolCall(name, args);
+
+        // Record in undo/redo for file modification tools
+        if (['write_file', 'edit_file', 'apply_diff', 'delete_file'].includes(name)) {
+          // The undo/redo push will happen in the tool execution result handler
+        }
       },
       onToolResult: (name, result, isError) => this.ui.toolResult(name, result, isError),
       onApprovalNeeded: async (name, args, risk) => {
@@ -252,6 +451,7 @@ Always consider the strengths of each agent when delegating:
     };
 
     let result;
+    const activeModel = routeDecision?.model || this.config.defaultModel;
 
     if (mode === 'direct' && targetAgent) {
       const agent = this.agents.get(targetAgent);
@@ -272,7 +472,7 @@ Always consider the strengths of each agent when delegating:
         execution: orchestrateResult.execution,
       };
     } else {
-      const complexity = this.assessComplexity(message);
+      const complexity = routeDecision?.complexity || this.assessComplexity(message);
       if (complexity === 'simple') {
         const agent = this.agents.get('Coder');
         if (agent) {
@@ -283,7 +483,7 @@ Always consider the strengths of each agent when delegating:
           throw new Error('Coder agent not initialized');
         }
       } else {
-        this.ui.thinking('🧠 Analyzing task complexity... Using multi-agent orchestration');
+        this.ui.thinking('Analyzing task complexity... Using multi-agent orchestration');
         const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
         result = {
           content: orchestrateResult.content,
@@ -295,8 +495,38 @@ Always consider the strengths of each agent when delegating:
       }
     }
 
+    // Parse extended thinking blocks from response
+    const thinkingResult = this.extendedThinking.parseResponse(result.content);
+    if (thinkingResult.hadThinking && this.extendedThinking.isDisplayEnabled()) {
+      // Thinking blocks were already displayed during streaming
+    }
+    // Use cleaned response (without thinking blocks) if thinking is hidden
+    if (thinkingResult.hadThinking && !this.extendedThinking.isDisplayEnabled()) {
+      result.content = thinkingResult.cleanedResponse;
+    }
+
+    // Record spending
+    const spendResult = this.spendingMonitor.record({
+      model: activeModel,
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+      cost: result.usage.cost,
+      sessionId: this.sessionManager.getCurrent()?.id || 'unknown',
+    });
+    if (spendResult.warning) {
+      this.ui.warning(spendResult.warning);
+    }
+    if (!spendResult.allowed) {
+      this.ui.error('Spending limit reached. Operation completed but further requests may be blocked.');
+    }
+
+    // Cache the response if caching is enabled
+    if (this.promptCache && this.config.promptCache.enabled && session) {
+      this.promptCache.set(activeModel, session.messages, result.content, result.usage);
+    }
+
     // Print usage
-    this.ui.tokenUsage(result.usage, this.config.defaultModel);
+    this.ui.tokenUsage(result.usage, activeModel);
 
     // Update session
     this.sessionManager.addMessage({
@@ -329,6 +559,11 @@ Always consider the strengths of each agent when delegating:
         this.ui.warning(`Sandbox: Write access denied for ${path}`);
         return false;
       }
+      // Check neuroignore
+      if (path && this.neuroIgnore.isIgnored(path)) {
+        this.ui.warning(`Ignored: ${path} is in .neuroignore`);
+        return false;
+      }
       // Backup file before modification
       if (path) this.sandbox.backupFile(path);
     }
@@ -339,6 +574,10 @@ Always consider the strengths of each agent when delegating:
         this.ui.warning(`Sandbox: Delete access denied for ${path}`);
         return false;
       }
+      if (path && this.neuroIgnore.isIgnored(path)) {
+        this.ui.warning(`Ignored: ${path} is in .neuroignore`);
+        return false;
+      }
     }
 
     if (['read_file', 'search_files', 'list_directory'].includes(toolName)) {
@@ -347,13 +586,17 @@ Always consider the strengths of each agent when delegating:
         this.ui.warning(`Sandbox: Read access denied for ${path}`);
         return false;
       }
+      if (path && this.neuroIgnore.isIgnored(path)) {
+        this.ui.warning(`Ignored: ${path} is in .neuroignore`);
+        return false;
+      }
     }
 
     // Command execution
     if (['run_command', 'bash'].includes(toolName)) {
       const command = args.command as string;
       if (command && !this.sandbox.canRunCommand(command)) {
-        this.ui.warning(`Sandbox: Command execution denied`);
+        this.ui.warning('Sandbox: Command execution denied');
         return false;
       }
     }
@@ -385,22 +628,11 @@ Always consider the strengths of each agent when delegating:
 
   /**
    * Assess task complexity to decide execution mode
+   * Now delegates to ModelRouter for more sophisticated analysis
    */
   private assessComplexity(message: string): 'simple' | 'moderate' | 'complex' {
-    const complexIndicators = [
-      /implement.*system/i, /build.*application/i, /create.*project/i,
-      /refactor.*entire/i, /migrate.*from.*to/i, /design.*architecture/i,
-      /multi.*agent/i, /orchestrat/i, /end.*to.*end/i,
-    ];
-
-    const moderateIndicators = [
-      /add.*feature/i, /fix.*bug/i, /update.*multiple/i,
-      /write.*tests/i, /review.*code/i, /optimize/i,
-    ];
-
-    if (complexIndicators.some(p => p.test(message))) return 'complex';
-    if (moderateIndicators.some(p => p.test(message))) return 'moderate';
-    return 'simple';
+    const decision = this.modelRouter.route(message);
+    return decision.complexity;
   }
 
   /**

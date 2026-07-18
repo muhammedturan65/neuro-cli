@@ -1,0 +1,653 @@
+     1→#!/usr/bin/env node
+     2→// ============================================================
+     3→// NeuroCLI - Advanced AI Terminal Coding Assistant
+     4→// Main Entry Point - v2.0.0 with all new features
+     5→// ============================================================
+     6→
+     7→import { Command } from 'commander';
+     8→import { createInterface } from 'readline';
+     9→import { NeuroEngine } from './core/engine.js';
+    10→import { initConfig, saveConfig } from './config/config.js';
+    11→import { MODELS } from './api/models.js';
+    12→import { TerminalUI } from './ui/renderer.js';
+    13→import { getTheme } from './ui/theme.js';
+    14→import { CompletionEngine } from './core/completion.js';
+    15→import { HeadlessMode } from './core/headless.js';
+    16→import chalk from 'chalk';
+    17→
+    18→const VERSION = '2.0.0';
+    19→
+    20→// ---- CLI Setup ----
+    21→const program = new Command();
+    22→
+    23→program
+    24→  .name('neuro')
+    25→  .description('NeuroCLI - Advanced AI Terminal Coding Assistant')
+    26→  .version(VERSION)
+    27→  .option('-k, --api-key <key>', 'OpenRouter API key')
+    28→  .option('-m, --model <model>', 'Default model to use')
+    29→  .option('-t, --theme <theme>', 'UI theme (dracula, dark, nord, light)')
+    30→  .option('--no-streaming', 'Disable streaming output')
+    31→  .option('--auto-approve', 'Auto-approve all tool calls')
+    32→  .option('-c, --continue', 'Continue most recent session')
+    33→  .option('-r, --resume <sessionId>', 'Resume specific session')
+    34→  .option('--fork', 'Fork the resumed session instead of continuing it')
+    35→  .option('--permission-mode <mode>', 'Permission mode: manual, auto, plan, yolo')
+    36→  .option('--diff-preview', 'Enable diff preview before applying changes')
+    37→  .option('--no-diff-preview', 'Disable diff preview')
+    38→  .action(async (options) => {
+    39→    await startInteractive(options);
+    40→  });
+    41→
+    42→// ---- Headless/CI Mode ----
+    43→program
+    44→  .command('run <prompt>')
+    45→  .description('Run a task in headless/CI mode')
+    46→  .option('-m, --model <model>', 'Model to use')
+    47→  .option('-a, --agent <agent>', 'Agent to use')
+    48→  .option('--max-turns <n>', 'Max agent iterations', parseInt)
+    49→  .option('--allowed-tools <tools>', 'Comma-separated list of allowed tools')
+    50→  .option('-f, --format <format>', 'Output format: text, json, stream-json')
+    51→  .option('--auto', 'Auto-approve all tool calls')
+    52→  .option('--continue <sessionId>', 'Continue a specific session')
+    53→  .action(async (prompt, opts) => {
+    54→    const result = await HeadlessMode.run({
+    55→      prompt,
+    56→      model: opts.model,
+    57→      agent: opts.agent,
+    58→      maxTurns: opts.maxTurns,
+    59→      allowedTools: opts.allowedTools?.split(','),
+    60→      outputFormat: opts.format || 'text',
+    61→      autoApprove: opts.auto ?? true,
+    62→      continueSession: opts.continue,
+    63→    });
+    64→    process.exit(result.exitCode);
+    65→  });
+    66→
+    67→// ---- Non-interactive ask ----
+    68→program
+    69→  .command('ask <prompt>')
+    70→  .description('Ask a single question and exit')
+    71→  .option('-m, --model <model>', 'Model to use')
+    72→  .option('-a, --agent <agent>', 'Agent to use')
+    73→  .option('-f, --format <format>', 'Output format: text, json')
+    74→  .action(async (prompt, opts) => {
+    75→    const config = initConfig();
+    76→    if (opts.model) config.defaultModel = opts.model;
+    77→    const engine = new NeuroEngine(config);
+    78→    const result = await engine.processMessage(prompt, 'direct', opts.agent || 'Coder');
+    79→    if (opts.format === 'json') {
+    80→      console.log(JSON.stringify({ content: result.content, usage: result.usage }, null, 2));
+    81→    } else {
+    82→      console.log(result.content);
+    83→    }
+    84→    process.exit(0);
+    85→  });
+    86→
+    87→// ---- Models list ----
+    88→program
+    89→  .command('models')
+    90→  .description('List available models')
+    91→  .action(() => {
+    92→    const config = initConfig();
+    93→    const ui = new TerminalUI(config.ui.theme);
+    94→    ui.modelList(config.defaultModel);
+    95→  });
+    96→
+    97→// ---- Agents list ----
+    98→program
+    99→  .command('agents')
+   100→  .description('List available agents')
+   101→  .action(() => {
+   102→    const config = initConfig();
+   103→    const ui = new TerminalUI(config.ui.theme);
+   104→    const agents = Object.values(config.agents).map(a => ({
+   105→      name: a.name,
+   106→      description: a.description,
+   107→      model: a.model || config.defaultModel,
+   108→    }));
+   109→    ui.agentList(agents);
+   110→  });
+   111→
+   112→// ---- Config ----
+   113→program
+   114→  .command('config')
+   115→  .description('Show or modify configuration')
+   116→  .option('--set-key <key>', 'Set API key')
+   117→  .option('--set-model <model>', 'Set default model')
+   118→  .option('--set-theme <theme>', 'Set UI theme')
+   119→  .option('--set-permission <mode>', 'Set permission mode (manual, auto, plan, yolo)')
+   120→  .option('--show', 'Show current config')
+   121→  .action(async (opts) => {
+   122→    const config = initConfig();
+   123→    const theme = getTheme(config.ui.theme);
+   124→
+   125→    if (opts.setKey) { config.apiKey = opts.setKey; saveConfig(config); console.log(chalk.green('API key updated')); }
+   126→    if (opts.setModel) { if (!MODELS[opts.setModel]) { console.log(chalk.red(`Unknown model: ${opts.setModel}`)); process.exit(1); } config.defaultModel = opts.setModel; saveConfig(config); console.log(chalk.green(`Default model set to ${MODELS[opts.setModel].name}`)); }
+   127→    if (opts.setTheme) { config.ui.theme = opts.setTheme; saveConfig(config); console.log(chalk.green(`Theme set to ${opts.setTheme}`)); }
+   128→    if (opts.setPermission) { config.permissionMode = opts.setPermission; saveConfig(config); console.log(chalk.green(`Permission mode set to ${opts.setPermission}`)); }
+   129→    if (opts.show || (!opts.setKey && !opts.setModel && !opts.setTheme && !opts.setPermission)) {
+   130→      console.log(chalk.bold('\nCurrent Configuration:\n'));
+   131→      console.log(`  API Key: ${config.apiKey ? chalk.green('configured') : chalk.red('not set')}`);
+   132→      console.log(`  Base URL: ${config.baseUrl}`);
+   133→      console.log(`  Default Model: ${config.defaultModel}`);
+   134→      console.log(`  Theme: ${config.ui.theme}`);
+   135→      console.log(`  Permission Mode: ${config.permissionMode}`);
+   136→      console.log(`  Diff Preview: ${config.diffPreview ? 'enabled' : 'disabled'}`);
+   137→      console.log(`  Fallback Chain: ${config.fallbackChain.models.join(' -> ')}`);
+   138→      console.log(`  Doom Loop Protection: ${config.doomLoop.autoBreak ? 'enabled' : 'disabled'}`);
+   139→      console.log(`  MCP Auto-Connect: ${config.mcp.autoConnect ? 'enabled' : 'disabled'}`);
+   140→      console.log(`  Streaming: ${config.ui.streaming ? 'enabled' : 'disabled'}`);
+   141→      console.log();
+   142→    }
+   143→  });
+   144→
+   145→// ---- Sessions ----
+   146→program
+   147→  .command('sessions')
+   148→  .description('List or manage sessions')
+   149→  .option('--clear', 'Clear all sessions')
+   150→  .action(async (opts) => {
+   151→    const { SessionManager } = await import('./core/session.js');
+   152→    const sm = new SessionManager();
+   153→
+   154→    if (opts.clear) { console.log(chalk.yellow('Clearing all sessions...')); return; }
+   155→    const sessions = sm.list();
+   156→    if (sessions.length === 0) { console.log(chalk.gray('No sessions found.')); return; }
+   157→    console.log(chalk.bold('\nSessions:\n'));
+   158→    for (const session of sessions.slice(0, 20)) {
+   159→      const date = new Date(session.createdAt).toLocaleString();
+   160→      console.log(`  ${chalk.cyan(session.id.slice(0, 20))}  ${chalk.gray(date)}  ${chalk.gray(`${session.messageCount} msgs`)}  ${chalk.gray(`$${session.cost.toFixed(4)}`)}`);
+   161→    }
+   162→    console.log();
+   163→  });
+   164→
+   165→// ---- MCP Management ----
+   166→program
+   167→  .command('mcp')
+   168→  .description('Manage MCP (Model Context Protocol) servers')
+   169→  .addCommand(
+   170→    new Command('add')
+   171→      .description('Add an MCP server')
+   172→      .argument('<name>', 'Server name')
+   173→      .argument('<command>', 'Command to run (for stdio) or URL (for http/sse)')
+   174→      .option('-t, --transport <type>', 'Transport type: stdio, sse, http', 'stdio')
+   175→      .option('--headers <json>', 'HTTP headers as JSON string')
+   176→      .action(async (name, command, opts) => {
+   177→        const { MCPClient } = await import('./mcp/client.js');
+   178→        const client = new MCPClient();
+   179→        const isUrl = command.startsWith('http://') || command.startsWith('https://');
+   180→        const transport = isUrl ? (opts.transport === 'http' ? 'http' : 'sse') : 'stdio';
+   181→        
+   182→        client.addServer(name, {
+   183→          name,
+   184→          transport: transport as 'stdio' | 'sse' | 'http',
+   185→          command: transport === 'stdio' ? command : undefined,
+   186→          url: isUrl ? command : undefined,
+   187→          headers: opts.headers ? JSON.parse(opts.headers) : undefined,
+   188→        });
+   189→        console.log(chalk.green(`MCP server "${name}" added (${transport})`));
+   190→      })
+   191→  )
+   192→  .addCommand(
+   193→    new Command('list').description('List configured MCP servers').action(async () => {
+   194→      const { MCPClient } = await import('./mcp/client.js');
+   195→      const client = new MCPClient();
+   196→      const servers = client.listServers();
+   197→      if (servers.length === 0) { console.log(chalk.gray('No MCP servers configured.')); return; }
+   198→      console.log(chalk.bold('\nMCP Servers:\n'));
+   199→      for (const s of servers) {
+   200→        const status = s.connected ? chalk.green('connected') : chalk.gray('disconnected');
+   201→        console.log(`  ${chalk.cyan(s.name)}  ${status}  ${chalk.gray(`${s.toolCount} tools`)}  ${chalk.gray(s.config.transport)}`);
+   202→      }
+   203→      console.log();
+   204→    })
+   205→  )
+   206→  .addCommand(
+   207→    new Command('remove').description('Remove an MCP server').argument('<name>').action(async (name) => {
+   208→      const { MCPClient } = await import('./mcp/client.js');
+   209→      const client = new MCPClient();
+   210→      if (client.removeServer(name)) console.log(chalk.green(`MCP server "${name}" removed`));
+   211→      else console.log(chalk.red(`MCP server "${name}" not found`));
+   212→    })
+   213→  );
+   214→
+   215→// ---- Interactive Mode ----
+   216→async function startInteractive(options: any) {
+   217→  const config = initConfig(options.apiKey);
+   218→  if (options.model) config.defaultModel = options.model;
+   219→  if (options.theme) config.ui.theme = options.theme as 'dark' | 'light' | 'dracula' | 'nord';
+   220→  if (options.noStreaming) config.ui.streaming = false;
+   221→  if (options.permissionMode) config.permissionMode = options.permissionMode;
+   222→  if (options.diffPreview === true) config.diffPreview = true;
+   223→  if (options.diffPreview === false) config.diffPreview = false;
+   224→  if (options.autoApprove) {
+   225→    config.tools.autoApprove = [...config.tools.autoApprove, ...config.tools.requireApproval];
+   226→    config.tools.requireApproval = [];
+   227→    config.permissionMode = 'yolo';
+   228→  }
+   229→
+   230→  // Check API key
+   231→  if (!config.apiKey) {
+   232→    console.log(chalk.red('\nOpenRouter API key not configured!'));
+   233→    console.log(chalk.yellow('\nSet it with:'));
+   234→    console.log(`  ${chalk.cyan('neuro config --set-key YOUR_API_KEY')}`);
+   235→    console.log(`  ${chalk.cyan('export OPENROUTER_API_KEY=YOUR_API_KEY')}`);
+   236→    console.log(`  ${chalk.cyan('neuro -k YOUR_API_KEY')}`);
+   237→    console.log(chalk.gray('\nGet your key at: https://openrouter.ai/keys\n'));
+   238→    process.exit(1);
+   239→  }
+   240→
+   241→  // Initialize engine
+   242→  const engine = new NeuroEngine(config);
+   243→
+   244→  // Resume session if requested
+   245→  if (options.resume) {
+   246→    const session = engine.sessionManager.load(options.resume);
+   247→    if (session) {
+   248→      engine.ui.success(`Resumed session: ${session.id.slice(0, 20)}...`);
+   249→    } else {
+   250→      engine.ui.error(`Session not found: ${options.resume}`);
+   251→    }
+   252→  } else if (options.continue) {
+   253→    const sessions = engine.sessionManager.list();
+   254→    if (sessions.length > 0) {
+   255→      const session = engine.sessionManager.load(sessions[0].id);
+   256→      if (session) {
+   257→        engine.ui.success(`Continued session: ${session.id.slice(0, 20)}...`);
+   258→      }
+   259→    } else {
+   260→      engine.ui.warning('No sessions found to continue');
+   261→    }
+   262→  }
+   263→
+   264→  // Print banner
+   265→  engine.ui.banner();
+   266→  const theme = engine.ui.theme;
+   267→  const permMode = engine.approval.getMode();
+   268→  const permIcon = engine.approval.getModeIcon();
+   269→  console.log(theme.muted(`  Model: ${MODELS[config.defaultModel]?.name || config.defaultModel}`));
+   270→  console.log(theme.muted(`  Permission: ${permIcon} ${permMode}`));
+   271→  console.log(theme.muted(`  Working Dir: ${process.cwd()}`));
+   272→  console.log(theme.muted(`  Type /help for commands, Tab for completion, Ctrl+C to exit\n`));
+   273→
+   274→  // Create readline with tab completion
+   275→  const completionEngine = new CompletionEngine(process.cwd());
+   276→  completionEngine.setAgentNames(Array.from(engine.agents.keys()));
+   277→
+   278→  const rl = createInterface({
+   279→    input: process.stdin,
+   280→    output: process.stdout,
+   281→    prompt: chalk.cyan('❯ '),
+   282→    historySize: 100,
+   283→    completer: completionEngine.complete,
+   284→  });
+   285→
+   286→  rl.prompt();
+   287→
+   288→  let currentMode: 'auto' | 'agent' | 'direct' = 'auto';
+   289→  let currentAgent: string | undefined;
+   290→
+   291→  rl.on('line', async (line) => {
+   292→    const input = line.trim();
+   293→    if (!input) { rl.prompt(); return; }
+   294→
+   295→    // Handle slash commands
+   296→    if (input.startsWith('/')) {
+   297→      const [cmd, ...args] = input.slice(1).split(' ');
+   298→
+   299→      switch (cmd) {
+   300→        case 'help':
+   301→          printHelp(engine);
+   302→          break;
+   303→
+   304→        case 'model':
+   305→          if (args[0]) {
+   306→            engine.switchModel(args[0]);
+   307→            // Update fallback chain to put new model first
+   308→            engine.fallback.addFallbackModel(config.defaultModel);
+   309→          } else {
+   310→            engine.ui.modelList(config.defaultModel);
+   311→          }
+   312→          break;
+   313→
+   314→        case 'agent':
+   315→          if (args[0]) {
+   316→            const agentNames = Array.from(engine.agents.keys());
+   317→            const found = agentNames.find(n => n.toLowerCase() === args[0].toLowerCase());
+   318→            if (found) { currentAgent = found; currentMode = 'direct'; engine.ui.success(`Switched to agent: ${found}`); }
+   319→            else { engine.ui.error(`Agent not found. Available: ${agentNames.join(', ')}`); }
+   320→          } else {
+   321→            const agents = Array.from(engine.agents.entries()).map(([name]) => ({ name, description: '', model: config.defaultModel }));
+   322→            engine.ui.agentList(agents);
+   323→          }
+   324→          break;
+   325→
+   326→        case 'auto':
+   327→          currentMode = 'auto'; currentAgent = undefined;
+   328→          engine.ui.success('Mode: Auto (smart orchestration)');
+   329→          break;
+   330→
+   331→        case 'orchestrate':
+   332→        case 'plan':
+   333→          currentMode = 'agent'; currentAgent = undefined;
+   334→          engine.ui.success('Mode: Multi-agent orchestration');
+   335→          break;
+   336→
+   337→        case 'direct':
+   338→          currentMode = 'direct';
+   339→          engine.ui.success('Mode: Direct (single agent)');
+   340→          break;
+   341→
+   342→        case 'plan-mode':
+   343→          engine.approval.setMode('plan');
+   344→          engine.ui.success(`${engine.approval.getModeIcon()} Permission: plan (read-only)`);
+   345→          break;
+   346→
+   347→        case 'stats':
+   348→          const stats = engine.getSessionStats();
+   349→          engine.ui.sessionStats(stats.inputTokens, stats.outputTokens, stats.cost);
+   350→          break;
+   351→
+   352→        case 'clear':
+   353→          console.clear(); engine.ui.banner();
+   354→          break;
+   355→
+   356→        case 'theme':
+   357→          if (args[0]) {
+   358→            config.ui.theme = args[0] as 'dark' | 'light' | 'dracula' | 'nord';
+   359→            engine.ui = new TerminalUI(config.ui.theme, config.ui.showTokenCount, config.ui.showCost);
+   360→            engine.ui.success(`Theme: ${args[0]}`);
+   361→          } else { console.log('Available themes: dracula, dark, nord, light'); }
+   362→          break;
+   363→
+   364→        case 'resume':
+   365→          if (args[0]) {
+   366→            const sessionId = args[0] === 'latest' ? engine.sessionManager.list()[0]?.id : args[0];
+   367→            if (sessionId) {
+   368→              const session = engine.sessionManager.load(sessionId);
+   369→              if (session) engine.ui.success(`Resumed session: ${sessionId.slice(0, 20)}...`);
+   370→              else engine.ui.error(`Session not found: ${sessionId}`);
+   371→            } else { engine.ui.error('No sessions found'); }
+   372→          } else {
+   373→            const sessions = engine.sessionManager.list();
+   374→            if (sessions.length === 0) { engine.ui.info('No sessions found'); break; }
+   375→            console.log(chalk.bold('\nRecent sessions:\n'));
+   376→            for (const s of sessions.slice(0, 10)) {
+   377→              const date = new Date(s.createdAt).toLocaleString();
+   378→              console.log(`  ${chalk.cyan(s.id.slice(0, 20))}  ${chalk.gray(date)}  ${chalk.gray(`${s.messageCount} msgs`)}`);
+   379→            }
+   380→            console.log(chalk.gray('\nUse /resume <id> to resume a session'));
+   381→          }
+   382→          break;
+   383→
+   384→        case 'compact':
+   385→          engine.ui.info('Compacting conversation context...');
+   386→          // Trigger context compaction
+   387→          engine.contextManager.manage(engine.sessionManager.getCurrent()?.messages || []);
+   388→          engine.ui.success('Context compacted');
+   389→          break;
+   390→
+   391→        case 'undo':
+   392→          engine.ui.info('Undoing last change...');
+   393→          try {
+   394→            const { GitCheckpointSystem } = await import('./context/git-checkpoint.js');
+   395→            const cps = new GitCheckpointSystem(process.cwd());
+   396→            await cps.undo();
+   397→            engine.ui.success('Last change undone');
+   398→          } catch (e) {
+   399→            engine.ui.error('Could not undo: ' + (e instanceof Error ? e.message : String(e)));
+   400→          }
+   401→          break;
+   402→
+   403→        case 'redo':
+   404→          engine.ui.info('Redo not yet implemented (requires undo stack)');
+   405→          break;
+   406→
+   407→        case 'fork':
+   408→          engine.ui.info('Forking current session...');
+   409→          const currentSession = engine.sessionManager.getCurrent();
+   410→          if (currentSession) {
+   411→            const forked = engine.sessionManager.create(process.cwd(), config.defaultModel);
+   412→            forked.messages = [...currentSession.messages];
+   413→            engine.sessionManager.save();
+   414→            engine.ui.success(`Forked to new session: ${forked.id.slice(0, 20)}...`);
+   415→          } else {
+   416→            engine.ui.error('No active session to fork');
+   417→          }
+   418→          break;
+   419→
+   420→        case 'mcp':
+   421→          const mcpSub = args[0];
+   422→          if (mcpSub === 'list') {
+   423→            const servers = engine.mcpClient.listServers();
+   424→            if (servers.length === 0) { engine.ui.info('No MCP servers configured'); break; }
+   425→            console.log(chalk.bold('\nMCP Servers:\n'));
+   426→            for (const s of servers) {
+   427→              const status = s.connected ? chalk.green('● connected') : chalk.gray('○ disconnected');
+   428→              console.log(`  ${chalk.cyan(s.name.padEnd(20))} ${status}  ${chalk.gray(`${s.toolCount} tools`)}  ${chalk.gray(s.config.transport)}`);
+   429→            }
+   430→          } else if (mcpSub === 'connect' && args[1]) {
+   431→            try {
+   432→              const cfg = engine.mcpClient.loadConfig();
+   433→              if (cfg.mcpServers[args[1]]) {
+   434→                await engine.mcpClient.connect(args[1], cfg.mcpServers[args[1]]);
+   435→                engine.ui.success(`Connected to MCP server: ${args[1]}`);
+   436→              } else { engine.ui.error(`MCP server "${args[1]}" not found`); }
+   437→            } catch (e) { engine.ui.error(`Failed to connect: ${e instanceof Error ? e.message : String(e)}`); }
+   438→          } else if (mcpSub === 'disconnect' && args[1]) {
+   439→            await engine.mcpClient.disconnect(args[1]);
+   440→            engine.ui.success(`Disconnected from ${args[1]}`);
+   441→          } else if (mcpSub === 'health') {
+   442→            engine.mcpClient.healthReport();
+   443→          } else {
+   444→            console.log(chalk.bold('\nMCP Commands:\n'));
+   445→            console.log('  /mcp list              List MCP servers');
+   446→            console.log('  /mcp connect <name>    Connect to a server');
+   447→            console.log('  /mcp disconnect <name> Disconnect from a server');
+   448→            console.log('  /mcp health            Show MCP health report');
+   449→            console.log('  neuro mcp add <name> <cmd>  Add server (CLI)');
+   450→            console.log('  neuro mcp list               List servers (CLI)');
+   451→          }
+   452→          break;
+   453→
+   454→        case 'permission':
+   455→        case 'perm':
+   456→          if (args[0]) {
+   457→            const validModes = ['manual', 'auto', 'plan', 'yolo'];
+   458→            if (validModes.includes(args[0])) {
+   459→              engine.approval.setMode(args[0] as any);
+   460→              engine.ui.success(`${engine.approval.getModeIcon()} Permission: ${args[0]} (${engine.approval.getModeDescription()})`);
+   461→            } else { engine.ui.error(`Invalid mode. Use: ${validModes.join(', ')}`); }
+   462→          } else {
+   463→            const newMode = engine.approval.cycleMode();
+   464→            engine.ui.success(`${engine.approval.getModeIcon()} Permission: ${newMode} (${engine.approval.getModeDescription()})`);
+   465→          }
+   466→          break;
+   467→
+   468→        case 'init':
+   469→          engine.ui.info('Initializing NEURO.md for this project...');
+   470→          try {
+   471→            const { NeuroMdSystem } = await import('./context/neuro-md.js');
+   472→            const nmd = new NeuroMdSystem();
+   473→            await nmd.autoGenerate(process.cwd());
+   474→            engine.ui.success('NEURO.md created');
+   475→          } catch (e) { engine.ui.error('Could not create NEURO.md: ' + (e instanceof Error ? e.message : String(e))); }
+   476→          break;
+   477→
+   478→        case 'unpause':
+   479→          engine.doomLoop.unpause();
+   480→          break;
+   481→
+   482→        case 'sandbox':
+   483→          if (args[0] === 'on' || args[0] === 'enable') {
+   484→            engine.sandbox.enable();
+   485→            engine.ui.success('🔒 Sandbox mode enabled');
+   486→          } else if (args[0] === 'off' || args[0] === 'disable') {
+   487→            engine.sandbox.disable();
+   488→            engine.ui.success('🔓 Sandbox mode disabled');
+   489→          } else if (args[0] === 'status') {
+   490→            engine.sandbox.printStatus();
+   491→          } else if (args[0] === 'undo') {
+   492→            const undone = engine.sandbox.undoAll();
+   493→            engine.ui.success(`Undone ${undone} file modifications`);
+   494→          } else {
+   495→            const enabled = engine.sandbox.toggle();
+   496→            engine.ui.success(enabled ? '🔒 Sandbox mode enabled' : '🔓 Sandbox mode disabled');
+   497→          }
+   498→          break;
+   499→
+   500→        case 'plugins':
+   501→        case 'plugin':
+   502→          const pluginSub = args[0];
+   503→          if (pluginSub === 'list') {
+   504→            const plugins = engine.pluginManager.listPlugins();
+   505→            if (plugins.length === 0) { engine.ui.info('No plugins loaded'); break; }
+   506→            console.log(chalk.bold('\nPlugins:\n'));
+   507→            for (const p of plugins) {
+   508→              console.log(`  ${chalk.cyan(p.name)} v${p.version} - ${chalk.gray(p.description)} ${chalk.green(`${p.toolCount} tools`)}`);
+   509→            }
+   510→          } else if (pluginSub === 'load' && args[1]) {
+   511→            try {
+   512→              await engine.pluginManager.loadByName(args[1]);
+   513→              engine.ui.success(`Plugin "${args[1]}" loaded`);
+   514→            } catch (e) { engine.ui.error(`Failed to load plugin: ${e instanceof Error ? e.message : String(e)}`); }
+   515→          } else {
+   516→            console.log(chalk.bold('\nPlugin Commands:\n'));
+   517→            console.log('  /plugins list           List loaded plugins');
+   518→            console.log('  /plugins load <name>    Load a plugin');
+   519→          }
+   520→          break;
+   521→
+   522→        case 'whitelist':
+   523→          if (args[0] === 'add' && args[1]) {
+   524→            engine.approval.addToWhitelist(args[1]);
+   525→            engine.ui.success(`Added "${args[1]}" to whitelist`);
+   526→          } else if (args[0] === 'remove' && args[1]) {
+   527→            engine.approval.removeFromWhitelist(args[1]);
+   528→            engine.ui.success(`Removed "${args[1]}" from whitelist`);
+   529→          } else if (args[0] === 'list') {
+   530→            const wl = engine.approval.getWhitelist();
+   531→            console.log(chalk.bold('\nWhitelisted tools:\n'));
+   532→            for (const t of wl) console.log(`  ${chalk.green('✓')} ${t}`);
+   533→          } else {
+   534→            console.log('Usage: /whitelist add|remove|list <tool>');
+   535→          }
+   536→          break;
+   537→
+   538→        case 'blacklist':
+   539→          if (args[0] === 'add' && args[1]) {
+   540→            engine.approval.addToBlacklist(args[1]);
+   541→            engine.ui.success(`Added "${args[1]}" to blacklist`);
+   542→          } else if (args[0] === 'remove' && args[1]) {
+   543→            engine.approval.removeFromBlacklist(args[1]);
+   544→            engine.ui.success(`Removed "${args[1]}" from blacklist`);
+   545→          } else if (args[0] === 'list') {
+   546→            const bl = engine.approval.getBlacklist();
+   547→            console.log(chalk.bold('\nBlacklisted tools:\n'));
+   548→            for (const t of bl) console.log(`  ${chalk.red('✗')} ${t}`);
+   549→          } else {
+   550→            console.log('Usage: /blacklist add|remove|list <tool>');
+   551→          }
+   552→          break;
+   553→
+   554→        case 'doctor':
+   555→          console.log(chalk.bold('\nNeuroCLI Health Check:\n'));
+   556→          console.log(`  API Key: ${config.apiKey ? chalk.green('configured') : chalk.red('MISSING')}`);
+   557→          console.log(`  Default Model: ${chalk.cyan(config.defaultModel)} ${MODELS[config.defaultModel] ? chalk.green('valid') : chalk.red('INVALID')}`);
+   558→          console.log(`  MCP Servers: ${chalk.cyan(String(engine.mcpClient.listServers().length))}`);
+   559→          console.log(`  Permission Mode: ${chalk.cyan(engine.approval.getMode())}`);
+   560→          console.log(`  Diff Preview: ${config.diffPreview ? chalk.green('enabled') : chalk.gray('disabled')}`);
+   561→          console.log(`  Fallback Chain: ${config.fallbackChain.models.length > 0 ? chalk.green(config.fallbackChain.models.length + ' models') : chalk.yellow('none')}`);
+   562→          console.log(`  Doom Loop Protection: ${config.doomLoop.autoBreak ? chalk.green('enabled') : chalk.yellow('disabled')}`);
+   563→          console.log(`  Sandbox: ${engine.sandbox.isEnabled() ? chalk.green('enabled') : chalk.gray('disabled')}`);
+   564→          console.log(`  Plugins: ${chalk.cyan(String(engine.pluginManager.listPlugins().length))}`);
+   565→          console.log(`  Sessions: ${chalk.cyan(String(engine.sessionManager.list().length))}`);
+   566→          console.log(`  Spending Limit: ${config.spendingLimit > 0 ? chalk.cyan('$' + config.spendingLimit.toFixed(2)) : chalk.gray('unlimited')}`);
+   567→          console.log();
+   568→          break;
+   569→
+   570→        case 'export':
+   571→          const exportSession = engine.sessionManager.getCurrent();
+   572→          if (exportSession) {
+   573→            const json = JSON.stringify(exportSession, null, 2);
+   574→            console.log(json);
+   575→          } else { engine.ui.warning('No active session to export'); }
+   576→          break;
+   577→
+   578→        case 'exit':
+   579→        case 'quit':
+   580→        case 'q':
+   581→          engine.mcpClient.disconnectAll().catch(() => {});
+   582→          engine.approval.close();
+   583→          engine.ui.info('Goodbye!');
+   584→          process.exit(0);
+   585→          break;
+   586→
+   587→        default:
+   588→          engine.ui.error(`Unknown command: /${cmd}. Type /help for available commands.`);
+   589→      }
+   590→
+   591→      rl.prompt();
+   592→      return;
+   593→    }
+   594→
+   595→    // Process message with the engine
+   596→    try {
+   597→      await engine.processMessage(input, currentMode, currentAgent);
+   598→    } catch (error) {
+   599→      engine.ui.error(error instanceof Error ? error.message : String(error));
+   600→    }
+   601→
+   602→    rl.prompt();
+   603→  });
+   604→
+   605→  rl.on('close', () => {
+   606→    engine.mcpClient.disconnectAll().catch(() => {});
+   607→    engine.approval.close();
+   608→    engine.ui.info('Goodbye!');
+   609→    process.exit(0);
+   610→  });
+   611→}
+   612→
+   613→function printHelp(engine: NeuroEngine): void {
+   614→  const t = engine.ui.theme;
+   615→  console.log(`\n  ${t.bold('NeuroCLI Commands:')}\n`);
+   616→  console.log(`  ${t.tool('/help')}            Show this help message`);
+   617→  console.log(`  ${t.tool('/model [id]')}      Switch or list models`);
+   618→  console.log(`  ${t.tool('/agent [name]')}    Switch or list agents`);
+   619→  console.log(`  ${t.tool('/auto')}            Auto mode (smart orchestration)`);
+   620→  console.log(`  ${t.tool('/orchestrate')}     Multi-agent orchestration mode`);
+   621→  console.log(`  ${t.tool('/direct')}          Direct agent mode`);
+   622→  console.log(`  ${t.tool('/plan-mode')}       Plan mode (read-only, no modifications)`);
+   623→  console.log(`  ${t.tool('/permission [m]')}  Cycle or set permission mode`);
+   624→  console.log(`  ${t.tool('/resume [id]')}     Resume a previous session`);
+   625→  console.log(`  ${t.tool('/fork')}            Fork current session`);
+   626→  console.log(`  ${t.tool('/compact')}         Compact conversation context`);
+   627→  console.log(`  ${t.tool('/undo')}            Undo last change`);
+   628→  console.log(`  ${t.tool('/mcp [cmd]')}       Manage MCP servers`);
+   629→  console.log(`  ${t.tool('/init')}            Initialize NEURO.md`);
+   630→  console.log(`  ${t.tool('/sandbox')}         Toggle sandbox mode`);
+   631→  console.log(`  ${t.tool('/plugins')}         Manage plugins`);
+   632→  console.log(`  ${t.tool('/whitelist')}       Manage tool whitelist`);
+   633→  console.log(`  ${t.tool('/blacklist')}       Manage tool blacklist`);
+   634→  console.log(`  ${t.tool('/doctor')}          Health check`);
+   635→  console.log(`  ${t.tool('/export')}          Export current session as JSON`);
+   636→  console.log(`  ${t.tool('/stats')}           Show session statistics`);
+   637→  console.log(`  ${t.tool('/theme [name]')}    Switch UI theme`);
+   638→  console.log(`  ${t.tool('/clear')}           Clear terminal`);
+   639→  console.log(`  ${t.tool('/exit')}            Exit NeuroCLI`);
+   640→  console.log();
+   641→  console.log(`  ${t.muted('Tab: auto-complete commands, models, files')}`);
+   642→  console.log(`  ${t.muted('Shift+Tab: cycle permission modes')}`);
+   643→  console.log();
+   644→  console.log(`  ${t.muted('Examples:')}`);
+   645→  console.log(`  ${t.muted('  "Create a REST API with Express"')}`);
+   646→  console.log(`  ${t.muted('  "Fix the bug in auth.ts"')}`);
+   647→  console.log(`  ${t.muted('  "Explain how this codebase works"')}`);
+   648→  console.log();
+   649→}
+   650→
+   651→// Parse and execute
+   652→program.parse(process.argv);
+   653→

@@ -1,7 +1,7 @@
 {
   "name": "neuro-cli",
-  "version": "1.0.0",
-  "description": "Advanced AI-powered terminal coding assistant with multi-agent architecture",
+  "version": "3.0.0",
+  "description": "Advanced AI-powered terminal coding assistant with multi-agent architecture, MCP protocol, skill system, model routing, and 23+ free models",
   "main": "dist/index.js",
   "bin": {
     "neuro": "dist/index.js"
@@ -14,7 +14,14 @@
     "lint": "eslint src/",
     "clean": "rm -rf dist/"
   },
-  "keywords": ["ai", "cli", "coding", "assistant", "openrouter", "agent"],
+  "keywords": [
+    "ai",
+    "cli",
+    "coding",
+    "assistant",
+    "openrouter",
+    "agent"
+  ],
   "author": "NeuroCLI",
   "license": "MIT",
   "dependencies": {
@@ -43,6 +50,6 @@
     "@types/node": "^22.5.5",
     "@types/react": "^18.3.5",
     "tsx": "^4.19.1",
-    "typescript": "^5.6.2"
+    "typescript": "^5.9.3"
   }
 }
