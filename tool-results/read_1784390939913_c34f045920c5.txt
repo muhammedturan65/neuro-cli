@@ -1,0 +1,1327 @@
+     1→// ============================================================
+     2→// NeuroCLI - Multi-Model Orchestrator/Worker Pattern (GAP-33)
+     3→// Cost-stratified orchestration: expensive model plans,
+     4→// cheap model executes, medium model evaluates.
+     5→// Inspired by Aider's Architect mode.
+     6→// ============================================================
+     7→
+     8→import { OpenRouterClient, TokenUsage } from '../api/openrouter.js';
+     9→import { MODELS, calculateCost, isFreeModel } from '../api/models.js';
+    10→import { Message, ToolCall } from './types.js';
+    11→import { FallbackChain } from './fallback.js';
+    12→import { SpendingMonitor, SpendingEntry } from './spending-warnings.js';
+    13→
+    14→// ============================================================
+    15→// Public Types
+    16→// ============================================================
+    17→
+    18→export interface ModelRole {
+    19→  name: string;
+    20→  model: string;
+    21→  fallbackModels: string[];
+    22→  maxTokensPerRequest: number;
+    23→  description: string;
+    24→}
+    25→
+    26→export interface OrchestratorConfig {
+    27→  roles: {
+    28→    orchestrator: ModelRole;
+    29→    worker: ModelRole;
+    30→    evaluator: ModelRole;
+    31→    reviewer: ModelRole;
+    32→  };
+    33→  costBudget: {
+    34→    maxPerSession: number;
+    35→    maxPerTask: number;
+    36→    warnThreshold: number;
+    37→  };
+    38→  qualityGates: {
+    39→    enabled: boolean;
+    40→    evaluatorModel: string;
+    41→    minConfidence: number;
+    42→  };
+    43→  dynamicSwitching: boolean;
+    44→}
+    45→
+    46→export interface TaskClassification {
+    47→  complexity: 'trivial' | 'simple' | 'moderate' | 'complex' | 'critical';
+    48→  suggestedRole: string;
+    49→  suggestedModel: string;
+    50→  estimatedTokens: number;
+    51→  reasoning: string;
+    52→}
+    53→
+    54→export interface ModelResponse {
+    55→  content: string;
+    56→  model: string;
+    57→  role: string;
+    58→  usage: TokenUsage;
+    59→  toolCalls: ToolCall[];
+    60→  confidence?: number;
+    61→  timestamp: number;
+    62→}
+    63→
+    64→export interface OrchestrationResult {
+    65→  plan: ModelResponse;
+    66→  execution: ModelResponse;
+    67→  evaluation?: ModelResponse;
+    68→  review?: ModelResponse;
+    69→  totalCost: number;
+    70→  totalTokens: number;
+    71→  phases: OrchestrationPhase[];
+    72→  escalated: boolean;
+    73→  escalationReason?: string;
+    74→  success: boolean;
+    75→  timestamp: number;
+    76→}
+    77→
+    78→export interface OrchestrationPhase {
+    79→  role: string;
+    80→  model: string;
+    81→  inputTokens: number;
+    82→  outputTokens: number;
+    83→  cost: number;
+    84→  durationMs: number;
+    85→  success: boolean;
+    86→}
+    87→
+    88→export interface CostBreakdown {
+    89→  total: number;
+    90→  byRole: Record<string, number>;
+    91→  byModel: Record<string, number>;
+    92→  perTask: CostTaskEntry[];
+    93→  sessionStart: number;
+    94→}
+    95→
+    96→export interface CostTaskEntry {
+    97→  taskDescription: string;
+    98→  cost: number;
+    99→  role: string;
+   100→  model: string;
+   101→  timestamp: number;
+   102→}
+   103→
+   104→export interface WorkerFailureRecord {
+   105→  model: string;
+   106→  timestamp: number;
+   107→  error: string;
+   108→}
+   109→
+   110→// ============================================================
+   111→// Classification Prompt Builder
+   112→// ============================================================
+   113→
+   114→const CLASSIFICATION_SYSTEM_PROMPT = `You are a task classifier for a multi-model AI orchestration system. Analyze the user's prompt and classify it according to these dimensions:
+   115→
+   116→1. COMPLEXITY: How difficult is this task?
+   117→   - "trivial": Simple lookup, greeting, single factual answer
+   118→   - "simple": Single-step task, basic code edit, short answer
+   119→   - "moderate": Multi-step task, moderate code changes, debugging
+   120→   - "complex": Multi-phase implementation, architecture decisions, large refactors
+   121→   - "critical": Production-critical changes, security-sensitive, data migration
+   122→
+   123→2. SUGGESTED ROLE: Which model role should handle this?
+   124→   - "worker": For trivial/simple tasks (cheap, fast execution)
+   125→   - "orchestrator": For complex/critical tasks (expensive, capable planning)
+   126→   - "evaluator": For quality assessment tasks
+   127→   - "reviewer": For code review tasks
+   128→
+   129→3. ESTIMATED TOKENS: Rough token count for input + expected output
+   130→
+   131→Respond ONLY with valid JSON in this exact format:
+   132→{"complexity":"<trivial|simple|moderate|complex|critical>","suggestedRole":"<worker|orchestrator|evaluator|reviewer>","estimatedTokens":<number>,"reasoning":"<brief explanation>"}`;
+   133→
+   134→// ============================================================
+   135→// Default Configuration
+   136→// ============================================================
+   137→
+   138→export const DEFAULT_ORCHESTRATOR_CONFIG: OrchestratorConfig = {
+   139→  roles: {
+   140→    orchestrator: {
+   141→      name: 'orchestrator',
+   142→      model: 'qwen/qwen3-coder:free',
+   143→      fallbackModels: [
+   144→        'nvidia/nemotron-3-super-120b-a12b:free',
+   145→        'meta-llama/llama-3.3-70b-instruct:free',
+   146→      ],
+   147→      maxTokensPerRequest: 262000,
+   148→      description: 'Expensive/capable model for planning and decomposition',
+   149→    },
+   150→    worker: {
+   151→      name: 'worker',
+   152→      model: 'google/gemma-4-31b-it:free',
+   153→      fallbackModels: [
+   154→        'meta-llama/llama-3.3-70b-instruct:free',
+   155→        'nvidia/nemotron-3-nano-30b-a3b:free',
+   156→      ],
+   157→      maxTokensPerRequest: 32768,
+   158→      description: 'Cheap/fast model for execution and editing',
+   159→    },
+   160→    evaluator: {
+   161→      name: 'evaluator',
+   162→      model: 'qwen/qwen3-coder:free',
+   163→      fallbackModels: [
+   164→        'nvidia/nemotron-3-super-120b-a12b:free',
+   165→      ],
+   166→      maxTokensPerRequest: 32768,
+   167→      description: 'Medium model for quality checks and validation',
+   168→    },
+   169→    reviewer: {
+   170→      name: 'reviewer',
+   171→      model: 'qwen/qwen3-coder:free',
+   172→      fallbackModels: [
+   173→        'nvidia/nemotron-3-super-120b-a12b:free',
+   174→      ],
+   175→      maxTokensPerRequest: 32768,
+   176→      description: 'Medium model for code review',
+   177→    },
+   178→  },
+   179→  costBudget: {
+   180→    maxPerSession: 1.0,
+   181→    maxPerTask: 0.25,
+   182→    warnThreshold: 75,
+   183→  },
+   184→  qualityGates: {
+   185→    enabled: true,
+   186→    evaluatorModel: 'qwen/qwen3-coder:free',
+   187→    minConfidence: 0.7,
+   188→  },
+   189→  dynamicSwitching: true,
+   190→};
+   191→
+   192→// ============================================================
+   193→// Complexity Heuristic Tables (Local fallback for classification)
+   194→// ============================================================
+   195→
+   196→const TRIVIAL_PATTERNS: RegExp[] = [
+   197→  /^(hi|hello|hey|thanks|ok|yes|no|done|sure)\b/i,
+   198→  /^(what\s+is|define|list)\b/i,
+   199→  /\b(trivial|tiny|quick\s+question)\b/i,
+   200→];
+   201→
+   202→const SIMPLE_PATTERNS: RegExp[] = [
+   203→  /\b(simple|basic|quick|easy|short|single|minor)\b/i,
+   204→  /\b(fix\s+a?\s*typo|rename|add\s+a\s+comment|format|lint)\b/i,
+   205→];
+   206→
+   207→const COMPLEX_PATTERNS: RegExp[] = [
+   208→  /\b(implement\s+(a\s+)?(full|complete|comprehensive|end-to-end|production))\b/i,
+   209→  /\b(build\s+(a\s+)?(system|application|platform|framework|service|architecture))\b/i,
+   210→  /\b(design\s+(and\s+implement|the\s+architecture|from\s+scratch))\b/i,
+   211→  /\b(multi[\s-]*(step|phase|stage|part|agent|service|module))\b/i,
+   212→  /\b(orchestrat|coordinat|integrat|pipeline|workflow)\b/i,
+   213→  /\b(complex|comprehensive|sophisticated|enterprise|large-scale)\b/i,
+   214→];
+   215→
+   216→const CRITICAL_PATTERNS: RegExp[] = [
+   217→  /\b(production|critical|security|migration|data\s*loss|irreversible|deploy)\b/i,
+   218→  /\b(security\s+(audit|hardening|fix|vulnerability))\b/i,
+   219→  /\b(database\s+migration|schema\s+change|breaking\s+change)\b/i,
+   220→];
+   221→
+   222→// ============================================================
+   223→// MultiModelOrchestrator
+   224→// ============================================================
+   225→
+   226→export class MultiModelOrchestrator {
+   227→  private config: OrchestratorConfig;
+   228→  private client: OpenRouterClient;
+   229→  private fallbackChain: FallbackChain;
+   230→  private spendingMonitor: SpendingMonitor;
+   231→
+   232→  // Per-role cost tracking
+   233→  private roleCosts: Record<string, number> = {
+   234→    orchestrator: 0,
+   235→    worker: 0,
+   236→    evaluator: 0,
+   237→    reviewer: 0,
+   238→  };
+   239→
+   240→  // Per-model cost tracking
+   241→  private modelCosts: Record<string, number> = {};
+   242→
+   243→  // Per-task cost entries
+   244→  private taskCostEntries: CostTaskEntry[] = [];
+   245→
+   246→  // Session totals
+   247→  private sessionTotalCost: number = 0;
+   248→  private sessionTotalTokens: number = 0;
+   249→  private sessionStartTime: number;
+   250→
+   251→  // Dynamic switching: worker failure tracking
+   252→  private workerFailures: WorkerFailureRecord[] = [];
+   253→  private workerUpgradeUntil: number = 0;
+   254→
+   255→  // Current effective model per role (may differ from config during fallback)
+   256→  private effectiveModels: Record<string, string>;
+   257→
+   258→  // Budget exceeded flag
+   259→  private budgetExceeded: boolean = false;
+   260→
+   261→  constructor(config: OrchestratorConfig, apiClient: OpenRouterClient) {
+   262→    this.config = config;
+   263→    this.client = apiClient;
+   264→    this.sessionStartTime = Date.now();
+   265→
+   266→    // Initialize effective models from config
+   267→    this.effectiveModels = {
+   268→      orchestrator: config.roles.orchestrator.model,
+   269→      worker: config.roles.worker.model,
+   270→      evaluator: config.roles.evaluator.model,
+   271→      reviewer: config.roles.reviewer.model,
+   272→    };
+   273→
+   274→    // Set up fallback chain with all fallback models from all roles
+   275→    const allFallbacks = new Set<string>();
+   276→    for (const role of Object.values(config.roles)) {
+   277→      for (const fb of role.fallbackModels) {
+   278→        allFallbacks.add(fb);
+   279→      }
+   280→    }
+   281→    this.fallbackChain = new FallbackChain(apiClient, {
+   282→      models: [...allFallbacks],
+   283→      maxRetries: 2,
+   284→      retryDelayMs: 3000,
+   285→      fallbackOnErrors: ['rate_limit', 'overloaded', 'context_length_exceeded', 'timeout', 'server_error'],
+   286→    });
+   287→
+   288→    // Set up spending monitor with budget from config
+   289→    this.spendingMonitor = new SpendingMonitor({
+   290→      sessionLimit: config.costBudget.maxPerSession,
+   291→      dailyLimit: 0,
+   292→      warnAtPercent: [config.costBudget.warnThreshold],
+   293→      autoStopAtLimit: true,
+   294→      trackByModel: true,
+   295→    });
+   296→  }
+   297→
+   298→  // ===================================================================
+   299→  // Task Routing
+   300→  // ===================================================================
+   301→
+   302→  /**
+   303→   * Classify a task by complexity and suggest the appropriate model role.
+   304→   * Uses a lightweight LLM call when possible; falls back to local heuristics.
+   305→   */
+   306→  async classifyTask(prompt: string, context?: string): Promise<TaskClassification> {
+   307→    const fullPrompt = context ? `${context}\n\n---\n\n${prompt}` : prompt;
+   308→
+   309→    // Try LLM-based classification using the cheapest available model
+   310→    try {
+   311→      const classificationModel = this.cheapestAvailableModel();
+   312→      const messages: Message[] = [
+   313→        { role: 'system', content: CLASSIFICATION_SYSTEM_PROMPT },
+   314→        { role: 'user', content: fullPrompt },
+   315→      ];
+   316→
+   317→      const response = await this.client.quickChat(
+   318→        classificationModel,
+   319→        messages,
+   320→        undefined,
+   321→        0.1,
+   322→      );
+   323→
+   324→      const parsed = this.parseClassificationResponse(response.content);
+   325→      if (parsed) {
+   326→        // Record the cost of classification
+   327→        this.recordCost('orchestrator', classificationModel, response.usage, 'task-classification');
+   328→        return parsed;
+   329→      }
+   330→    } catch {
+   331→      // Fall through to heuristic classification
+   332→    }
+   333→
+   334→    // Local heuristic fallback
+   335→    return this.classifyTaskHeuristic(prompt);
+   336→  }
+   337→
+   338→  /**
+   339→   * Route a classification to the appropriate model ID.
+   340→   */
+   341→  routeToModel(classification: TaskClassification): string {
+   342→    // Check for dynamic upgrade: if worker has been failing, upgrade
+   343→    if (classification.suggestedRole === 'worker' && this.isWorkerUpgraded()) {
+   344→      return this.getEffectiveModel('orchestrator');
+   345→    }
+   346→
+   347→    return this.getEffectiveModel(classification.suggestedRole);
+   348→  }
+   349→
+   350→  // ===================================================================
+   351→  // Execution Patterns
+   352→  // ===================================================================
+   353→
+   354→  /**
+   355→   * Full orchestration pipeline:
+   356→   *   orchestrator plans -> worker executes -> evaluator checks -> reviewer reviews
+   357→   *
+   358→   * Quality gates can re-route to orchestrator if evaluator confidence is low.
+   359→   */
+   360→  async orchestrateAndExecute(prompt: string, context?: string): Promise<OrchestrationResult> {
+   361→    const startTime = Date.now();
+   362→    const phases: OrchestrationPhase[] = [];
+   363→    let escalated = false;
+   364→    let escalationReason: string | undefined;
+   365→
+   366→    // Check budget before starting
+   367→    if (!this.isWithinBudget()) {
+   368→      return {
+   369→        plan: this.emptyResponse('orchestrator'),
+   370→        execution: this.emptyResponse('worker'),
+   371→        totalCost: 0,
+   372→        totalTokens: 0,
+   373→        phases: [],
+   374→        escalated: false,
+   375→        success: false,
+   376→        timestamp: Date.now(),
+   377→      };
+   378→    }
+   379→
+   380→    // --- Phase 1: Orchestrator plans ---
+   381→    const planStart = Date.now();
+   382→    let plan: ModelResponse;
+   383→    try {
+   384→      plan = await this.callOrchestrator(
+   385→        `Plan the approach for the following task. Break it into clear steps.\n\n${context ? `Context:\n${context}\n\n` : ''}Task: ${prompt}`,
+   386→      );
+   387→    } catch (err) {
+   388→      const errMsg = err instanceof Error ? err.message : String(err);
+   389→      return {
+   390→        plan: this.emptyResponse('orchestrator'),
+   391→        execution: this.emptyResponse('worker'),
+   392→        totalCost: 0,
+   393→        totalTokens: 0,
+   394→        phases: [{ role: 'orchestrator', model: this.getEffectiveModel('orchestrator'), inputTokens: 0, outputTokens: 0, cost: 0, durationMs: Date.now() - planStart, success: false }],
+   395→        escalated: false,
+   396→        escalationReason: `Orchestrator failed: ${errMsg}`,
+   397→        success: false,
+   398→        timestamp: Date.now(),
+   399→      };
+   400→    }
+   401→
+   402→    phases.push({
+   403→      role: 'orchestrator',
+   404→      model: plan.model,
+   405→      inputTokens: plan.usage.inputTokens,
+   406→      outputTokens: plan.usage.outputTokens,
+   407→      cost: plan.usage.cost,
+   408→      durationMs: Date.now() - planStart,
+   409→      success: true,
+   410→    });
+   411→
+   412→    // Check budget after orchestrator
+   413→    if (!this.isWithinBudget()) {
+   414→      return {
+   415→        plan,
+   416→        execution: this.emptyResponse('worker'),
+   417→        evaluation: undefined,
+   418→        review: undefined,
+   419→        totalCost: this.sumPhaseCosts(phases),
+   420→        totalTokens: this.sumPhaseTokens(phases),
+   421→        phases,
+   422→        escalated: false,
+   423→        escalationReason: 'Budget exceeded after orchestrator phase',
+   424→        success: false,
+   425→        timestamp: Date.now(),
+   426→      };
+   427→    }
+   428→
+   429→    // --- Phase 2: Worker executes ---
+   430→    const execStart = Date.now();
+   431→    const workerPrompt = `Based on this plan:\n\n${plan.content}\n\nExecute the task:\n${prompt}${context ? `\n\nContext:\n${context}` : ''}`;
+   432→    let execution: ModelResponse;
+   433→    try {
+   434→      execution = await this.callWorker(workerPrompt);
+   435→    } catch (err) {
+   436→      const errMsg = err instanceof Error ? err.message : String(err);
+   437→      this.recordWorkerFailure(this.getEffectiveModel('worker'), errMsg);
+   438→      phases.push({
+   439→        role: 'worker',
+   440→        model: this.getEffectiveModel('worker'),
+   441→        inputTokens: 0,
+   442→        outputTokens: 0,
+   443→        cost: 0,
+   444→        durationMs: Date.now() - execStart,
+   445→        success: false,
+   446→      });
+   447→      return {
+   448→        plan,
+   449→        execution: this.emptyResponse('worker'),
+   450→        totalCost: this.sumPhaseCosts(phases),
+   451→        totalTokens: this.sumPhaseTokens(phases),
+   452→        phases,
+   453→        escalated: false,
+   454→        escalationReason: `Worker failed: ${errMsg}`,
+   455→        success: false,
+   456→        timestamp: Date.now(),
+   457→      };
+   458→    }
+   459→
+   460→    phases.push({
+   461→      role: 'worker',
+   462→      model: execution.model,
+   463→      inputTokens: execution.usage.inputTokens,
+   464→      outputTokens: execution.usage.outputTokens,
+   465→      cost: execution.usage.cost,
+   466→      durationMs: Date.now() - execStart,
+   467→      success: true,
+   468→    });
+   469→
+   470→    // Check budget after worker
+   471→    if (!this.isWithinBudget()) {
+   472→      return {
+   473→        plan,
+   474→        execution,
+   475→        evaluation: undefined,
+   476→        review: undefined,
+   477→        totalCost: this.sumPhaseCosts(phases),
+   478→        totalTokens: this.sumPhaseTokens(phases),
+   479→        phases,
+   480→        escalated: false,
+   481→        escalationReason: 'Budget exceeded after worker phase',
+   482→        success: true,
+   483→        timestamp: Date.now(),
+   484→      };
+   485→    }
+   486→
+   487→    // --- Phase 3: Evaluator checks (if quality gates enabled) ---
+   488→    let evaluation: ModelResponse | undefined;
+   489→    if (this.config.qualityGates.enabled) {
+   490→      const evalStart = Date.now();
+   491→      const evalPrompt = `Evaluate the quality of this work output.\n\nOriginal task: ${prompt}\n\nPlan:\n${plan.content}\n\nExecution output:\n${execution.content}\n\nRate your confidence that the execution correctly and completely fulfills the task on a scale of 0.0 to 1.0. Respond with JSON: {"confidence": <number>, "issues": [<string>], "passed": <boolean>}`;
+   492→
+   493→      try {
+   494→        evaluation = await this.callEvaluator(evalPrompt);
+   495→
+   496→        // Parse evaluator confidence
+   497→        const evalResult = this.parseEvaluationResponse(evaluation.content);
+   498→        if (evalResult) {
+   499→          evaluation.confidence = evalResult.confidence;
+   500→
+   501→          // If confidence is below threshold, escalate to orchestrator
+   502→          if (evalResult.confidence < this.config.qualityGates.minConfidence) {
+   503→            escalated = true;
+   504→            escalationReason = `Evaluator confidence ${evalResult.confidence.toFixed(2)} below threshold ${this.config.qualityGates.minConfidence}. Issues: ${evalResult.issues.join('; ')}`;
+   505→
+   506→            // Re-execute with orchestrator model
+   507→            const retryStart = Date.now();
+   508→            const retryPrompt = `The worker's output was evaluated as insufficient (confidence: ${evalResult.confidence}).\n\nIssues: ${evalResult.issues.join('; ')}\n\nOriginal task: ${prompt}\n\nPrevious plan:\n${plan.content}\n\nPrevious output:\n${execution.content}\n\nPlease produce a better execution that addresses these issues.`;
+   509→
+   510→            try {
+   511→              const retryExecution = await this.callOrchestrator(retryPrompt);
+   512→              phases.push({
+   513→                role: 'orchestrator',
+   514→                model: retryExecution.model,
+   515→                inputTokens: retryExecution.usage.inputTokens,
+   516→                outputTokens: retryExecution.usage.outputTokens,
+   517→                cost: retryExecution.usage.cost,
+   518→                durationMs: Date.now() - retryStart,
+   519→                success: true,
+   520→              });
+   521→              execution = retryExecution;
+   522→            } catch {
+   523→              phases.push({
+   524→                role: 'orchestrator',
+   525→                model: this.getEffectiveModel('orchestrator'),
+   526→                inputTokens: 0,
+   527→                outputTokens: 0,
+   528→                cost: 0,
+   529→                durationMs: Date.now() - retryStart,
+   530→                success: false,
+   531→              });
+   532→            }
+   533→          }
+   534→        }
+   535→
+   536→        phases.push({
+   537→          role: 'evaluator',
+   538→          model: evaluation.model,
+   539→          inputTokens: evaluation.usage.inputTokens,
+   540→          outputTokens: evaluation.usage.outputTokens,
+   541→          cost: evaluation.usage.cost,
+   542→          durationMs: Date.now() - evalStart,
+   543→          success: true,
+   544→        });
+   545→      } catch {
+   546→        // Evaluator failure is non-fatal; continue without evaluation
+   547→        phases.push({
+   548→          role: 'evaluator',
+   549→          model: this.getEffectiveModel('evaluator'),
+   550→          inputTokens: 0,
+   551→          outputTokens: 0,
+   552→          cost: 0,
+   553→          durationMs: Date.now() - evalStart,
+   554→          success: false,
+   555→        });
+   556→      }
+   557→    }
+   558→
+   559→    // Check budget after evaluator
+   560→    if (!this.isWithinBudget()) {
+   561→      return {
+   562→        plan,
+   563→        execution,
+   564→        evaluation,
+   565→        review: undefined,
+   566→        totalCost: this.sumPhaseCosts(phases),
+   567→        totalTokens: this.sumPhaseTokens(phases),
+   568→        phases,
+   569→        escalated,
+   570→        escalationReason: escalated ? escalationReason : 'Budget exceeded after evaluator phase',
+   571→        success: true,
+   572→        timestamp: Date.now(),
+   573→      };
+   574→    }
+   575→
+   576→    // --- Phase 4: Reviewer reviews (if quality gates enabled) ---
+   577→    let review: ModelResponse | undefined;
+   578→    if (this.config.qualityGates.enabled) {
+   579→      const reviewStart = Date.now();
+   580→      const reviewPrompt = `Review the following code/output for correctness, style, and best practices.\n\nOriginal task: ${prompt}\n\nExecution output:\n${execution.content}\n\nProvide a brief review with: {"approved": <boolean>, "comments": [<string>], "severity": "low"|"medium"|"high"}`;
+   581→
+   582→      try {
+   583→        review = await this.callReviewer(reviewPrompt);
+   584→        phases.push({
+   585→          role: 'reviewer',
+   586→          model: review.model,
+   587→          inputTokens: review.usage.inputTokens,
+   588→          outputTokens: review.usage.outputTokens,
+   589→          cost: review.usage.cost,
+   590→          durationMs: Date.now() - reviewStart,
+   591→          success: true,
+   592→        });
+   593→      } catch {
+   594→        // Reviewer failure is non-fatal
+   595→        phases.push({
+   596→          role: 'reviewer',
+   597→          model: this.getEffectiveModel('reviewer'),
+   598→          inputTokens: 0,
+   599→          outputTokens: 0,
+   600→          cost: 0,
+   601→          durationMs: Date.now() - reviewStart,
+   602→          success: false,
+   603→        });
+   604→      }
+   605→    }
+   606→
+   607→    const totalCost = this.sumPhaseCosts(phases);
+   608→    const totalTokens = this.sumPhaseTokens(phases);
+   609→
+   610→    return {
+   611→      plan,
+   612→      execution,
+   613→      evaluation,
+   614→      review,
+   615→      totalCost,
+   616→      totalTokens,
+   617→      phases,
+   618→      escalated,
+   619→      escalationReason: escalated ? escalationReason : undefined,
+   620→      success: true,
+   621→      timestamp: Date.now(),
+   622→    };
+   623→  }
+   624→
+   625→  // ===================================================================
+   626→  // Direct Model Access by Role
+   627→  // ===================================================================
+   628→
+   629→  /**
+   630→   * Call the orchestrator model with a prompt.
+   631→   */
+   632→  async callOrchestrator(prompt: string): Promise<ModelResponse> {
+   633→    return this.callRole('orchestrator', prompt);
+   634→  }
+   635→
+   636→  /**
+   637→   * Call the worker model with a prompt.
+   638→   */
+   639→  async callWorker(prompt: string): Promise<ModelResponse> {
+   640→    // Dynamic switching: if worker has been failing, use orchestrator model
+   641→    if (this.isWorkerUpgraded()) {
+   642→      return this.callRole('orchestrator', prompt);
+   643→    }
+   644→    return this.callRole('worker', prompt);
+   645→  }
+   646→
+   647→  /**
+   648→   * Call the evaluator model with a prompt.
+   649→   */
+   650→  async callEvaluator(prompt: string): Promise<ModelResponse> {
+   651→    return this.callRole('evaluator', prompt);
+   652→  }
+   653→
+   654→  /**
+   655→   * Call the reviewer model with a prompt.
+   656→   */
+   657→  async callReviewer(prompt: string): Promise<ModelResponse> {
+   658→    return this.callRole('reviewer', prompt);
+   659→  }
+   660→
+   661→  // ===================================================================
+   662→  // Cost Management
+   663→  // ===================================================================
+   664→
+   665→  /**
+   666→   * Get the full cost breakdown for this session.
+   667→   */
+   668→  getSessionCost(): CostBreakdown {
+   669→    return {
+   670→      total: this.sessionTotalCost,
+   671→      byRole: { ...this.roleCosts },
+   672→      byModel: { ...this.modelCosts },
+   673→      perTask: [...this.taskCostEntries],
+   674→      sessionStart: this.sessionStartTime,
+   675→    };
+   676→  }
+   677→
+   678→  /**
+   679→   * Get cost grouped by role.
+   680→   */
+   681→  getCostByRole(): Record<string, number> {
+   682→    return { ...this.roleCosts };
+   683→  }
+   684→
+   685→  /**
+   686→   * Check whether spending is within budget.
+   687→   */
+   688→  isWithinBudget(): boolean {
+   689→    if (this.budgetExceeded) return false;
+   690→
+   691→    if (this.config.costBudget.maxPerSession > 0 && this.sessionTotalCost >= this.config.costBudget.maxPerSession) {
+   692→      this.budgetExceeded = true;
+   693→      return false;
+   694→    }
+   695→
+   696→    const limitCheck = this.spendingMonitor.checkLimit();
+   697→    if (!limitCheck.allowed) {
+   698→      this.budgetExceeded = true;
+   699→      return false;
+   700→    }
+   701→
+   702→    return true;
+   703→  }
+   704→
+   705→  // ===================================================================
+   706→  // Configuration
+   707→  // ===================================================================
+   708→
+   709→  /**
+   710→   * Update role configurations partially.
+   711→   */
+   712→  updateRoles(roles: Partial<OrchestratorConfig['roles']>): void {
+   713→    if (roles.orchestrator) {
+   714→      this.config.roles.orchestrator = { ...this.config.roles.orchestrator, ...roles.orchestrator };
+   715→      this.effectiveModels.orchestrator = this.config.roles.orchestrator.model;
+   716→    }
+   717→    if (roles.worker) {
+   718→      this.config.roles.worker = { ...this.config.roles.worker, ...roles.worker };
+   719→      this.effectiveModels.worker = this.config.roles.worker.model;
+   720→    }
+   721→    if (roles.evaluator) {
+   722→      this.config.roles.evaluator = { ...this.config.roles.evaluator, ...roles.evaluator };
+   723→      this.effectiveModels.evaluator = this.config.roles.evaluator.model;
+   724→    }
+   725→    if (roles.reviewer) {
+   726→      this.config.roles.reviewer = { ...this.config.roles.reviewer, ...roles.reviewer };
+   727→      this.effectiveModels.reviewer = this.config.roles.reviewer.model;
+   728→    }
+   729→
+   730→    // Rebuild fallback chain with updated models
+   731→    this.rebuildFallbackChain();
+   732→  }
+   733→
+   734→  /**
+   735→   * Set a new cost budget.
+   736→   */
+   737→  setCostBudget(budget: OrchestratorConfig['costBudget']): void {
+   738→    this.config.costBudget = { ...budget };
+   739→    this.budgetExceeded = false;
+   740→
+   741→    // Update spending monitor
+   742→    this.spendingMonitor = new SpendingMonitor({
+   743→      sessionLimit: budget.maxPerSession,
+   744→      dailyLimit: 0,
+   745→      warnAtPercent: [budget.warnThreshold],
+   746→      autoStopAtLimit: true,
+   747→      trackByModel: true,
+   748→    });
+   749→  }
+   750→
+   751→  /**
+   752→   * Get the currently effective model for a given role.
+   753→   * This may differ from the configured model during fallback scenarios.
+   754→   */
+   755→  getEffectiveModel(role: string): string {
+   756→    return this.effectiveModels[role] ?? this.config.roles.orchestrator.model;
+   757→  }
+   758→
+   759→  /**
+   760→   * Get the full orchestrator config.
+   761→   */
+   762→  getConfig(): OrchestratorConfig {
+   763→    return { ...this.config };
+   764→  }
+   765→
+   766→  /**
+   767→   * Reset session-level cost tracking and worker failure state.
+   768→   */
+   769→  resetSession(): void {
+   770→    this.roleCosts = { orchestrator: 0, worker: 0, evaluator: 0, reviewer: 0 };
+   771→    this.modelCosts = {};
+   772→    this.taskCostEntries = [];
+   773→    this.sessionTotalCost = 0;
+   774→    this.sessionTotalTokens = 0;
+   775→    this.sessionStartTime = Date.now();
+   776→    this.workerFailures = [];
+   777→    this.workerUpgradeUntil = 0;
+   778→    this.budgetExceeded = false;
+   779→    this.effectiveModels = {
+   780→      orchestrator: this.config.roles.orchestrator.model,
+   781→      worker: this.config.roles.worker.model,
+   782→      evaluator: this.config.roles.evaluator.model,
+   783→      reviewer: this.config.roles.reviewer.model,
+   784→    };
+   785→    this.spendingMonitor.resetSession();
+   786→  }
+   787→
+   788→  // ===================================================================
+   789→  // Private: Role Call with Fallback
+   790→  // ===================================================================
+   791→
+   792→  /**
+   793→   * Call a model for a specific role, with fallback chain support.
+   794→   */
+   795→  private async callRole(roleName: string, prompt: string): Promise<ModelResponse> {
+   796→    const role = this.getRoleByName(roleName);
+   797→    if (!role) {
+   798→      throw new Error(`Unknown role: ${roleName}`);
+   799→    }
+   800→
+   801→    const primaryModel = this.effectiveModels[roleName] ?? role.model;
+   802→    const messages: Message[] = [
+   803→      { role: 'system', content: this.getSystemPromptForRole(roleName) },
+   804→      { role: 'user', content: prompt },
+   805→    ];
+   806→
+   807→    const startTime = Date.now();
+   808→
+   809→    try {
+   810→      // Try primary model first
+   811→      const response = await this.client.chat({
+   812→        model: primaryModel,
+   813→        messages,
+   814→        maxTokens: role.maxTokensPerRequest,
+   815→        stream: false,
+   816→        temperature: this.getTemperatureForRole(roleName),
+   817→      });
+   818→
+   819→      const modelResponse: ModelResponse = {
+   820→        content: response.content,
+   821→        model: primaryModel,
+   822→        role: roleName,
+   823→        usage: response.usage,
+   824→        toolCalls: response.toolCalls ?? [],
+   825→        timestamp: Date.now(),
+   826→      };
+   827→
+   828→      this.recordCost(roleName, primaryModel, response.usage, prompt.slice(0, 80));
+   829→      return modelResponse;
+   830→
+   831→    } catch (primaryError) {
+   832→      // Primary model failed; try fallback chain
+   833→      const errMsg = primaryError instanceof Error ? primaryError.message : String(primaryError);
+   834→
+   835→      for (const fallbackModel of role.fallbackModels) {
+   836→        try {
+   837→          const response = await this.client.chat({
+   838→            model: fallbackModel,
+   839→            messages,
+   840→            maxTokens: role.maxTokensPerRequest,
+   841→            stream: false,
+   842→            temperature: this.getTemperatureForRole(roleName),
+   843→          });
+   844→
+   845→          // Update effective model for this role
+   846→          this.effectiveModels[roleName] = fallbackModel;
+   847→
+   848→          const modelResponse: ModelResponse = {
+   849→            content: response.content,
+   850→            model: fallbackModel,
+   851→            role: roleName,
+   852→            usage: response.usage,
+   853→            toolCalls: response.toolCalls ?? [],
+   854→            timestamp: Date.now(),
+   855→          };
+   856→
+   857→          this.recordCost(roleName, fallbackModel, response.usage, prompt.slice(0, 80));
+   858→          return modelResponse;
+   859→
+   860→        } catch {
+   861→          // Continue to next fallback
+   862→          continue;
+   863→        }
+   864→      }
+   865→
+   866→      // All models failed including fallbacks
+   867→      throw new Error(`All models failed for role "${roleName}" (primary: ${primaryModel}). Primary error: ${errMsg}`);
+   868→    }
+   869→  }
+   870→
+   871→  // ===================================================================
+   872→  // Private: Cost Recording
+   873→  // ===================================================================
+   874→
+   875→  /**
+   876→   * Record a cost entry for a role/model combination.
+   877→   */
+   878→  private recordCost(role: string, model: string, usage: TokenUsage, taskDescription: string): void {
+   879→    const cost = usage.cost;
+   880→
+   881→    this.roleCosts[role] = (this.roleCosts[role] ?? 0) + cost;
+   882→    this.modelCosts[model] = (this.modelCosts[model] ?? 0) + cost;
+   883→    this.sessionTotalCost += cost;
+   884→    this.sessionTotalTokens += usage.inputTokens + usage.outputTokens;
+   885→
+   886→    this.taskCostEntries.push({
+   887→      taskDescription: taskDescription.slice(0, 120),
+   888→      cost,
+   889→      role,
+   890→      model,
+   891→      timestamp: Date.now(),
+   892→    });
+   893→
+   894→    // Also record in the spending monitor for integration with the broader system
+   895→    this.spendingMonitor.record({
+   896→      model,
+   897→      inputTokens: usage.inputTokens,
+   898→      outputTokens: usage.outputTokens,
+   899→      cost,
+   900→      sessionId: 'multi-model-session',
+   901→    });
+   902→
+   903→    // Check warn threshold
+   904→    if (this.config.costBudget.maxPerSession > 0) {
+   905→      const percentUsed = (this.sessionTotalCost / this.config.costBudget.maxPerSession) * 100;
+   906→      if (percentUsed >= this.config.costBudget.warnThreshold) {
+   907→        console.warn(
+   908→          `\x1b[33m\x1b[1m[BUDGET WARNING]\x1b[0m Session spending at ${percentUsed.toFixed(1)}% of budget ($${this.sessionTotalCost.toFixed(4)} / $${this.config.costBudget.maxPerSession.toFixed(2)})`,
+   909→        );
+   910→      }
+   911→    }
+   912→  }
+   913→
+   914→  // ===================================================================
+   915→  // Private: Task Classification
+   916→  // ===================================================================
+   917→
+   918→  /**
+   919→   * Parse the LLM classification response.
+   920→   */
+   921→  private parseClassificationResponse(content: string): TaskClassification | null {
+   922→    try {
+   923→      // Try to extract JSON from the response (may be wrapped in markdown)
+   924→      const jsonMatch = content.match(/\{[\s\S]*?\}/);
+   925→      if (!jsonMatch) return null;
+   926→
+   927→      const parsed = JSON.parse(jsonMatch[0]);
+   928→
+   929→      const validComplexities: TaskClassification['complexity'][] = ['trivial', 'simple', 'moderate', 'complex', 'critical'];
+   930→      const validRoles = ['worker', 'orchestrator', 'evaluator', 'reviewer'];
+   931→
+   932→      const complexity = validComplexities.includes(parsed.complexity) ? parsed.complexity : 'moderate';
+   933→      const suggestedRole = validRoles.includes(parsed.suggestedRole) ? parsed.suggestedRole : 'worker';
+   934→
+   935→      return {
+   936→        complexity,
+   937→        suggestedRole,
+   938→        suggestedModel: this.getEffectiveModel(suggestedRole),
+   939→        estimatedTokens: typeof parsed.estimatedTokens === 'number' ? parsed.estimatedTokens : 1000,
+   940→        reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : 'LLM-classified',
+   941→      };
+   942→    } catch {
+   943→      return null;
+   944→    }
+   945→  }
+   946→
+   947→  /**
+   948→   * Local heuristic classification fallback.
+   949→   * Used when the LLM classification call fails or is unavailable.
+   950→   */
+   951→  private classifyTaskHeuristic(prompt: string): TaskClassification {
+   952→    const length = prompt.length;
+   953→
+   954→    // Check critical patterns first
+   955→    for (const pattern of CRITICAL_PATTERNS) {
+   956→      if (pattern.test(prompt)) {
+   957→        return {
+   958→          complexity: 'critical',
+   959→          suggestedRole: 'orchestrator',
+   960→          suggestedModel: this.getEffectiveModel('orchestrator'),
+   961→          estimatedTokens: Math.max(length * 3, 2000),
+   962→          reasoning: 'Critical patterns detected (production/security/migration)',
+   963→        };
+   964→      }
+   965→    }
+   966→
+   967→    // Check complex patterns
+   968→    for (const pattern of COMPLEX_PATTERNS) {
+   969→      if (pattern.test(prompt)) {
+   970→        return {
+   971→          complexity: 'complex',
+   972→          suggestedRole: 'orchestrator',
+   973→          suggestedModel: this.getEffectiveModel('orchestrator'),
+   974→          estimatedTokens: Math.max(length * 3, 2000),
+   975→          reasoning: 'Complex multi-phase task indicators detected',
+   976→        };
+   977→      }
+   978→    }
+   979→
+   980→    // Check simple patterns
+   981→    for (const pattern of SIMPLE_PATTERNS) {
+   982→      if (pattern.test(prompt)) {
+   983→        return {
+   984→          complexity: 'simple',
+   985→          suggestedRole: 'worker',
+   986→          suggestedModel: this.getEffectiveModel('worker'),
+   987→          estimatedTokens: Math.max(Math.ceil(length / 4), 500),
+   988→          reasoning: 'Simple task indicators detected',
+   989→        };
+   990→      }
+   991→    }
+   992→
+   993→    // Check trivial patterns
+   994→    for (const pattern of TRIVIAL_PATTERNS) {
+   995→      if (pattern.test(prompt)) {
+   996→        return {
+   997→          complexity: 'trivial',
+   998→          suggestedRole: 'worker',
+   999→          suggestedModel: this.getEffectiveModel('worker'),
+  1000→          estimatedTokens: Math.max(Math.ceil(length / 4), 100),
+  1001→          reasoning: 'Trivial interaction detected',
+  1002→        };
+  1003→      }
+  1004→    }
+  1005→
+  1006→    // Default to moderate based on length
+  1007→    if (length > 500) {
+  1008→      return {
+  1009→        complexity: 'moderate',
+  1010→        suggestedRole: 'orchestrator',
+  1011→        suggestedModel: this.getEffectiveModel('orchestrator'),
+  1012→        estimatedTokens: Math.ceil(length / 3) + 1000,
+  1013→        reasoning: 'Long prompt suggests moderate complexity',
+  1014→      };
+  1015→    }
+  1016→
+  1017→    return {
+  1018→      complexity: 'moderate',
+  1019→      suggestedRole: 'worker',
+  1020→      suggestedModel: this.getEffectiveModel('worker'),
+  1021→      estimatedTokens: Math.ceil(length / 3) + 500,
+  1022→      reasoning: 'Default moderate classification',
+  1023→    };
+  1024→  }
+  1025→
+  1026→  // ===================================================================
+  1027→  // Private: Evaluation Parsing
+  1028→  // ===================================================================
+  1029→
+  1030→  /**
+  1031→   * Parse the evaluator's confidence response.
+  1032→   */
+  1033→  private parseEvaluationResponse(content: string): { confidence: number; issues: string[]; passed: boolean } | null {
+  1034→    try {
+  1035→      const jsonMatch = content.match(/\{[\s\S]*?\}/);
+  1036→      if (!jsonMatch) return null;
+  1037→
+  1038→      const parsed = JSON.parse(jsonMatch[0]);
+  1039→
+  1040→      const confidence = typeof parsed.confidence === 'number'
+  1041→        ? Math.max(0, Math.min(1, parsed.confidence))
+  1042→        : 0.5;
+  1043→
+  1044→      const issues = Array.isArray(parsed.issues)
+  1045→        ? parsed.issues.filter((i: unknown) => typeof i === 'string')
+  1046→        : [];
+  1047→
+  1048→      const passed = typeof parsed.passed === 'boolean' ? parsed.passed : confidence >= this.config.qualityGates.minConfidence;
+  1049→
+  1050→      return { confidence, issues, passed };
+  1051→    } catch {
+  1052→      return null;
+  1053→    }
+  1054→  }
+  1055→
+  1056→  // ===================================================================
+  1057→  // Private: Dynamic Switching
+  1058→  // ===================================================================
+  1059→
+  1060→  /**
+  1061→   * Record a worker failure for dynamic switching.
+  1062→   */
+  1063→  private recordWorkerFailure(model: string, error: string): void {
+  1064→    this.workerFailures.push({
+  1065→      model,
+  1066→      timestamp: Date.now(),
+  1067→      error,
+  1068→    });
+  1069→
+  1070→    // If 3 or more failures in the last 5 minutes, upgrade worker to orchestrator model
+  1071→    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+  1072→    const recentFailures = this.workerFailures.filter(f => f.timestamp > fiveMinutesAgo);
+  1073→
+  1074→    if (recentFailures.length >= 3 && this.config.dynamicSwitching) {
+  1075→      this.workerUpgradeUntil = Date.now() + 10 * 60 * 1000; // Upgrade for 10 minutes
+  1076→      console.warn(
+  1077→        `\x1b[33m\x1b[1m[DYNAMIC SWITCH]\x1b[0m Worker model has failed ${recentFailures.length} times in 5 minutes. Upgrading to orchestrator model for 10 minutes.`,
+  1078→      );
+  1079→    }
+  1080→  }
+  1081→
+  1082→  /**
+  1083→   * Check if the worker is currently upgraded to the orchestrator model.
+  1084→   */
+  1085→  private isWorkerUpgraded(): boolean {
+  1086→    if (!this.config.dynamicSwitching) return false;
+  1087→    if (this.workerUpgradeUntil <= 0) return false;
+  1088→    if (Date.now() > this.workerUpgradeUntil) {
+  1089→      this.workerUpgradeUntil = 0;
+  1090→      // Reset effective model back to worker's configured model
+  1091→      this.effectiveModels.worker = this.config.roles.worker.model;
+  1092→      return false;
+  1093→    }
+  1094→    return true;
+  1095→  }
+  1096→
+  1097→  // ===================================================================
+  1098→  // Private: Helpers
+  1099→  // ===================================================================
+  1100→
+  1101→  /**
+  1102→   * Get the cheapest available model from the registry.
+  1103→   * Used for classification calls to minimize cost.
+  1104→   */
+  1105→  private cheapestAvailableModel(): string {
+  1106→    // Prefer free models with tool support
+  1107→    const freeToolModels = Object.values(MODELS).filter(m => m.inputPrice === 0 && m.outputPrice === 0 && m.supportsTools);
+  1108→    if (freeToolModels.length > 0) {
+  1109→      // Sort by context window descending (larger is better for classification)
+  1110→      freeToolModels.sort((a, b) => b.contextWindow - a.contextWindow);
+  1111→      return freeToolModels[0].id;
+  1112→    }
+  1113→
+  1114→    // Fall back to any free model
+  1115→    const freeModels = Object.values(MODELS).filter(m => m.inputPrice === 0 && m.outputPrice === 0);
+  1116→    if (freeModels.length > 0) {
+  1117→      return freeModels[0].id;
+  1118→    }
+  1119→
+  1120→    // Last resort: use worker model
+  1121→    return this.config.roles.worker.model;
+  1122→  }
+  1123→
+  1124→  /**
+  1125→   * Get the ModelRole config for a given role name.
+  1126→   */
+  1127→  private getRoleByName(name: string): ModelRole | undefined {
+  1128→    switch (name) {
+  1129→      case 'orchestrator': return this.config.roles.orchestrator;
+  1130→      case 'worker': return this.config.roles.worker;
+  1131→      case 'evaluator': return this.config.roles.evaluator;
+  1132→      case 'reviewer': return this.config.roles.reviewer;
+  1133→      default: return undefined;
+  1134→    }
+  1135→  }
+  1136→
+  1137→  /**
+  1138→   * Get a system prompt appropriate for a role.
+  1139→   */
+  1140→  private getSystemPromptForRole(roleName: string): string {
+  1141→    switch (roleName) {
+  1142→      case 'orchestrator':
+  1143→        return 'You are an expert software architect and planner. Analyze tasks, break them into clear actionable steps, and provide detailed implementation plans. Be thorough and consider edge cases.';
+  1144→      case 'worker':
+  1145→        return 'You are an efficient code executor. Follow the provided plan precisely and implement the required changes. Focus on correctness, clean code, and minimal changes. Do not over-engineer.';
+  1146→      case 'evaluator':
+  1147→        return 'You are a quality assurance evaluator. Assess whether the execution output correctly and completely fulfills the original task. Be objective and thorough. Rate your confidence from 0.0 to 1.0.';
+  1148→      case 'reviewer':
+  1149→        return 'You are a senior code reviewer. Review the output for correctness, style, best practices, potential bugs, and security issues. Be constructive and specific.';
+  1150→      default:
+  1151→        return 'You are a helpful AI assistant.';
+  1152→    }
+  1153→  }
+  1154→
+  1155→  /**
+  1156→   * Get an appropriate temperature for a role.
+  1157→   */
+  1158→  private getTemperatureForRole(roleName: string): number {
+  1159→    switch (roleName) {
+  1160→      case 'orchestrator': return 0.4;  // More creative planning
+  1161→      case 'worker': return 0.2;        // Precise execution
+  1162→      case 'evaluator': return 0.1;     // Objective evaluation
+  1163→      case 'reviewer': return 0.2;      // Thorough but precise
+  1164→      default: return 0.5;
+  1165→    }
+  1166→  }
+  1167→
+  1168→  /**
+  1169→   * Create an empty ModelResponse for error/budget-exceeded cases.
+  1170→   */
+  1171→  private emptyResponse(role: string): ModelResponse {
+  1172→    return {
+  1173→      content: '',
+  1174→      model: this.getEffectiveModel(role),
+  1175→      role,
+  1176→      usage: { inputTokens: 0, outputTokens: 0, cost: 0 },
+  1177→      toolCalls: [],
+  1178→      timestamp: Date.now(),
+  1179→    };
+  1180→  }
+  1181→
+  1182→  /**
+  1183→   * Sum the cost of completed phases.
+  1184→   */
+  1185→  private sumPhaseCosts(phases: OrchestrationPhase[]): number {
+  1186→    return phases.reduce((sum, p) => sum + p.cost, 0);
+  1187→  }
+  1188→
+  1189→  /**
+  1190→   * Sum the tokens of completed phases.
+  1191→   */
+  1192→  private sumPhaseTokens(phases: OrchestrationPhase[]): number {
+  1193→    return phases.reduce((sum, p) => sum + p.inputTokens + p.outputTokens, 0);
+  1194→  }
+  1195→
+  1196→  /**
+  1197→   * Rebuild the fallback chain when role configs change.
+  1198→   */
+  1199→  private rebuildFallbackChain(): void {
+  1200→    const allFallbacks = new Set<string>();
+  1201→    for (const role of Object.values(this.config.roles)) {
+  1202→      for (const fb of role.fallbackModels) {
+  1203→        allFallbacks.add(fb);
+  1204→      }
+  1205→    }
+  1206→    this.fallbackChain = new FallbackChain(this.client, {
+  1207→      models: [...allFallbacks],
+  1208→      maxRetries: 2,
+  1209→      retryDelayMs: 3000,
+  1210→      fallbackOnErrors: ['rate_limit', 'overloaded', 'context_length_exceeded', 'timeout', 'server_error'],
+  1211→    });
+  1212→  }
+  1213→}
+  1214→
+  1215→// ============================================================
+  1216→// Factory: Create a pre-configured orchestrator
+  1217→// ============================================================
+  1218→
+  1219→/**
+  1220→ * Create a MultiModelOrchestrator with sensible defaults for free models.
+  1221→ */
+  1222→export function createFreeOrchestrator(apiClient: OpenRouterClient): MultiModelOrchestrator {
+  1223→  return new MultiModelOrchestrator(DEFAULT_ORCHESTRATOR_CONFIG, apiClient);
+  1224→}
+  1225→
+  1226→/**
+  1227→ * Create a MultiModelOrchestrator with premium models for maximum capability.
+  1228→ */
+  1229→export function createPremiumOrchestrator(apiClient: OpenRouterClient): MultiModelOrchestrator {
+  1230→  const premiumConfig: OrchestratorConfig = {
+  1231→    roles: {
+  1232→      orchestrator: {
+  1233→        name: 'orchestrator',
+  1234→        model: 'anthropic/claude-opus-4',
+  1235→        fallbackModels: ['openai/o3', 'google/gemini-2.5-pro'],
+  1236→        maxTokensPerRequest: 32000,
+  1237→        description: 'Premium orchestrator for complex planning',
+  1238→      },
+  1239→      worker: {
+  1240→        name: 'worker',
+  1241→        model: 'anthropic/claude-sonnet-4',
+  1242→        fallbackModels: ['google/gemini-2.5-flash', 'deepseek/deepseek-chat'],
+  1243→        maxTokensPerRequest: 64000,
+  1244→        description: 'Capable worker for execution',
+  1245→      },
+  1246→      evaluator: {
+  1247→        name: 'evaluator',
+  1248→        model: 'google/gemini-2.5-flash',
+  1249→        fallbackModels: ['openai/gpt-4o-mini', 'deepseek/deepseek-chat'],
+  1250→        maxTokensPerRequest: 65536,
+  1251→        description: 'Fast evaluator for quality checks',
+  1252→      },
+  1253→      reviewer: {
+  1254→        name: 'reviewer',
+  1255→        model: 'anthropic/claude-sonnet-4',
+  1256→        fallbackModels: ['google/gemini-2.5-pro', 'deepseek/deepseek-r1'],
+  1257→        maxTokensPerRequest: 64000,
+  1258→        description: 'Thorough reviewer for code review',
+  1259→      },
+  1260→    },
+  1261→    costBudget: {
+  1262→      maxPerSession: 10.0,
+  1263→      maxPerTask: 2.0,
+  1264→      warnThreshold: 75,
+  1265→    },
+  1266→    qualityGates: {
+  1267→      enabled: true,
+  1268→      evaluatorModel: 'google/gemini-2.5-flash',
+  1269→      minConfidence: 0.7,
+  1270→    },
+  1271→    dynamicSwitching: true,
+  1272→  };
+  1273→
+  1274→  return new MultiModelOrchestrator(premiumConfig, apiClient);
+  1275→}
+  1276→
+  1277→/**
+  1278→ * Create a MultiModelOrchestrator with a balanced mix of free and premium models.
+  1279→ */
+  1280→export function createBalancedOrchestrator(apiClient: OpenRouterClient): MultiModelOrchestrator {
+  1281→  const balancedConfig: OrchestratorConfig = {
+  1282→    roles: {
+  1283→      orchestrator: {
+  1284→        name: 'orchestrator',
+  1285→        model: 'anthropic/claude-sonnet-4',
+  1286→        fallbackModels: ['qwen/qwen3-coder:free', 'google/gemini-2.5-pro'],
+  1287→        maxTokensPerRequest: 64000,
+  1288→        description: 'Balanced orchestrator for planning',
+  1289→      },
+  1290→      worker: {
+  1291→        name: 'worker',
+  1292→        model: 'qwen/qwen3-coder:free',
+  1293→        fallbackModels: ['google/gemma-4-31b-it:free', 'deepseek/deepseek-chat'],
+  1294→        maxTokensPerRequest: 262000,
+  1295→        description: 'Free worker for execution',
+  1296→      },
+  1297→      evaluator: {
+  1298→        name: 'evaluator',
+  1299→        model: 'google/gemini-2.5-flash',
+  1300→        fallbackModels: ['qwen/qwen3-coder:free', 'deepseek/deepseek-chat'],
+  1301→        maxTokensPerRequest: 65536,
+  1302→        description: 'Fast evaluator for quality checks',
+  1303→      },
+  1304→      reviewer: {
+  1305→        name: 'reviewer',
+  1306→        model: 'google/gemini-2.5-flash',
+  1307→        fallbackModels: ['qwen/qwen3-coder:free', 'deepseek/deepseek-r1'],
+  1308→        maxTokensPerRequest: 65536,
+  1309→        description: 'Fast reviewer for code review',
+  1310→      },
+  1311→    },
+  1312→    costBudget: {
+  1313→      maxPerSession: 3.0,
+  1314→      maxPerTask: 0.75,
+  1315→      warnThreshold: 75,
+  1316→    },
+  1317→    qualityGates: {
+  1318→      enabled: true,
+  1319→      evaluatorModel: 'google/gemini-2.5-flash',
+  1320→      minConfidence: 0.7,
+  1321→    },
+  1322→    dynamicSwitching: true,
+  1323→  };
+  1324→
+  1325→  return new MultiModelOrchestrator(balancedConfig, apiClient);
+  1326→}
+  1327→

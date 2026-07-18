@@ -1,5 +1,5 @@
 // ============================================================
-// NeuroCLI - NeuroEngine v4.0.0
+// NeuroCLI - NeuroEngine v4.1.0
 // The main engine that ties everything together
 // Now with: Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval,
 // Model Router, Prompt Cache, Undo/Redo, Output Styles,
@@ -10,7 +10,12 @@
 // SKILL.md Standard, Auto Mode, Scheduled Tasks,
 // Parallel Agents, Background Sessions, Browser Automation,
 // Tree-sitter, Linting, Testing, Code Review,
-// GitHub Integration, CI/CD, Plugin Bundles, Security Scanner
+// GitHub Integration, CI/CD, Plugin Bundles, Security Scanner,
+// Sub-Agent Spawning, ACP Protocol, OS-Level Sandbox,
+// Spec-Driven Development, LLM Evaluator Hooks, MCP Apps,
+// Multi-Model Orchestrator, Smart Monitor, Outcome Grading,
+// Observability (OTLP), Auto-Compact, Terminal UX,
+// Multi-Session, Git Worktree, Auto-Updater
 // ============================================================
 import { join } from 'path';
 import { homedir } from 'os';
@@ -59,6 +64,21 @@ import { TestingIntegration } from './testing.js';
 import { CodeReviewSystem } from './code-review.js';
 import { SecurityScanner } from './security-scanner.js';
 import { PluginBundleManager } from './plugin-bundle.js';
+import { SubAgentManager } from './sub-agent.js';
+import { ACPServer } from './acp.js';
+import { OSSandboxManager } from './os-sandbox.js';
+import { SpecDrivenPipeline } from './spec-driven.js';
+import { LLMEvaluatorManager } from '../hooks/llm-evaluator.js';
+import { MCPAppManager } from '../mcp/mcp-apps.js';
+import { MultiModelOrchestrator } from './multi-model.js';
+import { SmartMonitor } from './smart-monitor.js';
+import { OutcomeGrader } from './outcome-grading.js';
+import { ObservabilityManager } from './observability.js';
+import { AutoCompactManager } from './auto-compact.js';
+import { TerminalUX } from './terminal-ux.js';
+import { MultiSessionManager } from './multi-session.js';
+import { GitWorktreeManager } from './git-worktree.js';
+import { AutoUpdater } from './updater.js';
 export class NeuroEngine {
     config;
     client;
@@ -107,6 +127,22 @@ export class NeuroEngine {
     codeReview;
     securityScanner;
     pluginBundles;
+    // v4.1 new systems
+    subAgentSpawner;
+    acp;
+    osSandbox;
+    specDriven;
+    llmEvaluator;
+    mcpApps;
+    multiModelOrchestrator;
+    smartMonitor;
+    outcomeGrading;
+    observability;
+    autoCompact;
+    terminalUX;
+    multiSession;
+    gitWorktree;
+    updater;
     autoApproveSet;
     requireApprovalSet;
     constructor(config) {
@@ -284,6 +320,174 @@ export class NeuroEngine {
         });
         // Plugin bundles
         this.pluginBundles = new PluginBundleManager(join(homedir(), '.neuro', 'bundles'));
+        // --- v4.1 New Systems ---
+        // Sub-Agent Spawner
+        this.subAgentSpawner = new SubAgentManager(this.client, this.registry, process.cwd(), this.sessionManager.getCurrent()?.id || 'default', config.defaultModel);
+        // ACP Protocol (Agent Client Protocol - JSON-RPC 2.0)
+        this.acp = new ACPServer(this, { enabled: false, port: 9256, host: 'localhost' });
+        // OS-Level Sandbox (Docker + native sandboxing + network isolation)
+        this.osSandbox = new OSSandboxManager({
+            type: 'os-native',
+            network: {
+                mode: 'filtered',
+                allowedDomains: [],
+                allowedPorts: [443, 80],
+                blockPrivateNetworks: true,
+            },
+            commands: {
+                blockedCommands: ['rm -rf /', 'mkfs', 'dd if=/dev/zero'],
+                allowedPrefixes: ['git', 'npm', 'node', 'npx', 'yarn', 'pnpm', 'ls', 'cat', 'echo'],
+                maxArgLength: 1024,
+                allowPipes: false,
+                allowBackground: false,
+            },
+            filesystem: {
+                readOnlyPaths: ['/etc', '/usr', '/bin'],
+                readWritePaths: [process.cwd()],
+                deniedPaths: ['/etc/passwd', '/etc/shadow', '/etc/ssh'],
+                allowHiddenFiles: false,
+            },
+        });
+        // Spec-Driven Development Pipeline
+        this.specDriven = new SpecDrivenPipeline({
+            runPrompt: async (prompt, model) => {
+                const result = await this.processMessage(prompt, 'direct', 'Coder');
+                return {
+                    text: result.content,
+                    inputTokens: result.usage.inputTokens,
+                    outputTokens: result.usage.outputTokens,
+                    cost: result.usage.cost,
+                    filesChanged: 0,
+                    commandsRun: 0,
+                };
+            },
+        }, process.cwd(), config.defaultModel);
+        // LLM Evaluator Hooks
+        this.llmEvaluator = new LLMEvaluatorManager(this.client, {
+            defaultModel: config.defaultModel,
+            defaultRubric: 'safety',
+            confidenceThreshold: 0.8,
+            cacheEnabled: true,
+        });
+        // MCP Apps (interactive tool UI extensions)
+        this.mcpApps = new MCPAppManager(this.mcpClient);
+        // Multi-Model Orchestrator/Worker (cost stratification)
+        this.multiModelOrchestrator = new MultiModelOrchestrator({
+            roles: {
+                orchestrator: {
+                    name: 'Orchestrator',
+                    model: config.defaultModel,
+                    fallbackModels: ['qwen/qwen3-coder:free'],
+                    maxTokensPerRequest: 4096,
+                    description: 'Task decomposition and coordination',
+                },
+                worker: {
+                    name: 'Worker',
+                    model: 'google/gemma-4-31b-it:free',
+                    fallbackModels: ['qwen/qwen3-coder:free'],
+                    maxTokensPerRequest: 4096,
+                    description: 'Code generation and modification',
+                },
+                evaluator: {
+                    name: 'Evaluator',
+                    model: 'qwen/qwen3-coder:free',
+                    fallbackModels: ['google/gemma-4-31b-it:free'],
+                    maxTokensPerRequest: 2048,
+                    description: 'Quality evaluation and grading',
+                },
+                reviewer: {
+                    name: 'Reviewer',
+                    model: 'qwen/qwen3-coder:free',
+                    fallbackModels: ['google/gemma-4-31b-it:free'],
+                    maxTokensPerRequest: 2048,
+                    description: 'Code review and feedback',
+                },
+            },
+            costBudget: {
+                maxPerSession: 1.0,
+                maxPerTask: 0.1,
+                warnThreshold: 0.8,
+            },
+            qualityGates: {
+                enabled: false,
+                evaluatorModel: config.defaultModel,
+                minConfidence: 0.7,
+            },
+            dynamicSwitching: true,
+        }, this.client);
+        // Smart Monitor (LLM-based risk scoring for auto mode)
+        this.smartMonitor = new SmartMonitor({
+            enabled: true,
+            evaluatorModel: config.defaultModel,
+            riskThresholds: {
+                autoApprove: 0.3,
+                askUser: 0.7,
+            },
+            learning: {
+                enabled: false,
+                storagePath: join(homedir(), '.neuro', 'monitor-learning'),
+                minSamples: 10,
+            },
+            escalationRules: [],
+            contextAwareness: {
+                checkGitStatus: true,
+                checkTestCoverage: false,
+                checkProductionFiles: true,
+                protectedPaths: ['prod', 'production', 'main'],
+            },
+        }, this.client);
+        // Outcome Grading (rubric-based quality evaluation with revision loops)
+        this.outcomeGrading = new OutcomeGrader(this.client, {
+            defaultEvaluatorModel: config.defaultModel,
+            globalMaxRevisions: 3,
+            rubricsDir: join(homedir(), '.neuro', 'rubrics'),
+            persistHistory: true,
+            historyDir: join(homedir(), '.neuro', 'grading-history'),
+            evaluatorTemperature: 0.3,
+            evaluatorTimeoutMs: 30000,
+        });
+        // Observability (OpenTelemetry OTLP JSON export)
+        this.observability = new ObservabilityManager({
+            enabled: false,
+            serviceName: 'neuro-cli',
+            endpoint: 'http://localhost:4318',
+            headers: {},
+            exportInterval: 30000,
+            maxBatchSize: 64,
+            consoleExporter: false,
+            sampleRate: 1.0,
+        });
+        // Auto-Compact (model-aware context compaction)
+        this.autoCompact = new AutoCompactManager({
+            enabled: true,
+            warningThreshold: 0.7,
+            compactThreshold: 0.85,
+            emergencyThreshold: 0.95,
+            preserveRecentCount: 5,
+            preserveSystemPrompt: true,
+            compactStrategy: 'summarize',
+            tokenBudget: {
+                systemPrompt: 2048,
+                conversation: 8192,
+                tools: 2048,
+                output: 2048,
+            },
+        });
+        // Terminal UX (OSC 52, TUI, syntax highlighting)
+        this.terminalUX = new TerminalUX();
+        // Multi-Session (parallel independent sessions)
+        this.multiSession = new MultiSessionManager({
+            maxConcurrent: 10,
+        });
+        // Git Worktree (agent-worktree binding)
+        this.gitWorktree = new GitWorktreeManager(process.cwd());
+        // Auto-Updater
+        this.updater = new AutoUpdater({
+            currentVersion: '4.1.0',
+            autoCheck: true,
+            autoUpdate: false,
+        });
+        // --- End v4.1 ---
         // --- End v4.0 ---
         // --- End P2/P3 ---
         // --- End v3.0 ---

@@ -1,0 +1,1418 @@
+     1→// ============================================================
+     2→// NeuroCLI - Rubric-Based Outcome Grading (GAP-35)
+     3→// Isolated evaluator grades agent output against structured
+     4→// rubrics; revision loop drives agents to meet criteria
+     5→// before delivery. Inspired by Claude Code Managed Agents.
+     6→// No external dependencies — Node.js built-in modules only.
+     7→// ============================================================
+     8→
+     9→import { resolve, join, extname } from 'path';
+    10→import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'fs';
+    11→import { randomUUID } from 'crypto';
+    12→
+    13→// ============================================================
+    14→// Exported Interfaces
+    15→// ============================================================
+    16→
+    17→/** A single criterion within a rubric. */
+    18→export interface RubricCriterion {
+    19→  id: string;
+    20→  name: string;
+    21→  description: string;
+    22→  weight: number; // 0-1, all weights in a rubric must sum to 1
+    23→  type: 'boolean' | 'scale' | 'descriptive';
+    24→  passingScore: number; // 0-100; for boolean: 100 = must pass, 0 = optional; for scale: threshold
+    25→}
+    26→
+    27→/** A structured rubric defining success criteria for an outcome. */
+    28→export interface Rubric {
+    29→  id: string;
+    30→  name: string;
+    31→  description: string;
+    32→  criteria: RubricCriterion[];
+    33→  passingThreshold: number; // 0-100 overall score needed to pass
+    34→  maxRevisions: number;
+    35→  evaluatorModel: string;
+    36→}
+    37→
+    38→/** Result for a single criterion evaluation. */
+    39→export interface CriterionResult {
+    40→  criterionId: string;
+    41→  score: number; // 0-100
+    42→  passed: boolean;
+    43→  feedback: string;
+    44→  evidence: string; // what the evaluator found
+    45→}
+    46→
+    47→/** Full grading result for a rubric evaluation. */
+    48→export interface GradingResult {
+    49→  rubricId: string;
+    50→  overallScore: number; // 0-100
+    51→  passed: boolean;
+    52→  criteriaResults: CriterionResult[];
+    53→  feedback: string;
+    54→  revisionNeeded: boolean;
+    55→  revisionSuggestions: string[];
+    56→  evaluatorModel: string;
+    57→  tokensUsed: number;
+    58→}
+    59→
+    60→/** Result of a revision loop that iterates grading + revision. */
+    61→export interface RevisionLoopResult {
+    62→  finalOutput: string;
+    63→  finalGrade: GradingResult;
+    64→  totalRevisions: number;
+    65→  revisionHistory: RevisionEntry[];
+    66→  passed: boolean;
+    67→}
+    68→
+    69→/** Single revision step within the loop. */
+    70→export interface RevisionEntry {
+    71→  revisionNumber: number;
+    72→  output: string;
+    73→  grade: GradingResult;
+    74→  timestamp: number;
+    75→}
+    76→
+    77→/** Configuration for the OutcomeGrader. */
+    78→export interface GradingConfig {
+    79→  /** Default model used for isolated evaluation when rubric doesn't specify one */
+    80→  defaultEvaluatorModel: string;
+    81→  /** Maximum revisions allowed globally (rubric maxRevisions takes precedence) */
+    82→  globalMaxRevisions: number;
+    83→  /** Directory where rubric JSON files are stored */
+    84→  rubricsDir: string;
+    85→  /** Whether to persist grading history to disk */
+    86→  persistHistory: boolean;
+    87→  /** Directory for persisted grading history */
+    88→  historyDir: string;
+    89→  /** Temperature for evaluator LLM calls */
+    90→  evaluatorTemperature: number;
+    91→  /** Timeout in ms for evaluator API calls */
+    92→  evaluatorTimeoutMs: number;
+    93→}
+    94→
+    95→// ============================================================
+    96→// Internal Types
+    97→// ============================================================
+    98→
+    99→/** Minimal shape of an API client the grader needs. */
+   100→interface EvaluatorAPIClient {
+   101→  chat(params: {
+   102→    model: string;
+   103→    messages: Array<{ role: string; content: string }>;
+   104→    temperature?: number;
+   105→    max_tokens?: number;
+   106→    timeout?: number;
+   107→  }): Promise<{
+   108→    content: string;
+   109→    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+   110→  }>;
+   111→}
+   112→
+   113→/** Minimal shape of an agent that can be driven in a revision loop. */
+   114→interface RevisionableAgent {
+   115→  run(prompt: string): Promise<{ output: string; tokensUsed: number }>;
+   116→}
+   117→
+   118→// ============================================================
+   119→// Constants
+   120→// ============================================================
+   121→
+   122→const DEFAULT_GRADING_CONFIG: GradingConfig = {
+   123→  defaultEvaluatorModel: 'anthropic/claude-sonnet-4',
+   124→  globalMaxRevisions: 5,
+   125→  rubricsDir: '.neuro/rubrics',
+   126→  persistHistory: false,
+   127→  historyDir: '.neuro/grading-history',
+   128→  evaluatorTemperature: 0.1,
+   129→  evaluatorTimeoutMs: 60_000,
+   130→};
+   131→
+   132→/** Characters per token heuristic for rough estimation. */
+   133→const CHARS_PER_TOKEN = 4;
+   134→
+   135→// ============================================================
+   136→// Built-in Rubric Definitions
+   137→// ============================================================
+   138→
+   139→function createBuiltinRubrics(): Rubric[] {
+   140→  return [
+   141→    {
+   142→      id: 'builtin-code-quality',
+   143→      name: 'Code Quality',
+   144→      description:
+   145→        'Evaluates clean code principles: readability, proper naming, absence of code smells, appropriate abstractions, and adherence to SOLID principles.',
+   146→      criteria: [
+   147→        {
+   148→          id: 'cq-readability',
+   149→          name: 'Readability',
+   150→          description: 'Code is easy to read and understand. Indentation, spacing, and formatting are consistent. Complex logic has explanatory comments.',
+   151→          weight: 0.25,
+   152→          type: 'scale',
+   153→          passingScore: 70,
+   154→        },
+   155→        {
+   156→          id: 'cq-naming',
+   157→          name: 'Naming Conventions',
+   158→          description: 'Variables, functions, classes, and modules use clear, descriptive names. No abbreviations unless widely understood. No single-letter variables except loop counters.',
+   159→          weight: 0.2,
+   160→          type: 'scale',
+   161→          passingScore: 70,
+   162→        },
+   163→        {
+   164→          id: 'cq-no-smells',
+   165→          name: 'No Code Smells',
+   166→          description: 'No duplicated code, overly long functions (>50 lines), deeply nested logic (>3 levels), magic numbers, or dead code.',
+   167→          weight: 0.25,
+   168→          type: 'boolean',
+   169→          passingScore: 100,
+   170→        },
+   171→        {
+   172→          id: 'cq-abstractions',
+   173→          name: 'Appropriate Abstractions',
+   174→          description: 'Abstractions are at the right level. No leaky abstractions. Functions do one thing. Classes have single responsibility.',
+   175→          weight: 0.15,
+   176→          type: 'scale',
+   177→          passingScore: 60,
+   178→        },
+   179→        {
+   180→          id: 'cq-solid',
+   181→          name: 'SOLID Principles',
+   182→          description: 'Code follows SOLID principles where applicable. Dependencies are injected, not hardcoded. Open for extension, closed for modification.',
+   183→          weight: 0.15,
+   184→          type: 'scale',
+   185→          passingScore: 60,
+   186→        },
+   187→      ],
+   188→      passingThreshold: 70,
+   189→      maxRevisions: 3,
+   190→      evaluatorModel: 'anthropic/claude-sonnet-4',
+   191→    },
+   192→    {
+   193→      id: 'builtin-security',
+   194→      name: 'Security',
+   195→      description:
+   196→        'Evaluates security posture: no vulnerabilities, proper input validation, no hardcoded secrets, safe data handling, and follows OWASP guidelines.',
+   197→      criteria: [
+   198→        {
+   199→          id: 'sec-input-validation',
+   200→          name: 'Input Validation',
+   201→          description: 'All user inputs are validated, sanitized, and type-checked. No trust of client-side data. Parameterized queries used for databases.',
+   202→          weight: 0.3,
+   203→          type: 'boolean',
+   204→          passingScore: 100,
+   205→        },
+   206→        {
+   207→          id: 'sec-no-secrets',
+   208→          name: 'No Hardcoded Secrets',
+   209→          description: 'No API keys, passwords, tokens, or private keys in source code. Secrets are loaded from environment variables or secret managers.',
+   210→          weight: 0.25,
+   211→          type: 'boolean',
+   212→          passingScore: 100,
+   213→        },
+   214→        {
+   215→          id: 'sec-vulnerabilities',
+   216→          name: 'No Known Vulnerabilities',
+   217→          description: 'No SQL injection, XSS, CSRF, path traversal, command injection, or other OWASP Top 10 vulnerabilities.',
+   218→          weight: 0.3,
+   219→          type: 'boolean',
+   220→          passingScore: 100,
+   221→        },
+   222→        {
+   223→          id: 'sec-safe-handling',
+   224→          name: 'Safe Data Handling',
+   225→          description: 'Sensitive data is encrypted at rest and in transit. PII is not logged. Error messages do not leak internal details.',
+   226→          weight: 0.15,
+   227→          type: 'scale',
+   228→          passingScore: 80,
+   229→        },
+   230→      ],
+   231→      passingThreshold: 90,
+   232→      maxRevisions: 3,
+   233→      evaluatorModel: 'anthropic/claude-sonnet-4',
+   234→    },
+   235→    {
+   236→      id: 'builtin-test-coverage',
+   237→      name: 'Test Coverage',
+   238→      description:
+   239→        'Evaluates test quality and coverage: tests exist, cover edge cases, have good assertions, and follow testing best practices.',
+   240→      criteria: [
+   241→        {
+   242→          id: 'tc-existence',
+   243→          name: 'Tests Exist',
+   244→          description: 'Unit and/or integration tests are present for the implemented functionality.',
+   245→          weight: 0.2,
+   246→          type: 'boolean',
+   247→          passingScore: 100,
+   248→        },
+   249→        {
+   250→          id: 'tc-edge-cases',
+   251→          name: 'Edge Cases Covered',
+   252→          description: 'Boundary conditions, empty inputs, null/undefined values, large inputs, and error paths are tested.',
+   253→          weight: 0.25,
+   254→          type: 'scale',
+   255→          passingScore: 70,
+   256→        },
+   257→        {
+   258→          id: 'tc-assertions',
+   259→          name: 'Meaningful Assertions',
+   260→          description: 'Assertions verify actual behavior, not just that no errors occurred. Each test has clear arrange/act/assert structure.',
+   261→          weight: 0.25,
+   262→          type: 'scale',
+   263→          passingScore: 70,
+   264→        },
+   265→        {
+   266→          id: 'tc-isolation',
+   267→          name: 'Test Isolation',
+   268→          description: 'Tests are independent and can run in any order. External dependencies are properly mocked or stubbed. No shared mutable state between tests.',
+   269→          weight: 0.15,
+   270→          type: 'scale',
+   271→          passingScore: 60,
+   272→        },
+   273→        {
+   274→          id: 'tc-naming',
+   275→          name: 'Test Naming',
+   276→          description: 'Test names clearly describe the scenario and expected outcome. Follow consistent naming convention (e.g., should_X_when_Y).',
+   277→          weight: 0.15,
+   278→          type: 'scale',
+   279→          passingScore: 60,
+   280→        },
+   281→      ],
+   282→      passingThreshold: 70,
+   283→      maxRevisions: 3,
+   284→      evaluatorModel: 'anthropic/claude-sonnet-4',
+   285→    },
+   286→    {
+   287→      id: 'builtin-performance',
+   288→      name: 'Performance',
+   289→      description:
+   290→        'Evaluates performance characteristics: no obvious bottlenecks, efficient algorithms, proper data structure choices, and resource awareness.',
+   291→      criteria: [
+   292→        {
+   293→          id: 'perf-algorithms',
+   294→          name: 'Efficient Algorithms',
+   295→          description: 'Algorithm complexity is appropriate for the problem. No O(n²) where O(n log n) or O(n) suffices. No unnecessary nested loops.',
+   296→          weight: 0.3,
+   297→          type: 'scale',
+   298→          passingScore: 70,
+   299→        },
+   300→        {
+   301→          id: 'perf-data-structures',
+   302→          name: 'Appropriate Data Structures',
+   303→          description: 'Correct data structures are chosen for the use case. Arrays vs Maps vs Sets are used appropriately. No linear searches where hash lookups apply.',
+   304→          weight: 0.25,
+   305→          type: 'scale',
+   306→          passingScore: 70,
+   307→        },
+   308→        {
+   309→          id: 'perf-no-bottlenecks',
+   310→          name: 'No Obvious Bottlenecks',
+   311→          description: 'No unnecessary I/O in loops, no synchronous blocking in async contexts, no memory leaks, no excessive object creation.',
+   312→          weight: 0.25,
+   313→          type: 'boolean',
+   314→          passingScore: 100,
+   315→        },
+   316→        {
+   317→          id: 'perf-resource-awareness',
+   318→          name: 'Resource Awareness',
+   319→          description: 'Connections are pooled, caches used where appropriate, large datasets are streamed rather than loaded entirely, cleanup is handled properly.',
+   320→          weight: 0.2,
+   321→          type: 'scale',
+   322→          passingScore: 60,
+   323→        },
+   324→      ],
+   325→      passingThreshold: 70,
+   326→      maxRevisions: 3,
+   327→      evaluatorModel: 'anthropic/claude-sonnet-4',
+   328→    },
+   329→    {
+   330→      id: 'builtin-documentation',
+   331→      name: 'Documentation',
+   332→      description:
+   333→        'Evaluates documentation quality: code comments, docstrings, README completeness, API documentation, and usage examples.',
+   334→      criteria: [
+   335→        {
+   336→          id: 'doc-comments',
+   337→          name: 'Code Comments',
+   338→          description: 'Complex logic is explained with inline comments. Comments explain "why", not "what". No commented-out code left behind.',
+   339→          weight: 0.2,
+   340→          type: 'scale',
+   341→          passingScore: 60,
+   342→        },
+   343→        {
+   344→          id: 'doc-docstrings',
+   345→          name: 'Docstrings / Type Docs',
+   346→          description: 'Public functions, classes, and interfaces have docstrings or TSDoc/JSDoc annotations. Parameters and return values are documented.',
+   347→          weight: 0.3,
+   348→          type: 'scale',
+   349→          passingScore: 70,
+   350→        },
+   351→        {
+   352→          id: 'doc-readme',
+   353→          name: 'README / Module Docs',
+   354→          description: 'Module or package has a README explaining purpose, installation, usage, and configuration. Examples are provided for common use cases.',
+   355→          weight: 0.25,
+   356→          type: 'scale',
+   357→          passingScore: 60,
+   358→        },
+   359→        {
+   360→          id: 'doc-api-docs',
+   361→          name: 'API Documentation',
+   362→          description: 'Public APIs are documented with request/response examples. Error codes and edge cases are explained. Authentication is described if applicable.',
+   363→          weight: 0.25,
+   364→          type: 'scale',
+   365→          passingScore: 60,
+   366→        },
+   367→      ],
+   368→      passingThreshold: 65,
+   369→      maxRevisions: 3,
+   370→      evaluatorModel: 'anthropic/claude-sonnet-4',
+   371→    },
+   372→  ];
+   373→}
+   374→
+   375→// ============================================================
+   376→// OutcomeGrader Class
+   377→// ============================================================
+   378→
+   379→export class OutcomeGrader {
+   380→  private rubrics: Map<string, Rubric> = new Map();
+   381→  private gradingHistory: GradingResult[] = [];
+   382→  private apiClient: EvaluatorAPIClient | null;
+   383→  private config: GradingConfig;
+   384→
+   385→  constructor(apiClient?: any, config?: Partial<GradingConfig>) {
+   386→    this.apiClient = apiClient ?? null;
+   387→    this.config = { ...DEFAULT_GRADING_CONFIG, ...config };
+   388→
+   389→    // Load built-in rubrics
+   390→    for (const rubric of createBuiltinRubrics()) {
+   391→      this.rubrics.set(rubric.id, rubric);
+   392→    }
+   393→  }
+   394→
+   395→  // ----------------------------------------------------------
+   396→  // Rubric Management
+   397→  // ----------------------------------------------------------
+   398→
+   399→  /**
+   400→   * Register a rubric definition. Overwrites any existing rubric with the same id.
+   401→   */
+   402→  defineRubric(rubric: Rubric): void {
+   403→    this.validateRubric(rubric);
+   404→    this.rubrics.set(rubric.id, { ...rubric });
+   405→  }
+   406→
+   407→  /**
+   408→   * Return all registered rubrics.
+   409→   */
+   410→  listRubrics(): Rubric[] {
+   411→    return Array.from(this.rubrics.values());
+   412→  }
+   413→
+   414→  /**
+   415→   * Get a single rubric by id, or undefined if not found.
+   416→   */
+   417→  getRubric(rubricId: string): Rubric | undefined {
+   418→    return this.rubrics.get(rubricId);
+   419→  }
+   420→
+   421→  /**
+   422→   * Remove a rubric by id. Returns true if the rubric existed and was removed.
+   423→   */
+   424→  removeRubric(rubricId: string): boolean {
+   425→    return this.rubrics.delete(rubricId);
+   426→  }
+   427→
+   428→  /**
+   429→   * Load rubric definitions from JSON files in a directory.
+   430→   * Each .json file should contain a single Rubric object or an array of Rubric objects.
+   431→   */
+   432→  async loadRubrics(dir: string): Promise<void> {
+   433→    const absDir = resolve(dir);
+   434→    if (!existsSync(absDir)) {
+   435→      mkdirSync(absDir, { recursive: true });
+   436→      return;
+   437→    }
+   438→
+   439→    const entries = readdirSync(absDir, { withFileTypes: true });
+   440→    for (const entry of entries) {
+   441→      if (!entry.isFile() || extname(entry.name).toLowerCase() !== '.json') {
+   442→        continue;
+   443→      }
+   444→      const filePath = join(absDir, entry.name);
+   445→      try {
+   446→        const raw = readFileSync(filePath, 'utf-8');
+   447→        const parsed = JSON.parse(raw);
+   448→        if (Array.isArray(parsed)) {
+   449→          for (const item of parsed) {
+   450→            this.defineRubric(item as Rubric);
+   451→          }
+   452→        } else if (typeof parsed === 'object' && parsed !== null) {
+   453→          this.defineRubric(parsed as Rubric);
+   454→        }
+   455→      } catch {
+   456→        // Skip malformed rubric files silently — callers can validate via listRubrics
+   457→      }
+   458→    }
+   459→  }
+   460→
+   461→  /**
+   462→   * Save a rubric to disk as JSON.
+   463→   */
+   464→  async saveRubric(rubric: Rubric, dir?: string): Promise<void> {
+   465→    const targetDir = resolve(dir ?? this.config.rubricsDir);
+   466→    if (!existsSync(targetDir)) {
+   467→      mkdirSync(targetDir, { recursive: true });
+   468→    }
+   469→    const filePath = join(targetDir, `${rubric.id}.json`);
+   470→    writeFileSync(filePath, JSON.stringify(rubric, null, 2), 'utf-8');
+   471→  }
+   472→
+   473→  // ----------------------------------------------------------
+   474→  // Grading
+   475→  // ----------------------------------------------------------
+   476→
+   477→  /**
+   478→   * Grade an output string against a rubric.
+   479→   * Uses the isolated evaluator (separate LLM call) so that grading
+   480→   * is decoupled from agent reasoning context.
+   481→   *
+   482→   * If no API client is available, performs heuristic-based grading.
+   483→   */
+   484→  async grade(output: string, rubricId: string, context?: string): Promise<GradingResult> {
+   485→    const rubric = this.rubrics.get(rubricId);
+   486→    if (!rubric) {
+   487→      throw new Error(`Rubric not found: "${rubricId}". Available rubrics: ${Array.from(this.rubrics.keys()).join(', ')}`);
+   488→    }
+   489→
+   490→    const evaluatorModel = rubric.evaluatorModel || this.config.defaultEvaluatorModel;
+   491→    let totalTokensUsed = 0;
+   492→    const criteriaResults: CriterionResult[] = [];
+   493→
+   494→    if (this.apiClient && typeof this.apiClient.chat === 'function') {
+   495→      // Isolated LLM-based evaluation
+   496→      const result = await this.evaluateWithLLM(output, rubric, evaluatorModel, context);
+   497→      totalTokensUsed = result.tokensUsed;
+   498→      criteriaResults.push(...result.criteriaResults);
+   499→    } else {
+   500→      // Heuristic-based fallback when no API client is available
+   501→      const result = this.evaluateWithHeuristics(output, rubric);
+   502→      criteriaResults.push(...result);
+   503→    }
+   504→
+   505→    // Compute weighted overall score
+   506→    let overallScore = 0;
+   507→    for (let i = 0; i < rubric.criteria.length; i++) {
+   508→      const criterion = rubric.criteria[i];
+   509→      const criterionResult = criteriaResults.find((cr) => cr.criterionId === criterion.id);
+   510→      if (criterionResult) {
+   511→        overallScore += criterion.weight * criterionResult.score;
+   512→      }
+   513→    }
+   514→    overallScore = Math.round(overallScore * 100) / 100;
+   515→
+   516→    const passed = overallScore >= rubric.passingThreshold;
+   517→    const revisionNeeded = !passed;
+   518→    const revisionSuggestions = this.generateRevisionSuggestions(rubric, criteriaResults);
+   519→
+   520→    const feedback = this.synthesizeFeedback(rubric, criteriaResults, overallScore, passed);
+   521→
+   522→    const gradingResult: GradingResult = {
+   523→      rubricId,
+   524→      overallScore,
+   525→      passed,
+   526→      criteriaResults,
+   527→      feedback,
+   528→      revisionNeeded,
+   529→      revisionSuggestions,
+   530→      evaluatorModel,
+   531→      tokensUsed: totalTokensUsed,
+   532→    };
+   533→
+   534→    this.gradingHistory.push(gradingResult);
+   535→
+   536→    if (this.config.persistHistory) {
+   537→      this.persistGradingResult(gradingResult);
+   538→    }
+   539→
+   540→    return gradingResult;
+   541→  }
+   542→
+   543→  /**
+   544→   * Grade an agent's output and loop revisions until the rubric is satisfied
+   545→   * or the maximum number of revisions is reached.
+   546→   *
+   547→   * The agent receives grading feedback + revision suggestions after each
+   548→   * unsuccessful attempt and is asked to revise.
+   549→   */
+   550→  async gradeWithRevision(
+   551→    agent: RevisionableAgent,
+   552→    prompt: string,
+   553→    rubricId: string,
+   554→  ): Promise<RevisionLoopResult> {
+   555→    const rubric = this.rubrics.get(rubricId);
+   556→    if (!rubric) {
+   557→      throw new Error(`Rubric not found: "${rubricId}". Available rubrics: ${Array.from(this.rubrics.keys()).join(', ')}`);
+   558→    }
+   559→
+   560→    const maxRevisions = Math.min(
+   561→      rubric.maxRevisions,
+   562→      this.config.globalMaxRevisions,
+   563→    );
+   564→
+   565→    const revisionHistory: RevisionEntry[] = [];
+   566→    let currentOutput = '';
+   567→    let currentGrade: GradingResult | null = null;
+   568→
+   569→    // Initial run
+   570→    const initialRun = await agent.run(prompt);
+   571→    currentOutput = initialRun.output;
+   572→
+   573→    // Grade the initial output
+   574→    currentGrade = await this.grade(currentOutput, rubricId, prompt);
+   575→
+   576→    revisionHistory.push({
+   577→      revisionNumber: 0,
+   578→      output: currentOutput,
+   579→      grade: currentGrade,
+   580→      timestamp: Date.now(),
+   581→    });
+   582→
+   583→    // Revision loop
+   584→    let revisionCount = 0;
+   585→    while (!currentGrade.passed && revisionCount < maxRevisions) {
+   586→      revisionCount++;
+   587→
+   588→      const revisionPrompt = this.buildRevisionPrompt(
+   589→        prompt,
+   590→        currentOutput,
+   591→        currentGrade,
+   592→        rubric,
+   593→        revisionCount,
+   594→        maxRevisions,
+   595→      );
+   596→
+   597→      const revisionRun = await agent.run(revisionPrompt);
+   598→      currentOutput = revisionRun.output;
+   599→
+   600→      currentGrade = await this.grade(currentOutput, rubricId, prompt);
+   601→
+   602→      revisionHistory.push({
+   603→        revisionNumber: revisionCount,
+   604→        output: currentOutput,
+   605→        grade: currentGrade,
+   606→        timestamp: Date.now(),
+   607→      });
+   608→    }
+   609→
+   610→    return {
+   611→      finalOutput: currentOutput,
+   612→      finalGrade: currentGrade!,
+   613→      totalRevisions: revisionCount,
+   614→      revisionHistory,
+   615→      passed: currentGrade!.passed,
+   616→    };
+   617→  }
+   618→
+   619→  // ----------------------------------------------------------
+   620→  // History
+   621→  // ----------------------------------------------------------
+   622→
+   623→  /**
+   624→   * Return all grading results from this session.
+   625→   */
+   626→  getGradingHistory(): GradingResult[] {
+   627→    return [...this.gradingHistory];
+   628→  }
+   629→
+   630→  /**
+   631→   * Clear all grading history from memory.
+   632→   */
+   633→  clearHistory(): void {
+   634→    this.gradingHistory = [];
+   635→  }
+   636→
+   637→  /**
+   638→   * Return grading results filtered by rubric id.
+   639→   */
+   640→  getGradingHistoryByRubric(rubricId: string): GradingResult[] {
+   641→    return this.gradingHistory.filter((g) => g.rubricId === rubricId);
+   642→  }
+   643→
+   644→  /**
+   645→   * Return the most recent grading result, or undefined if none exists.
+   646→   */
+   647→  getLatestGrading(): GradingResult | undefined {
+   648→    if (this.gradingHistory.length === 0) return undefined;
+   649→    return this.gradingHistory[this.gradingHistory.length - 1];
+   650→  }
+   651→
+   652→  // ----------------------------------------------------------
+   653→  // Composite Rubric Helpers
+   654→  // ----------------------------------------------------------
+   655→
+   656→  /**
+   657→   * Create a composite rubric that combines multiple criteria from
+   658→   * existing rubrics with custom weights.
+   659→   *
+   660→   * @param id - Unique id for the composite rubric
+   661→   * @param name - Human-readable name
+   662→   * @param criteria - Array of { rubricId, criterionId, weight } tuples
+   663→   * @param passingThreshold - Overall passing threshold (0-100)
+   664→   * @param maxRevisions - Maximum revision attempts
+   665→   * @param evaluatorModel - Model to use for evaluation
+   666→   */
+   667→  createCompositeRubric(
+   668→    id: string,
+   669→    name: string,
+   670→    criteria: Array<{ rubricId: string; criterionId: string; weight: number }>,
+   671→    passingThreshold: number,
+   672→    maxRevisions: number = 3,
+   673→    evaluatorModel?: string,
+   674→  ): Rubric {
+   675→    const compositeCriteria: RubricCriterion[] = [];
+   676→
+   677→    for (const item of criteria) {
+   678→      const sourceRubric = this.rubrics.get(item.rubricId);
+   679→      if (!sourceRubric) {
+   680→        throw new Error(`Source rubric not found: "${item.rubricId}"`);
+   681→      }
+   682→      const sourceCriterion = sourceRubric.criteria.find((c) => c.id === item.criterionId);
+   683→      if (!sourceCriterion) {
+   684→        throw new Error(
+   685→          `Criterion "${item.criterionId}" not found in rubric "${item.rubricId}"`,
+   686→        );
+   687→      }
+   688→      // Prefix criterion id with source rubric id to avoid collisions
+   689→      compositeCriteria.push({
+   690→        ...sourceCriterion,
+   691→        id: `${item.rubricId}__${item.criterionId}`,
+   692→        weight: item.weight,
+   693→      });
+   694→    }
+   695→
+   696→    const rubric: Rubric = {
+   697→      id,
+   698→      name,
+   699→      description: `Composite rubric combining criteria from: ${criteria.map((c) => c.rubricId).join(', ')}`,
+   700→      criteria: compositeCriteria,
+   701→      passingThreshold,
+   702→      maxRevisions,
+   703→      evaluatorModel: evaluatorModel ?? this.config.defaultEvaluatorModel,
+   704→    };
+   705→
+   706→    this.defineRubric(rubric);
+   707→    return rubric;
+   708→  }
+   709→
+   710→  // ----------------------------------------------------------
+   711→  // Private: LLM-Based Evaluation
+   712→  // ----------------------------------------------------------
+   713→
+   714→  /**
+   715→   * Evaluate output against all criteria in a rubric using an isolated LLM call.
+   716→   * The evaluator runs in a separate context window from the agent, ensuring
+   717→   * objective assessment.
+   718→   */
+   719→  private async evaluateWithLLM(
+   720→    output: string,
+   721→    rubric: Rubric,
+   722→    model: string,
+   723→    context?: string,
+   724→  ): Promise<{ criteriaResults: CriterionResult[]; tokensUsed: number }> {
+   725→    const criteriaDescriptions = rubric.criteria
+   726→      .map((c) => {
+   727→        let typeGuidance = '';
+   728→        if (c.type === 'boolean') {
+   729→          typeGuidance = 'Score 100 if the criterion is fully met, 0 if it is not met. No partial scores.';
+   730→        } else if (c.type === 'scale') {
+   731→          typeGuidance = `Score on a 0-100 scale. Passing threshold is ${c.passingScore}.`;
+   732→        } else {
+   733→          typeGuidance = 'Provide a descriptive score from 0-100 based on the quality and completeness of the output for this criterion.';
+   734→        }
+   735→        return `- ID: ${c.id} | Name: ${c.name} | Weight: ${c.weight}\n  Description: ${c.description}\n  Type: ${c.type} | ${typeGuidance}`;
+   736→      })
+   737→      .join('\n\n');
+   738→
+   739→    const systemPrompt = `You are an impartial outcome evaluator. Your job is to grade the provided output against a rubric's criteria. You must be objective, evidence-based, and thorough.
+   740→
+   741→SCORING RULES:
+   742→- Each criterion gets a score from 0 to 100.
+   743→- For "boolean" criteria: score 100 if fully met, 0 if not met.
+   744→- For "scale" criteria: score proportionally, with the passing threshold as guidance.
+   745→- For "descriptive" criteria: score based on the depth, accuracy, and completeness of the output relative to the criterion description.
+   746→- Provide specific evidence from the output to justify each score.
+   747→- Provide actionable feedback for improvement.
+   748→
+   749→RESPONSE FORMAT — you MUST respond with valid JSON matching this structure:
+   750→{
+   751→  "criteriaResults": [
+   752→    {
+   753→      "criterionId": "<criterion id>",
+   754→      "score": <0-100>,
+   755→      "passed": <true|false>,
+   756→      "feedback": "<specific feedback>",
+   757→      "evidence": "<what you found in the output>"
+   758→    }
+   759→  ]
+   760→}
+   761→
+   762→Do NOT include any text outside the JSON object.`;
+   763→
+   764→    const contextSection = context
+   765→      ? `\n\nCONTEXT (the original task/prompt):\n${context}`
+   766→      : '';
+   767→
+   768→    const userPrompt = `RUBRIC: ${rubric.name}
+   769→Passing threshold: ${rubric.passingThreshold}/100
+   770→
+   771→CRITERIA:
+   772→${criteriaDescriptions}
+   773→${contextSection}
+   774→
+   775→OUTPUT TO EVALUATE:
+   776→${output}
+   777→
+   778→Evaluate the output against each criterion. Respond ONLY with the JSON object.`;
+   779→
+   780→    let tokensUsed = 0;
+   781→    let criteriaResults: CriterionResult[] = [];
+   782→
+   783→    try {
+   784→      const response = await this.apiClient!.chat({
+   785→        model,
+   786→        messages: [
+   787→          { role: 'system', content: systemPrompt },
+   788→          { role: 'user', content: userPrompt },
+   789→        ],
+   790→        temperature: this.config.evaluatorTemperature,
+   791→        max_tokens: 4096,
+   792→        timeout: this.config.evaluatorTimeoutMs,
+   793→      });
+   794→
+   795→      if (response.usage) {
+   796→        tokensUsed = response.usage.total_tokens;
+   797→      } else {
+   798→        // Rough estimation
+   799→        tokensUsed = Math.ceil(
+   800→          (systemPrompt.length + userPrompt.length + response.content.length) / CHARS_PER_TOKEN,
+   801→        );
+   802→      }
+   803→
+   804→      criteriaResults = this.parseEvaluationResponse(response.content, rubric);
+   805→    } catch (error) {
+   806→      // If LLM call fails, fall back to heuristic grading
+   807→      criteriaResults = this.evaluateWithHeuristics(output, rubric);
+   808→    }
+   809→
+   810→    // Ensure every criterion has a result
+   811→    for (const criterion of rubric.criteria) {
+   812→      const existing = criteriaResults.find((cr) => cr.criterionId === criterion.id);
+   813→      if (!existing) {
+   814→        criteriaResults.push({
+   815→          criterionId: criterion.id,
+   816→          score: 0,
+   817→          passed: false,
+   818→          feedback: `Evaluation failed for criterion "${criterion.name}". Defaulting to 0.`,
+   819→          evidence: 'No evaluation evidence available.',
+   820→        });
+   821→      }
+   822→    }
+   823→
+   824→    return { criteriaResults, tokensUsed };
+   825→  }
+   826→
+   827→  /**
+   828→   * Parse the LLM's JSON evaluation response into structured CriterionResult objects.
+   829→   * Handles malformed responses gracefully.
+   830→   */
+   831→  private parseEvaluationResponse(responseContent: string, rubric: Rubric): CriterionResult[] {
+   832→    const results: CriterionResult[] = [];
+   833→
+   834→    // Extract JSON from response (handle markdown code blocks)
+   835→    let jsonStr = responseContent.trim();
+   836→    const jsonBlockMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+   837→    if (jsonBlockMatch) {
+   838→      jsonStr = jsonBlockMatch[1].trim();
+   839→    }
+   840→
+   841→    // Try to find JSON object in the response
+   842→    const braceStart = jsonStr.indexOf('{');
+   843→    const braceEnd = jsonStr.lastIndexOf('}');
+   844→    if (braceStart === -1 || braceEnd === -1) {
+   845→      return results;
+   846→    }
+   847→    jsonStr = jsonStr.slice(braceStart, braceEnd + 1);
+   848→
+   849→    let parsed: any;
+   850→    try {
+   851→      parsed = JSON.parse(jsonStr);
+   852→    } catch {
+   853→      return results;
+   854→    }
+   855→
+   856→    if (!parsed || !Array.isArray(parsed.criteriaResults)) {
+   857→      return results;
+   858→    }
+   859→
+   860→    const validCriterionIds = new Set(rubric.criteria.map((c) => c.id));
+   861→
+   862→    for (const item of parsed.criteriaResults) {
+   863→      if (!item.criterionId || !validCriterionIds.has(item.criterionId)) {
+   864→        continue;
+   865→      }
+   866→
+   867→      const criterion = rubric.criteria.find((c) => c.id === item.criterionId)!;
+   868→      let score = typeof item.score === 'number' ? item.score : 0;
+   869→      score = Math.max(0, Math.min(100, Math.round(score)));
+   870→
+   871→      let passed: boolean;
+   872→      if (criterion.type === 'boolean') {
+   873→        passed = score >= 100;
+   874→      } else {
+   875→        passed = score >= criterion.passingScore;
+   876→      }
+   877→
+   878→      results.push({
+   879→        criterionId: item.criterionId,
+   880→        score,
+   881→        passed,
+   882→        feedback: typeof item.feedback === 'string' ? item.feedback : '',
+   883→        evidence: typeof item.evidence === 'string' ? item.evidence : '',
+   884→      });
+   885→    }
+   886→
+   887→    return results;
+   888→  }
+   889→
+   890→  // ----------------------------------------------------------
+   891→  // Private: Heuristic-Based Evaluation (fallback)
+   892→  // ----------------------------------------------------------
+   893→
+   894→  /**
+   895→   * Evaluate output using heuristic pattern matching when no LLM is available.
+   896→   * Provides basic quality signals based on code/text analysis.
+   897→   */
+   898→  private evaluateWithHeuristics(output: string, rubric: Rubric): CriterionResult[] {
+   899→    const results: CriterionResult[] = [];
+   900→
+   901→    for (const criterion of rubric.criteria) {
+   902→      const result = this.evaluateCriterionHeuristic(output, criterion, rubric);
+   903→      results.push(result);
+   904→    }
+   905→
+   906→    return results;
+   907→  }
+   908→
+   909→  /**
+   910→   * Apply heuristic scoring for a single criterion based on its type and name.
+   911→   */
+   912→  private evaluateCriterionHeuristic(
+   913→    output: string,
+   914→    criterion: RubricCriterion,
+   915→    rubric: Rubric,
+   916→  ): CriterionResult {
+   917→    const outputLines = output.split('\n');
+   918→    const outputLen = output.length;
+   919→    const nonEmptyLines = outputLines.filter((l) => l.trim().length > 0).length;
+   920→
+   921→    // Detect if output looks like code
+   922→    const codeIndicators = [
+   923→      /\bfunction\b/, /\bclass\b/, /\bconst\b/, /\blet\b/, /\bvar\b/,
+   924→      /\bimport\b/, /\bexport\b/, /\breturn\b/, /\bif\s*\(/, /\bfor\s*\(/,
+   925→    ];
+   926→    const isCode = codeIndicators.some((pat) => pat.test(output));
+   927→
+   928→    // Detect if output has tests
+   929→    const testIndicators = [
+   930→      /\bdescribe\s*\(/, /\bit\s*\(/, /\btest\s*\(/, /\bexpect\s*\(/,
+   931→      /\bassert\b/, /\bshould\b/, /\bbeforeEach\b/, /\bafterEach\b/,
+   932→    ];
+   933→    const hasTests = testIndicators.some((pat) => pat.test(output));
+   934→
+   935→    // Detect documentation patterns
+   936→    const docIndicators = [
+   937→      /\/\*\*[\s\S]*?\*\//, /\/\/\s*.+/, /#{1,6}\s+.+/, /\*\*[^*]+\*\*/,
+   938→      /```[\s\S]*?```/,
+   939→    ];
+   940→    const hasDocs = docIndicators.some((pat) => pat.test(output));
+   941→
+   942→    // Detect security anti-patterns
+   943→    const securitySmells = [
+   944→      /eval\s*\(/, /innerHTML\s*=/, /document\.write\s*\(/,
+   945→      /\bpassword\s*=\s*['"]/, /\bapi[_-]?key\s*=\s*['"]/,
+   946→      /\bsecret\s*=\s*['"]/, /SELECT\s+.*\s+FROM\s+/i,
+   947→    ];
+   948→    const hasSecurityIssues = securitySmells.some((pat) => pat.test(output));
+   949→
+   950→    // Detect performance anti-patterns
+   951→    const perfSmells = [
+   952→      /for\s*\(.*await\b/, /\.forEach\s*\(.*async/,
+   953→      /while\s*\(true\)/, /new Array\(\d{4,}\)/,
+   954→    ];
+   955→    const hasPerfIssues = perfSmells.some((pat) => pat.test(output));
+   956→
+   957→    let score = 50; // baseline
+   958→    let passed = false;
+   959→    let feedback = '';
+   960→    let evidence = '';
+   961→
+   962→    // Heuristic scoring based on rubric type and criterion name/id
+   963→    const nameLower = criterion.name.toLowerCase();
+   964→    const idLower = criterion.id.toLowerCase();
+   965→
+   966→    if (idLower.includes('security') || nameLower.includes('security') || nameLower.includes('vulnerabilit') || nameLower.includes('secret') || nameLower.includes('input validation')) {
+   967→      if (hasSecurityIssues) {
+   968→        score = 20;
+   969→        feedback = 'Security anti-patterns detected in the output (e.g., eval, hardcoded secrets, SQL concatenation).';
+   970→        evidence = 'Pattern match found security-sensitive constructs.';
+   971→      } else {
+   972→        score = 80;
+   973→        feedback = 'No obvious security anti-patterns detected via heuristic scan.';
+   974→        evidence = 'Heuristic scan did not find known security smell patterns.';
+   975→      }
+   976→      passed = criterion.type === 'boolean' ? score >= 100 : score >= criterion.passingScore;
+   977→    } else if (idLower.includes('test') || nameLower.includes('test') || nameLower.includes('coverage') || nameLower.includes('edge case') || nameLower.includes('assertion')) {
+   978→      if (hasTests) {
+   979→        const testCount = (output.match(/\b(it|test)\s*\(/g) || []).length;
+   980→        score = Math.min(100, 50 + testCount * 10);
+   981→        feedback = `Found ${testCount} test case(s). Test structure detected.`;
+   982→        evidence = `Heuristic detected ${testCount} test() or it() calls.`;
+   983→      } else {
+   984→        score = 15;
+   985→        feedback = 'No test patterns detected in the output.';
+   986→        evidence = 'Heuristic scan found no describe/test/it/expect patterns.';
+   987→      }
+   988→      passed = criterion.type === 'boolean' ? score >= 100 : score >= criterion.passingScore;
+   989→    } else if (idLower.includes('doc') || nameLower.includes('doc') || nameLower.includes('comment') || nameLower.includes('readme')) {
+   990→      if (hasDocs) {
+   991→        const docCommentCount = (output.match(/\/\*\*[\s\S]*?\*\//g) || []).length;
+   992→        const inlineCommentCount = (output.match(/\/\/\s*.+/g) || []).length;
+   993→        score = Math.min(100, 40 + docCommentCount * 15 + inlineCommentCount * 5);
+   994→        feedback = `Found ${docCommentCount} doc comment(s) and ${inlineCommentCount} inline comment(s).`;
+   995→        evidence = `Heuristic detected documentation patterns: ${docCommentCount} doc blocks, ${inlineCommentCount} inline comments.`;
+   996→      } else {
+   997→        score = 20;
+   998→        feedback = 'No documentation patterns detected.';
+   999→        evidence = 'Heuristic scan found no doc comments, inline comments, or markdown headers.';
+  1000→      }
+  1001→      passed = criterion.type === 'boolean' ? score >= 100 : score >= criterion.passingScore;
+  1002→    } else if (idLower.includes('perf') || nameLower.includes('perform') || nameLower.includes('bottleneck') || nameLower.includes('algorithm') || nameLower.includes('data structure')) {
+  1003→      if (hasPerfIssues) {
+  1004→        score = 25;
+  1005→        feedback = 'Performance anti-patterns detected (e.g., await in loops, unbounded allocations).';
+  1006→        evidence = 'Pattern match found performance-sensitive constructs.';
+  1007→      } else if (isCode && nonEmptyLines > 10) {
+  1008→        score = 70;
+  1009→        feedback = 'No obvious performance anti-patterns detected. Output appears to have reasonable structure.';
+  1010→        evidence = 'Heuristic scan found no performance smell patterns.';
+  1011→      } else {
+  1012→        score = 60;
+  1013→        feedback = 'Limited code to evaluate for performance. No obvious issues detected.';
+  1014→        evidence = 'Output is too short or not code-like for thorough performance heuristic evaluation.';
+  1015→      }
+  1016→      passed = criterion.type === 'boolean' ? score >= 100 : score >= criterion.passingScore;
+  1017→    } else if (idLower.includes('readab') || nameLower.includes('readab') || idLower.includes('naming') || nameLower.includes('naming')) {
+  1018→      if (isCode) {
+  1019→        const avgLineLen = outputLen / Math.max(nonEmptyLines, 1);
+  1020→        const longLines = outputLines.filter((l) => l.length > 120).length;
+  1021→        const lineLenPenalty = longLines * 3;
+  1022→        const veryShortVars = (output.match(/\b[a-z]\b\s*=/g) || []).length;
+  1023→        const shortVarPenalty = veryShortVars * 5;
+  1024→        score = Math.max(0, Math.min(100, 70 - lineLenPenalty - shortVarPenalty));
+  1025→        feedback = score >= 70
+  1026→          ? 'Code appears reasonably readable. Line lengths and naming are acceptable.'
+  1027→          : 'Readability could be improved. Some lines are too long or variable names are too short.';
+  1028→        evidence = `Average line length: ${Math.round(avgLineLen)}. Long lines (>120 chars): ${longLines}. Single-letter variables: ${veryShortVars}.`;
+  1029→      } else {
+  1030→        score = 60;
+  1031→        feedback = 'Output is not code; readability heuristic is less applicable.';
+  1032→        evidence = 'Non-code output detected; readability assessment based on paragraph structure.';
+  1033→      }
+  1034→      passed = criterion.type === 'boolean' ? score >= 100 : score >= criterion.passingScore;
+  1035→    } else if (idLower.includes('smell') || nameLower.includes('smell') || idLower.includes('solid') || nameLower.includes('solid') || idLower.includes('abstract') || nameLower.includes('abstract')) {
+  1036→      if (isCode) {
+  1037→        const duplicateLines = this.countDuplicateLines(outputLines);
+  1038→        const deepNesting = this.maxNestingDepth(output);
+  1039→        const dupPenalty = Math.min(30, duplicateLines * 5);
+  1040→        const nestPenalty = Math.min(20, Math.max(0, deepNesting - 3) * 10);
+  1041→        score = Math.max(0, Math.min(100, 75 - dupPenalty - nestPenalty));
+  1042→        feedback = score >= 70
+  1043→          ? 'No significant code smells detected heuristically.'
+  1044→          : 'Potential code smells: duplicated lines or excessive nesting depth.';
+  1045→        evidence = `Duplicate non-empty lines: ${duplicateLines}. Max nesting depth: ${deepNesting}.`;
+  1046→      } else {
+  1047→        score = 60;
+  1048→        feedback = 'Output is not code; code smell heuristic is less applicable.';
+  1049→        evidence = 'Non-code output detected; limited heuristic evaluation possible.';
+  1050→      }
+  1051→      passed = criterion.type === 'boolean' ? score >= 100 : score >= criterion.passingScore;
+  1052→    } else {
+  1053→      // Generic heuristic for any criterion
+  1054→      if (outputLen < 50) {
+  1055→        score = 20;
+  1056→        feedback = 'Output is very short; insufficient to evaluate this criterion thoroughly.';
+  1057→        evidence = `Output is only ${outputLen} characters long.`;
+  1058→      } else if (outputLen < 200) {
+  1059→        score = 45;
+  1060→        feedback = 'Output is short; limited evidence available for evaluation.';
+  1061→        evidence = `Output is ${outputLen} characters with ${nonEmptyLines} non-empty lines.`;
+  1062→      } else {
+  1063→        score = 65;
+  1064→        feedback = 'Output has reasonable length. Heuristic evaluation provides limited insight without LLM evaluator.';
+  1065→        evidence = `Output is ${outputLen} characters with ${nonEmptyLines} non-empty lines.`;
+  1066→      }
+  1067→      passed = criterion.type === 'boolean' ? score >= 100 : score >= criterion.passingScore;
+  1068→    }
+  1069→
+  1070→    return {
+  1071→      criterionId: criterion.id,
+  1072→      score,
+  1073→      passed,
+  1074→      feedback,
+  1075→      evidence,
+  1076→    };
+  1077→  }
+  1078→
+  1079→  // ----------------------------------------------------------
+  1080→  // Private: Revision Loop Helpers
+  1081→  // ----------------------------------------------------------
+  1082→
+  1083→  /**
+  1084→   * Build a prompt that asks the agent to revise its output based on grading feedback.
+  1085→   */
+  1086→  private buildRevisionPrompt(
+  1087→    originalPrompt: string,
+  1088→    currentOutput: string,
+  1089→    grade: GradingResult,
+  1090→    rubric: Rubric,
+  1091→    revisionNumber: number,
+  1092→    maxRevisions: number,
+  1093→  ): string {
+  1094→    const failedCriteria = grade.criteriaResults.filter((cr) => !cr.passed);
+  1095→    const failedDetails = failedCriteria
+  1096→      .map((cr) => {
+  1097→        const criterion = rubric.criteria.find((c) => c.id === cr.criterionId);
+  1098→        return `  - ${criterion?.name ?? cr.criterionId}: Score ${cr.score}/100 (needed ${criterion?.passingScore ?? 'N/A'})
+  1099→    Feedback: ${cr.feedback}
+  1100→    Evidence: ${cr.evidence}`;
+  1101→      })
+  1102→      .join('\n');
+  1103→
+  1104→    return `You previously produced output for this task, but it did not pass the "${rubric.name}" rubric (score: ${grade.overallScore}/${rubric.passingThreshold} needed).
+  1105→
+  1106→ORIGINAL TASK:
+  1107→${originalPrompt}
+  1108→
+  1109→YOUR PREVIOUS OUTPUT:
+  1110→${currentOutput}
+  1111→
+  1112→GRADING RESULTS (Revision ${revisionNumber} of ${maxRevisions}):
+  1113→Overall score: ${grade.overallScore}/100 (passing: ${rubric.passingThreshold})
+  1114→
+  1115→FAILED CRITERIA:
+  1116→${failedDetails}
+  1117→
+  1118→REVISION SUGGESTIONS:
+  1119→${grade.revisionSuggestions.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+  1120→
+  1121→Please revise your output to address the failed criteria. Focus specifically on the areas where you scored below the passing threshold. Produce a complete, revised output that addresses all the feedback.`;
+  1122→  }
+  1123→
+  1124→  /**
+  1125→   * Generate specific, actionable revision suggestions based on failed criteria.
+  1126→   */
+  1127→  private generateRevisionSuggestions(
+  1128→    rubric: Rubric,
+  1129→    criteriaResults: CriterionResult[],
+  1130→  ): string[] {
+  1131→    const suggestions: string[] = [];
+  1132→
+  1133→    for (const result of criteriaResults) {
+  1134→      if (result.passed) continue;
+  1135→
+  1136→      const criterion = rubric.criteria.find((c) => c.id === result.criterionId);
+  1137→      if (!criterion) continue;
+  1138→
+  1139→      const gap = criterion.passingScore - result.score;
+  1140→
+  1141→      if (criterion.type === 'boolean' && !result.passed) {
+  1142→        suggestions.push(
+  1143→          `CRITICAL: "${criterion.name}" is a pass/fail criterion that is currently failing. ${criterion.description}. You MUST address this fully.`,
+  1144→        );
+  1145→      } else if (criterion.type === 'scale') {
+  1146→        suggestions.push(
+  1147→          `Improve "${criterion.name}" by at least ${gap} points. Current score: ${result.score}/${criterion.passingScore} needed. Focus: ${result.feedback || criterion.description}`,
+  1148→        );
+  1149→      } else {
+  1150→        suggestions.push(
+  1151→          `Enhance "${criterion.name}": ${result.feedback || criterion.description}`,
+  1152→        );
+  1153→      }
+  1154→    }
+  1155→
+  1156→    // Prioritize boolean failures first
+  1157→    suggestions.sort((a, b) => {
+  1158→      const aCrit = a.startsWith('CRITICAL') ? 0 : 1;
+  1159→      const bCrit = b.startsWith('CRITICAL') ? 0 : 1;
+  1160→      return aCrit - bCrit;
+  1161→    });
+  1162→
+  1163→    return suggestions;
+  1164→  }
+  1165→
+  1166→  /**
+  1167→   * Synthesize overall feedback from criterion results.
+  1168→   */
+  1169→  private synthesizeFeedback(
+  1170→    rubric: Rubric,
+  1171→    criteriaResults: CriterionResult[],
+  1172→    overallScore: number,
+  1173→    passed: boolean,
+  1174→  ): string {
+  1175→    const passedCount = criteriaResults.filter((cr) => cr.passed).length;
+  1176→    const totalCount = criteriaResults.length;
+  1177→
+  1178→    const status = passed ? 'PASSED' : 'FAILED';
+  1179→
+  1180→    let feedback = `Rubric "${rubric.name}" ${status}. Overall score: ${overallScore}/100 (threshold: ${rubric.passingThreshold}). ${passedCount}/${totalCount} criteria passed.`;
+  1181→
+  1182→    if (!passed) {
+  1183→      const failedNames = criteriaResults
+  1184→        .filter((cr) => !cr.passed)
+  1185→        .map((cr) => {
+  1186→          const c = rubric.criteria.find((crit) => crit.id === cr.criterionId);
+  1187→          return c?.name ?? cr.criterionId;
+  1188→        });
+  1189→      feedback += ` Failed criteria: ${failedNames.join(', ')}.`;
+  1190→    }
+  1191→
+  1192→    // Add per-criterion summary
+  1193→    feedback += '\n\nCriterion breakdown:';
+  1194→    for (const cr of criteriaResults) {
+  1195→      const c = rubric.criteria.find((crit) => crit.id === cr.criterionId);
+  1196→      const statusIcon = cr.passed ? '✓' : '✗';
+  1197→      feedback += `\n  ${statusIcon} ${c?.name ?? cr.criterionId}: ${cr.score}/100${cr.feedback ? ` — ${cr.feedback}` : ''}`;
+  1198→    }
+  1199→
+  1200→    return feedback;
+  1201→  }
+  1202→
+  1203→  // ----------------------------------------------------------
+  1204→  // Private: Rubric Validation
+  1205→  // ----------------------------------------------------------
+  1206→
+  1207→  /**
+  1208→   * Validate that a rubric is well-formed.
+  1209→   * Throws descriptive errors for structural problems.
+  1210→   */
+  1211→  private validateRubric(rubric: Rubric): void {
+  1212→    if (!rubric.id || typeof rubric.id !== 'string') {
+  1213→      throw new Error('Rubric must have a non-empty string id.');
+  1214→    }
+  1215→    if (!rubric.name || typeof rubric.name !== 'string') {
+  1216→      throw new Error('Rubric must have a non-empty string name.');
+  1217→    }
+  1218→    if (!Array.isArray(rubric.criteria) || rubric.criteria.length === 0) {
+  1219→      throw new Error(`Rubric "${rubric.id}" must have at least one criterion.`);
+  1220→    }
+  1221→
+  1222→    const weightSum = rubric.criteria.reduce((sum, c) => sum + c.weight, 0);
+  1223→    if (Math.abs(weightSum - 1) > 0.01) {
+  1224→      throw new Error(
+  1225→        `Rubric "${rubric.id}" criterion weights must sum to 1.0. Current sum: ${weightSum.toFixed(4)}`,
+  1226→      );
+  1227→    }
+  1228→
+  1229→    const ids = new Set<string>();
+  1230→    for (const criterion of rubric.criteria) {
+  1231→      if (!criterion.id || typeof criterion.id !== 'string') {
+  1232→        throw new Error(`Rubric "${rubric.id}" has a criterion with a missing or invalid id.`);
+  1233→      }
+  1234→      if (ids.has(criterion.id)) {
+  1235→        throw new Error(
+  1236→          `Rubric "${rubric.id}" has duplicate criterion id: "${criterion.id}".`,
+  1237→        );
+  1238→      }
+  1239→      ids.add(criterion.id);
+  1240→
+  1241→      if (criterion.weight < 0 || criterion.weight > 1) {
+  1242→        throw new Error(
+  1243→          `Criterion "${criterion.id}" in rubric "${rubric.id}" has weight outside [0, 1]: ${criterion.weight}`,
+  1244→        );
+  1245→      }
+  1246→
+  1247→      if (!['boolean', 'scale', 'descriptive'].includes(criterion.type)) {
+  1248→        throw new Error(
+  1249→          `Criterion "${criterion.id}" in rubric "${rubric.id}" has invalid type: "${criterion.type}". Must be "boolean", "scale", or "descriptive".`,
+  1250→        );
+  1251→      }
+  1252→
+  1253→      if (criterion.passingScore < 0 || criterion.passingScore > 100) {
+  1254→        throw new Error(
+  1255→          `Criterion "${criterion.id}" in rubric "${rubric.id}" has passingScore outside [0, 100]: ${criterion.passingScore}`,
+  1256→        );
+  1257→      }
+  1258→    }
+  1259→
+  1260→    if (rubric.passingThreshold < 0 || rubric.passingThreshold > 100) {
+  1261→      throw new Error(
+  1262→        `Rubric "${rubric.id}" passingThreshold must be between 0 and 100. Got: ${rubric.passingThreshold}`,
+  1263→      );
+  1264→    }
+  1265→
+  1266→    if (rubric.maxRevisions < 0 || !Number.isInteger(rubric.maxRevisions)) {
+  1267→      throw new Error(
+  1268→        `Rubric "${rubric.id}" maxRevisions must be a non-negative integer. Got: ${rubric.maxRevisions}`,
+  1269→      );
+  1270→    }
+  1271→  }
+  1272→
+  1273→  // ----------------------------------------------------------
+  1274→  // Private: Utility Methods
+  1275→  // ----------------------------------------------------------
+  1276→
+  1277→  /**
+  1278→   * Count duplicate non-empty, non-trivial lines in the output.
+  1279→   */
+  1280→  private countDuplicateLines(lines: string[]): number {
+  1281→    const normalized = lines
+  1282→      .map((l) => l.trim())
+  1283→      .filter((l) => l.length > 5); // ignore short/trivial lines
+  1284→    const seen = new Map<string, number>();
+  1285→    let duplicates = 0;
+  1286→    for (const line of normalized) {
+  1287→      const count = seen.get(line) ?? 0;
+  1288→      if (count === 1) duplicates++; // count second occurrence
+  1289→      seen.set(line, count + 1);
+  1290→    }
+  1291→    return duplicates;
+  1292→  }
+  1293→
+  1294→  /**
+  1295→   * Estimate maximum nesting depth of code by counting brace/paren indent levels.
+  1296→   */
+  1297→  private maxNestingDepth(code: string): number {
+  1298→    let depth = 0;
+  1299→    let maxDepth = 0;
+  1300→    let inString: string | null = null;
+  1301→
+  1302→    for (let i = 0; i < code.length; i++) {
+  1303→      const ch = code[i];
+  1304→
+  1305→      // Simple string tracking to avoid counting braces inside strings
+  1306→      if (inString) {
+  1307→        if (ch === inString && code[i - 1] !== '\\') {
+  1308→          inString = null;
+  1309→        }
+  1310→        continue;
+  1311→      }
+  1312→      if (ch === '"' || ch === "'" || ch === '`') {
+  1313→        inString = ch;
+  1314→        continue;
+  1315→      }
+  1316→
+  1317→      if (ch === '{' || ch === '(' || ch === '[') {
+  1318→        depth++;
+  1319→        if (depth > maxDepth) maxDepth = depth;
+  1320→      } else if (ch === '}' || ch === ')' || ch === ']') {
+  1321→        depth = Math.max(0, depth - 1);
+  1322→      }
+  1323→    }
+  1324→
+  1325→    return maxDepth;
+  1326→  }
+  1327→
+  1328→  /**
+  1329→   * Persist a grading result to disk for historical analysis.
+  1330→   */
+  1331→  private persistGradingResult(result: GradingResult): void {
+  1332→    const historyDir = resolve(this.config.historyDir);
+  1333→    if (!existsSync(historyDir)) {
+  1334→      mkdirSync(historyDir, { recursive: true });
+  1335→    }
+  1336→
+  1337→    const timestamp = Date.now();
+  1338→    const filename = `${result.rubricId}_${timestamp}.json`;
+  1339→    const filePath = join(historyDir, filename);
+  1340→
+  1341→    writeFileSync(filePath, JSON.stringify(result, null, 2), 'utf-8');
+  1342→  }
+  1343→}
+  1344→
+  1345→// ============================================================
+  1346→// Factory & Convenience Functions
+  1347→// ============================================================
+  1348→
+  1349→/**
+  1350→ * Create a new OutcomeGrader with optional API client and configuration.
+  1351→ */
+  1352→export function createOutcomeGrader(
+  1353→  apiClient?: any,
+  1354→  config?: Partial<GradingConfig>,
+  1355→): OutcomeGrader {
+  1356→  return new OutcomeGrader(apiClient, config);
+  1357→}
+  1358→
+  1359→/**
+  1360→ * Create a quick rubric with a simpler API.
+  1361→ * Useful for one-off grading tasks.
+  1362→ */
+  1363→export function createQuickRubric(
+  1364→  id: string,
+  1365→  name: string,
+  1366→  criteria: Array<{
+  1367→    name: string;
+  1368→    description: string;
+  1369→    type: 'boolean' | 'scale' | 'descriptive';
+  1370→    passingScore?: number;
+  1371→  }>,
+  1372→  passingThreshold: number = 70,
+  1373→  maxRevisions: number = 3,
+  1374→  evaluatorModel: string = 'anthropic/claude-sonnet-4',
+  1375→): Rubric {
+  1376→  const n = criteria.length;
+  1377→  const equalWeight = Math.round((1 / n) * 1000) / 1000;
+  1378→
+  1379→  // Distribute weights equally, adjust last to ensure sum === 1
+  1380→  const weights = criteria.map((_, i) => {
+  1381→    if (i < n - 1) return equalWeight;
+  1382→    const sumSoFar = equalWeight * (n - 1);
+  1383→    return Math.round((1 - sumSoFar) * 1000) / 1000;
+  1384→  });
+  1385→
+  1386→  return {
+  1387→    id,
+  1388→    name,
+  1389→    description: `Quick rubric: ${name}`,
+  1390→    criteria: criteria.map((c, i) => ({
+  1391→      id: `${id}-c${i + 1}`,
+  1392→      name: c.name,
+  1393→      description: c.description,
+  1394→      weight: weights[i],
+  1395→      type: c.type,
+  1396→      passingScore: c.passingScore ?? (c.type === 'boolean' ? 100 : 70),
+  1397→    })),
+  1398→    passingThreshold,
+  1399→    maxRevisions,
+  1400→    evaluatorModel,
+  1401→  };
+  1402→}
+  1403→
+  1404→/**
+  1405→ * Grade output against a rubric in a single call without
+  1406→ * managing an OutcomeGrader instance.
+  1407→ */
+  1408→export async function quickGrade(
+  1409→  output: string,
+  1410→  rubric: Rubric,
+  1411→  apiClient?: any,
+  1412→  config?: Partial<GradingConfig>,
+  1413→): Promise<GradingResult> {
+  1414→  const grader = new OutcomeGrader(apiClient, config);
+  1415→  grader.defineRubric(rubric);
+  1416→  return grader.grade(output, rubric.id);
+  1417→}
+  1418→

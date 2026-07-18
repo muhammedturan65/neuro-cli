@@ -1,0 +1,1543 @@
+     1→// ============================================================
+     2→// NeuroCLI - Smart Monitor (GAP-34)
+     3→// LLM-based real-time action evaluation for auto mode
+     4→// Bridges the gap between manual approval and yolo mode
+     5→// ============================================================
+     6→
+     7→import {
+     8→  existsSync,
+     9→  mkdirSync,
+    10→  readFileSync,
+    11→  writeFileSync,
+    12→} from 'fs';
+    13→import { join, resolve } from 'path';
+    14→import { homedir } from 'os';
+    15→import { execSync } from 'child_process';
+    16→
+    17→// ---------------------------------------------------------------------------
+    18→// Public Interfaces
+    19→// ---------------------------------------------------------------------------
+    20→
+    21→export interface SmartMonitorConfig {
+    22→  enabled: boolean;
+    23→  /** Cheap model used for monitoring evaluations (default: gemma-4-31b) */
+    24→  evaluatorModel: string;
+    25→  riskThresholds: {
+    26→    /** Risk score below this → auto-approve (default: 30) */
+    27→    autoApprove: number;
+    28→    /** Risk score above this → ask user (default: 70) */
+    29→    askUser: number;
+    30→    // Scores between autoApprove and askUser → monitor evaluates
+    31→  };
+    32→  learning: {
+    33→    enabled: boolean;
+    34→    /** Directory where learned patterns are stored */
+    35→    storagePath: string;
+    36→    /** Minimum number of similar approvals before learning kicks in */
+    37→    minSamples: number;
+    38→  };
+    39→  escalationRules: EscalationRule[];
+    40→  contextAwareness: {
+    41→    checkGitStatus: boolean;
+    42→    checkTestCoverage: boolean;
+    43→    checkProductionFiles: boolean;
+    44→    /** Paths that are always treated as protected / high-risk */
+    45→    protectedPaths: string[];
+    46→  };
+    47→}
+    48→
+    49→export interface ActionRisk {
+    50→  /** Aggregate risk score 0-100 */
+    51→  score: number;
+    52→  /** Individual contributing factors */
+    53→  factors: RiskFactor[];
+    54→  /** The monitor's recommendation */
+    55→  recommendation: 'approve' | 'deny' | 'modify' | 'ask-user';
+    56→  /** Human-readable explanation */
+    57→  reasoning: string;
+    58→}
+    59→
+    60→export interface RiskFactor {
+    61→  name: string;
+    62→  /** 0-100 contribution to the overall risk score */
+    63→  contribution: number;
+    64→  description: string;
+    65→}
+    66→
+    67→export interface EscalationRule {
+    68→  /** JS-style condition expression, e.g. "file matches src/production/**" */
+    69→  condition: string;
+    70→  action: 'ask-user' | 'deny';
+    71→  reason: string;
+    72→}
+    73→
+    74→export interface MonitorDecision {
+    75→  action: 'approve' | 'deny' | 'modify' | 'ask-user';
+    76→  confidence: number;
+    77→  riskScore: number;
+    78→  reasoning: string;
+    79→  /** Populated only when action is 'modify' */
+    80→  modifiedArgs?: Record<string, unknown>;
+    81→  /** Populated only when action is 'ask-user' */
+    82→  userQuestion?: string;
+    83→  /** Whether this decision was derived from learned patterns */
+    84→  learned: boolean;
+    85→}
+    86→
+    87→export interface MonitorStats {
+    88→  totalEvaluations: number;
+    89→  approvals: number;
+    90→  denials: number;
+    91→  modifications: number;
+    92→  escalations: number;
+    93→  approvalRate: number;
+    94→  avgRiskScore: number;
+    95→  avgEvaluationTimeMs: number;
+    96→  learnedDecisions: number;
+    97→  cacheHitRate: number;
+    98→}
+    99→
+   100→export interface ActionContext {
+   101→  /** Current working directory */
+   102→  workingDirectory: string;
+   103→  /** Files that have been modified in the current session */
+   104→  modifiedFiles: string[];
+   105→  /** Total cost accrued so far in USD */
+   106→  currentCost: number;
+   107→  /** Spending limit in USD (0 = unlimited) */
+   108→  spendingLimit: number;
+   109→  /** Current safety level from auto mode */
+   110→  safetyLevel: 'conservative' | 'moderate' | 'aggressive';
+   111→  /** Recent tool call history (tool name + brief) */
+   112→  recentHistory: Array<{ toolName: string; brief: string }>;
+   113→  /** Whether there are uncommitted git changes */
+   114→  hasUncommittedChanges: boolean;
+   115→  /** Optional project-level context from NEURO.md */
+   116→  neuroMdContent?: string;
+   117→}
+   118→
+   119→export interface LearnedPattern {
+   120→  /** Normalised key used for matching, e.g. "write_file:*.ts" */
+   121→  pattern: string;
+   122→  /** Number of times the user approved this pattern */
+   123→  approvals: number;
+   124→  /** Number of times the user denied this pattern */
+   125→  denials: number;
+   126→  /** Last seen timestamp (ms epoch) */
+   127→  lastSeen: number;
+   128→  /** Whether the pattern currently qualifies for auto-approve */
+   129→  active: boolean;
+   130→}
+   131→
+   132→// ---------------------------------------------------------------------------
+   133→// Internal types
+   134→// ---------------------------------------------------------------------------
+   135→
+   136→interface EvaluationCacheEntry {
+   137→  key: string;
+   138→  decision: MonitorDecision;
+   139→  timestamp: number;
+   140→}
+   141→
+   142→interface LLMCallResult {
+   143→  text: string;
+   144→  inputTokens: number;
+   145→  outputTokens: number;
+   146→  cost: number;
+   147→}
+   148→
+   149→// ---------------------------------------------------------------------------
+   150→// Default configuration
+   151→// ---------------------------------------------------------------------------
+   152→
+   153→const DEFAULT_CONFIG: SmartMonitorConfig = {
+   154→  enabled: true,
+   155→  evaluatorModel: 'gemma-4-31b',
+   156→  riskThresholds: {
+   157→    autoApprove: 30,
+   158→    askUser: 70,
+   159→  },
+   160→  learning: {
+   161→    enabled: true,
+   162→    storagePath: join(homedir(), '.neuro', 'monitor-patterns.json'),
+   163→    minSamples: 5,
+   164→  },
+   165→  escalationRules: [],
+   166→  contextAwareness: {
+   167→    checkGitStatus: true,
+   168→    checkTestCoverage: true,
+   169→    checkProductionFiles: true,
+   170→    protectedPaths: [
+   171→      'src/production/**',
+   172→      'src/core/**',
+   173→      'src/main/**',
+   174→      'package.json',
+   175→      'package-lock.json',
+   176→      'yarn.lock',
+   177→      '.env',
+   178→      '.env.*',
+   179→      'Dockerfile*',
+   180→      'docker-compose.*',
+   181→      'tsconfig.json',
+   182→      'next.config.*',
+   183→      'webpack.config.*',
+   184→    ],
+   185→  },
+   186→};
+   187→
+   188→// ---------------------------------------------------------------------------
+   189→// Built-in risk factor evaluators
+   190→// ---------------------------------------------------------------------------
+   191→
+   192→type RiskFactorEvaluator = (
+   193→  toolName: string,
+   194→  args: Record<string, unknown>,
+   195→  context: ActionContext,
+   196→) => RiskFactor | null;
+   197→
+   198→const PRODUCTION_PATH_SEGMENTS = [
+   199→  'src/production',
+   200→  'src/core',
+   201→  'src/main',
+   202→  'src/app',
+   203→  'src/server',
+   204→  'src/api',
+   205→  'dist/',
+   206→  'build/',
+   207→];
+   208→
+   209→const TEST_PATH_SEGMENTS = [
+   210→  '__tests__',
+   211→  'test/',
+   212→  'tests/',
+   213→  'spec/',
+   214→  '.test.',
+   215→  '.spec.',
+   216→];
+   217→
+   218→const CONFIG_FILES = [
+   219→  'package.json',
+   220→  'tsconfig.json',
+   221→  '.eslintrc',
+   222→  '.prettierrc',
+   223→  'vite.config',
+   224→  'webpack.config',
+   225→  'next.config',
+   226→  'tailwind.config',
+   227→  'docker-compose',
+   228→  'Dockerfile',
+   229→  '.env',
+   230→];
+   231→
+   232→const DANGEROUS_COMMANDS = [
+   233→  'sudo',
+   234→  'rm -rf',
+   235→  'rm -r',
+   236→  'chmod',
+   237→  'chown',
+   238→  'mkfs',
+   239→  'dd if=',
+   240→  'kill -9',
+   241→  'pkill',
+   242→  'killall',
+   243→  'shutdown',
+   244→  'reboot',
+   245→  'npm publish',
+   246→  'git push --force',
+   247→  'git reset --hard',
+   248→  'drop table',
+   249→  'drop database',
+   250→  'truncate table',
+   251→  'pip uninstall',
+   252→  'npm uninstall',
+   253→];
+   254→
+   255→const MODERATE_COMMANDS = [
+   256→  'npm install',
+   257→  'npm update',
+   258→  'git push',
+   259→  'git merge',
+   260→  'git rebase',
+   261→  'docker',
+   262→  'kubectl',
+   263→  'helm',
+   264→];
+   265→
+   266→const SAFE_COMMANDS = [
+   267→  'ls',
+   268→  'cat',
+   269→  'head',
+   270→  'tail',
+   271→  'pwd',
+   272→  'echo',
+   273→  'which',
+   274→  'node -v',
+   275→  'npm -v',
+   276→  'git status',
+   277→  'git log',
+   278→  'git diff',
+   279→  'git branch',
+   280→  'wc',
+   281→];
+   282→
+   283→const SAFE_TOOLS = [
+   284→  'read_file',
+   285→  'search_files',
+   286→  'list_directory',
+   287→  'web_search',
+   288→  'web_fetch',
+   289→  'recall_memory',
+   290→  'project_context',
+   291→  'todowrite',
+   292→  'get_file_info',
+   293→  'glob',
+   294→];
+   295→
+   296→const MODERATE_TOOLS = [
+   297→  'write_file',
+   298→  'edit_file',
+   299→  'apply_diff',
+   300→  'execute_command',
+   301→  'create_file',
+   302→];
+   303→
+   304→const DANGEROUS_TOOLS = [
+   305→  'delete_file',
+   306→  'shell_exec',
+   307→  'sudo_exec',
+   308→  'system_command',
+   309→];
+   310→
+   311→const IRREVERSIBLE_PATTERNS = [
+   312→  'rm ',
+   313→  'delete',
+   314→  'remove',
+   315→  'drop ',
+   316→  'truncate',
+   317→  'destroy',
+   318→  'wipe',
+   319→  'format',
+   320→  'mkfs',
+   321→];
+   322→
+   323→function evaluateFilePathRisk(
+   324→  toolName: string,
+   325→  args: Record<string, unknown>,
+   326→  context: ActionContext,
+   327→): RiskFactor | null {
+   328→  const filePath = extractFilePath(args);
+   329→  if (!filePath) return null;
+   330→
+   331→  const normalized = filePath.replace(/\\/g, '/').toLowerCase();
+   332→
+   333→  if (PRODUCTION_PATH_SEGMENTS.some((seg) => normalized.includes(seg.toLowerCase()))) {
+   334→    return {
+   335→      name: 'file-path-risk',
+   336→      contribution: 65,
+   337→      description: `Path "${filePath}" appears to be a production file`,
+   338→    };
+   339→  }
+   340→
+   341→  if (CONFIG_FILES.some((cfg) => normalized.includes(cfg.toLowerCase()))) {
+   342→    return {
+   343→      name: 'file-path-risk',
+   344→      contribution: 55,
+   345→      description: `Path "${filePath}" is a configuration file`,
+   346→    };
+   347→  }
+   348→
+   349→  if (TEST_PATH_SEGMENTS.some((seg) => normalized.includes(seg.toLowerCase()))) {
+   350→    return {
+   351→      name: 'file-path-risk',
+   352→      contribution: 10,
+   353→      description: `Path "${filePath}" appears to be a test file (lower risk)`,
+   354→    };
+   355→  }
+   356→
+   357→  return {
+   358→    name: 'file-path-risk',
+   359→    contribution: 25,
+   360→    description: `Path "${filePath}" is a standard source file`,
+   361→  };
+   362→}
+   363→
+   364→function evaluateCommandRisk(
+   365→  toolName: string,
+   366→  args: Record<string, unknown>,
+   367→  _context: ActionContext,
+   368→): RiskFactor | null {
+   369→  const command = extractCommand(args);
+   370→  if (!command) return null;
+   371→
+   372→  const lowerCmd = command.toLowerCase();
+   373→
+   374→  for (const dangerous of DANGEROUS_COMMANDS) {
+   375→    if (lowerCmd.includes(dangerous.toLowerCase())) {
+   376→      return {
+   377→        name: 'command-risk',
+   378→        contribution: 85,
+   379→        description: `Command contains dangerous pattern "${dangerous}": ${truncate(command, 80)}`,
+   380→      };
+   381→    }
+   382→  }
+   383→
+   384→  for (const moderate of MODERATE_COMMANDS) {
+   385→    if (lowerCmd.includes(moderate.toLowerCase())) {
+   386→      return {
+   387→        name: 'command-risk',
+   388→        contribution: 40,
+   389→        description: `Command contains moderate-risk pattern "${moderate}": ${truncate(command, 80)}`,
+   390→      };
+   391→    }
+   392→  }
+   393→
+   394→  for (const safe of SAFE_COMMANDS) {
+   395→    if (lowerCmd.startsWith(safe.toLowerCase())) {
+   396→      return {
+   397→        name: 'command-risk',
+   398→        contribution: 5,
+   399→        description: `Command appears safe: ${truncate(command, 80)}`,
+   400→      };
+   401→    }
+   402→  }
+   403→
+   404→  return {
+   405→    name: 'command-risk',
+   406→    contribution: 35,
+   407→    description: `Command risk unknown: ${truncate(command, 80)}`,
+   408→  };
+   409→}
+   410→
+   411→function evaluateToolRisk(
+   412→  toolName: string,
+   413→  _args: Record<string, unknown>,
+   414→  _context: ActionContext,
+   415→): RiskFactor | null {
+   416→  if (SAFE_TOOLS.includes(toolName)) {
+   417→    return {
+   418→      name: 'tool-risk',
+   419→      contribution: 5,
+   420→      description: `Tool "${toolName}" is a safe read-only / informational tool`,
+   421→    };
+   422→  }
+   423→  if (DANGEROUS_TOOLS.includes(toolName)) {
+   424→    return {
+   425→      name: 'tool-risk',
+   426→      contribution: 75,
+   427→      description: `Tool "${toolName}" is classified as dangerous`,
+   428→    };
+   429→  }
+   430→  if (MODERATE_TOOLS.includes(toolName)) {
+   431→    return {
+   432→      name: 'tool-risk',
+   433→      contribution: 35,
+   434→      description: `Tool "${toolName}" can modify files or execute commands`,
+   435→    };
+   436→  }
+   437→  return {
+   438→    name: 'tool-risk',
+   439→    contribution: 25,
+   440→    description: `Tool "${toolName}" is not in any known risk category`,
+   441→  };
+   442→}
+   443→
+   444→function evaluateScopeRisk(
+   445→  _toolName: string,
+   446→  args: Record<string, unknown>,
+   447→  context: ActionContext,
+   448→): RiskFactor | null {
+   449→  const files = extractMultipleFiles(args);
+   450→  if (files.length > 5) {
+   451→    return {
+   452→      name: 'scope-risk',
+   453→      contribution: 60,
+   454→      description: `Action affects ${files.length} files — wide scope`,
+   455→    };
+   456→  }
+   457→  if (files.length > 1) {
+   458→    return {
+   459→      name: 'scope-risk',
+   460→      contribution: 30,
+   461→      description: `Action affects ${files.length} files`,
+   462→    };
+   463→  }
+   464→  if (files.length === 1) {
+   465→    return {
+   466→      name: 'scope-risk',
+   467→      contribution: 10,
+   468→      description: 'Action affects a single file',
+   469→    };
+   470→  }
+   471→  return {
+   472→    name: 'scope-risk',
+   473→    contribution: 5,
+   474→    description: 'Action has no direct file scope',
+   475→  };
+   476→}
+   477→
+   478→function evaluateNetworkRisk(
+   479→  toolName: string,
+   480→  args: Record<string, unknown>,
+   481→  _context: ActionContext,
+   482→): RiskFactor | null {
+   483→  const urlFields = ['url', 'endpoint', 'api_url', 'webhook_url', 'server_url'];
+   484→  for (const field of urlFields) {
+   485→    const val = args[field];
+   486→    if (typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://'))) {
+   487→      const isInternal = val.includes('localhost') || val.includes('127.0.0.1') || val.includes('0.0.0.0');
+   488→      return {
+   489→        name: 'network-risk',
+   490→        contribution: isInternal ? 15 : 50,
+   491→        description: isInternal
+   492→          ? `Internal network call to ${truncate(val, 60)}`
+   493→          : `External network call to ${truncate(val, 60)}`,
+   494→      };
+   495→    }
+   496→  }
+   497→
+   498→  if (['web_search', 'web_fetch', 'http_request', 'api_call'].includes(toolName)) {
+   499→    return {
+   500→      name: 'network-risk',
+   501→      contribution: 25,
+   502→      description: `Tool "${toolName}" makes network requests`,
+   503→    };
+   504→  }
+   505→
+   506→  return {
+   507→    name: 'network-risk',
+   508→    contribution: 0,
+   509→    description: 'No network activity detected',
+   510→  };
+   511→}
+   512→
+   513→function evaluateReversibilityRisk(
+   514→  toolName: string,
+   515→  args: Record<string, unknown>,
+   516→  _context: ActionContext,
+   517→): RiskFactor | null {
+   518→  if (DANGEROUS_TOOLS.includes(toolName) || toolName.includes('delete') || toolName.includes('remove')) {
+   519→    return {
+   520→      name: 'reversibility-risk',
+   521→      contribution: 80,
+   522→      description: `Action via "${toolName}" is likely irreversible`,
+   523→    };
+   524→  }
+   525→
+   526→  const command = extractCommand(args);
+   527→  if (command) {
+   528→    const lowerCmd = command.toLowerCase();
+   529→    for (const pattern of IRREVERSIBLE_PATTERNS) {
+   530→      if (lowerCmd.includes(pattern.toLowerCase())) {
+   531→        return {
+   532→          name: 'reversibility-risk',
+   533→          contribution: 80,
+   534→          description: `Command contains irreversible pattern "${pattern}"`,
+   535→        };
+   536→      }
+   537→    }
+   538→  }
+   539→
+   540→  if (MODERATE_TOOLS.includes(toolName)) {
+   541→    return {
+   542→      name: 'reversibility-risk',
+   543→      contribution: 35,
+   544→      description: `Action via "${toolName}" can likely be undone with effort`,
+   545→    };
+   546→  }
+   547→
+   548→  if (SAFE_TOOLS.includes(toolName)) {
+   549→    return {
+   550→      name: 'reversibility-risk',
+   551→      contribution: 2,
+   552→      description: 'Read-only action — trivially reversible (no-op)',
+   553→    };
+   554→  }
+   555→
+   556→  return {
+   557→    name: 'reversibility-risk',
+   558→    contribution: 20,
+   559→    description: 'Reversibility uncertain',
+   560→  };
+   561→}
+   562→
+   563→function evaluateImpactRadiusRisk(
+   564→  toolName: string,
+   565→  args: Record<string, unknown>,
+   566→  context: ActionContext,
+   567→): RiskFactor | null {
+   568→  const filePath = extractFilePath(args);
+   569→  if (!filePath) {
+   570→    return {
+   571→      name: 'impact-radius-risk',
+   572→      contribution: 5,
+   573→      description: 'No specific file target — low impact radius',
+   574→    };
+   575→  }
+   576→
+   577→  const normalized = filePath.replace(/\\/g, '/').toLowerCase();
+   578→  const coreModules = ['index.ts', 'index.js', 'main.ts', 'main.js', 'app.ts', 'app.js', 'server.ts', 'server.js'];
+   579→  const fileName = normalized.split('/').pop() ?? '';
+   580→
+   581→  if (coreModules.some((m) => fileName === m)) {
+   582→    return {
+   583→      name: 'impact-radius-risk',
+   584→      contribution: 70,
+   585→      description: `File "${fileName}" is a core entry point — high impact radius`,
+   586→    };
+   587→  }
+   588→
+   589→  if (normalized.includes('util') || normalized.includes('helper') || normalized.includes('shared')) {
+   590→    return {
+   591→      name: 'impact-radius-risk',
+   592→      contribution: 55,
+   593→      description: `Path includes shared/utility — potentially wide impact`,
+   594→    };
+   595→  }
+   596→
+   597→  if (normalized.includes('test') || normalized.includes('spec') || normalized.includes('mock')) {
+   598→    return {
+   599→      name: 'impact-radius-risk',
+   600→      contribution: 10,
+   601→      description: 'Test / spec file — isolated impact',
+   602→    };
+   603→  }
+   604→
+   605→  return {
+   606→    name: 'impact-radius-risk',
+   607→    contribution: 25,
+   608→    description: 'Standard source file — moderate impact radius',
+   609→  };
+   610→}
+   611→
+   612→function evaluateCostRisk(
+   613→  _toolName: string,
+   614→  _args: Record<string, unknown>,
+   615→  context: ActionContext,
+   616→): RiskFactor | null {
+   617→  if (context.spendingLimit <= 0) {
+   618→    return {
+   619→      name: 'cost-risk',
+   620→      contribution: 0,
+   621→      description: 'No spending limit configured',
+   622→    };
+   623→  }
+   624→
+   625→  const ratio = context.currentCost / context.spendingLimit;
+   626→
+   627→  if (ratio >= 0.95) {
+   628→    return {
+   629→      name: 'cost-risk',
+   630→      contribution: 90,
+   631→      description: `Spending at ${(ratio * 100).toFixed(1)}% of limit ($${context.currentCost.toFixed(4)} / $${context.spendingLimit})`,
+   632→    };
+   633→  }
+   634→  if (ratio >= 0.8) {
+   635→    return {
+   636→      name: 'cost-risk',
+   637→      contribution: 55,
+   638→      description: `Spending at ${(ratio * 100).toFixed(1)}% of limit`,
+   639→    };
+   640→  }
+   641→  if (ratio >= 0.5) {
+   642→    return {
+   643→      name: 'cost-risk',
+   644→      contribution: 25,
+   645→      description: `Spending at ${(ratio * 100).toFixed(1)}% of limit`,
+   646→    };
+   647→  }
+   648→
+   649→  return {
+   650→    name: 'cost-risk',
+   651→    contribution: 5,
+   652→    description: `Spending at ${(ratio * 100).toFixed(1)}% of limit — plenty of budget`,
+   653→  };
+   654→}
+   655→
+   656→const BUILTIN_RISK_EVALUATORS: RiskFactorEvaluator[] = [
+   657→  evaluateFilePathRisk,
+   658→  evaluateCommandRisk,
+   659→  evaluateToolRisk,
+   660→  evaluateScopeRisk,
+   661→  evaluateNetworkRisk,
+   662→  evaluateReversibilityRisk,
+   663→  evaluateImpactRadiusRisk,
+   664→  evaluateCostRisk,
+   665→];
+   666→
+   667→// ---------------------------------------------------------------------------
+   668→// Helpers
+   669→// ---------------------------------------------------------------------------
+   670→
+   671→function extractFilePath(args: Record<string, unknown>): string | null {
+   672→  for (const key of ['path', 'filePath', 'file_path', 'filename', 'dest', 'destination']) {
+   673→    if (typeof args[key] === 'string') return args[key] as string;
+   674→  }
+   675→  return null;
+   676→}
+   677→
+   678→function extractCommand(args: Record<string, unknown>): string | null {
+   679→  for (const key of ['command', 'cmd', 'script', 'shell_command', 'exec']) {
+   680→    if (typeof args[key] === 'string') return args[key] as string;
+   681→  }
+   682→  return null;
+   683→}
+   684→
+   685→function extractMultipleFiles(args: Record<string, unknown>): string[] {
+   686→  const files: string[] = [];
+   687→
+   688→  for (const key of ['paths', 'files', 'file_list']) {
+   689→    const val = args[key];
+   690→    if (Array.isArray(val)) {
+   691→      for (const item of val) {
+   692→        if (typeof item === 'string') files.push(item);
+   693→      }
+   694→    }
+   695→  }
+   696→
+   697→  const single = extractFilePath(args);
+   698→  if (single) files.push(single);
+   699→
+   700→  return files;
+   701→}
+   702→
+   703→function truncate(str: string, maxLen: number): string {
+   704→  return str.length > maxLen ? str.slice(0, maxLen) + '...' : str;
+   705→}
+   706→
+   707→function normalizePattern(toolName: string, args: Record<string, unknown>): string {
+   708→  const filePath = extractFilePath(args);
+   709→  if (filePath) {
+   710→    const ext = filePath.includes('.') ? '.' + filePath.split('.').pop() : '';
+   711→    return `${toolName}:*${ext}`;
+   712→  }
+   713→  const command = extractCommand(args);
+   714→  if (command) {
+   715→    const base = command.trim().split(/\s+/)[0];
+   716→    return `${toolName}:${base}`;
+   717→  }
+   718→  return `${toolName}:*`;
+   719→}
+   720→
+   721→function matchesEscalationCondition(
+   722→  rule: EscalationRule,
+   723→  toolName: string,
+   724→  args: Record<string, unknown>,
+   725→  context: ActionContext,
+   726→): boolean {
+   727→  const condition = rule.condition.toLowerCase();
+   728→
+   729→  if (condition.includes('file matches')) {
+   730→    const pattern = condition.replace(/file matches\s+/i, '').trim();
+   731→    const filePath = extractFilePath(args);
+   732→    if (filePath) {
+   733→      const regexStr = pattern
+   734→        .replace(/\./g, '\\.')
+   735→        .replace(/\*\*/g, '.*')
+   736→        .replace(/\*/g, '[^/]*');
+   737→      try {
+   738→        const re = new RegExp(regexStr, 'i');
+   739→        if (re.test(filePath)) return true;
+   740→      } catch {
+   741→        if (filePath.toLowerCase().includes(pattern.replace(/\*/g, '').toLowerCase())) return true;
+   742→      }
+   743→    }
+   744→  }
+   745→
+   746→  if (condition.includes('tool is')) {
+   747→    const targetTool = condition.replace(/tool is\s+/i, '').trim();
+   748→    if (toolName.toLowerCase() === targetTool.toLowerCase()) return true;
+   749→  }
+   750→
+   751→  if (condition.includes('command contains')) {
+   752→    const fragment = condition.replace(/command contains\s+/i, '').trim();
+   753→    const command = extractCommand(args);
+   754→    if (command && command.toLowerCase().includes(fragment.toLowerCase())) return true;
+   755→  }
+   756→
+   757→  if (condition.includes('uncommitted changes') && context.hasUncommittedChanges) {
+   758→    return true;
+   759→  }
+   760→
+   761→  if (condition.includes('production')) {
+   762→    const filePath = extractFilePath(args);
+   763→    if (filePath && PRODUCTION_PATH_SEGMENTS.some((seg) => filePath.toLowerCase().includes(seg.toLowerCase()))) {
+   764→      return true;
+   765→    }
+   766→  }
+   767→
+   768→  if (condition.includes('cost exceeds')) {
+   769→    const threshold = parseFloat(condition.replace(/cost exceeds\s+/i, '').replace(/[^0-9.]/g, ''));
+   770→    if (!isNaN(threshold) && context.currentCost > threshold) return true;
+   771→  }
+   772→
+   773→  return false;
+   774→}
+   775→
+   776→// ---------------------------------------------------------------------------
+   777→// SmartMonitor class
+   778→// ---------------------------------------------------------------------------
+   779→
+   780→const NEURO_DIR = join(homedir(), '.neuro');
+   781→const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+   782→const MAX_CACHE_ENTRIES = 200;
+   783→
+   784→export class SmartMonitor {
+   785→  private config: SmartMonitorConfig;
+   786→  private apiClient: any;
+   787→  private patterns: Map<string, LearnedPattern> = new Map();
+   788→  private evaluationCache: Map<string, EvaluationCacheEntry> = new Map();
+   789→  private stats: {
+   790→    totalEvaluations: number;
+   791→    approvals: number;
+   792→    denials: number;
+   793→    modifications: number;
+   794→    escalations: number;
+   795→    learnedDecisions: number;
+   796→    cacheHits: number;
+   797→    cacheMisses: number;
+   798→    totalRiskScore: number;
+   799→    totalEvaluationTimeMs: number;
+   800→  };
+   801→
+   802→  constructor(config: Partial<SmartMonitorConfig>, apiClient: any) {
+   803→    this.config = { ...DEFAULT_CONFIG, ...config };
+   804→    this.config.riskThresholds = { ...DEFAULT_CONFIG.riskThresholds, ...config.riskThresholds };
+   805→    this.config.learning = { ...DEFAULT_CONFIG.learning, ...config.learning };
+   806→    this.config.contextAwareness = { ...DEFAULT_CONFIG.contextAwareness, ...config.contextAwareness };
+   807→    if (config.escalationRules) {
+   808→      this.config.escalationRules = [...config.escalationRules];
+   809→    }
+   810→    this.apiClient = apiClient;
+   811→    this.stats = this.freshStats();
+   812→    this.loadPatterns();
+   813→  }
+   814→
+   815→  // -----------------------------------------------------------------------
+   816→  // Core evaluation
+   817→  // -----------------------------------------------------------------------
+   818→
+   819→  async evaluate(
+   820→    toolName: string,
+   821→    args: Record<string, unknown>,
+   822→    context: ActionContext,
+   823→  ): Promise<MonitorDecision> {
+   824→    if (!this.config.enabled) {
+   825→      return {
+   826→        action: 'approve',
+   827→        confidence: 1.0,
+   828→        riskScore: 0,
+   829→        reasoning: 'Smart monitor is disabled',
+   830→        learned: false,
+   831→      };
+   832→    }
+   833→
+   834→    const startTime = Date.now();
+   835→
+   836→    // 1. Check escalation rules first — these are hard overrides
+   837→    for (const rule of this.config.escalationRules) {
+   838→      if (matchesEscalationCondition(rule, toolName, args, context)) {
+   839→        this.stats.totalEvaluations++;
+   840→        this.stats.escalations++;
+   841→        const elapsed = Date.now() - startTime;
+   842→        this.stats.totalEvaluationTimeMs += elapsed;
+   843→
+   844→        return {
+   845→          action: rule.action === 'deny' ? 'deny' : 'ask-user',
+   846→          confidence: 0.95,
+   847→          riskScore: 95,
+   848→          reasoning: rule.reason,
+   849→          userQuestion: rule.action === 'ask-user'
+   850→            ? `Escalation rule triggered: ${rule.reason}. Proceed anyway?`
+   851→            : undefined,
+   852→          learned: false,
+   853→        };
+   854→      }
+   855→    }
+   856→
+   857→    // 2. Check learned patterns
+   858→    if (this.config.learning.enabled) {
+   859→      const learnedDecision = this.checkLearnedPatterns(toolName, args);
+   860→      if (learnedDecision) {
+   861→        this.stats.totalEvaluations++;
+   862→        this.stats.learnedDecisions++;
+   863→        if (learnedDecision.action === 'approve') this.stats.approvals++;
+   864→        else if (learnedDecision.action === 'deny') this.stats.denials++;
+   865→        const elapsed = Date.now() - startTime;
+   866→        this.stats.totalEvaluationTimeMs += elapsed;
+   867→        this.stats.totalRiskScore += learnedDecision.riskScore;
+   868→        return learnedDecision;
+   869→      }
+   870→    }
+   871→
+   872→    // 3. Perform risk assessment
+   873→    const risk = await this.assessRisk(toolName, args, context);
+   874→
+   875→    // 4. Apply threshold logic
+   876→    let decision: MonitorDecision;
+   877→
+   878→    if (risk.score <= this.config.riskThresholds.autoApprove) {
+   879→      decision = {
+   880→        action: 'approve',
+   881→        confidence: this.scoreToConfidence(risk.score, 'approve'),
+   882→        riskScore: risk.score,
+   883→        reasoning: risk.reasoning,
+   884→        learned: false,
+   885→      };
+   886→    } else if (risk.score >= this.config.riskThresholds.askUser) {
+   887→      decision = {
+   888→        action: 'ask-user',
+   889→        confidence: this.scoreToConfidence(risk.score, 'ask-user'),
+   890→        riskScore: risk.score,
+   891→        reasoning: risk.reasoning,
+   892→        userQuestion: `Risk score ${risk.score}/100. ${risk.reasoning}. Allow this action?`,
+   893→        learned: false,
+   894→      };
+   895→    } else {
+   896→      // Middle zone — use LLM evaluation
+   897→      const llmDecision = await this.evaluateWithLLM(toolName, args, context, risk);
+   898→      decision = {
+   899→        ...llmDecision,
+   900→        riskScore: risk.score,
+   901→        learned: false,
+   902→      };
+   903→    }
+   904→
+   905→    // 5. Safety-level adjustments
+   906→    decision = this.adjustForSafetyLevel(decision, context.safetyLevel);
+   907→
+   908→    // 6. Budget enforcement
+   909→    if (
+   910→      context.spendingLimit > 0 &&
+   911→      context.currentCost >= context.spendingLimit * 0.95 &&
+   912→      decision.action === 'approve'
+   913→    ) {
+   914→      decision = {
+   915→        action: 'ask-user',
+   916→        confidence: 0.85,
+   917→        riskScore: Math.max(decision.riskScore, 75),
+   918→        reasoning: `Approaching spending limit ($${context.currentCost.toFixed(4)} / $${context.spendingLimit}). ${decision.reasoning}`,
+   919→        userQuestion: `You've used 95%+ of your spending limit. Proceed with this action?`,
+   920→        learned: false,
+   921→      };
+   922→    }
+   923→
+   924→    // Record stats
+   925→    this.stats.totalEvaluations++;
+   926→    this.stats.totalRiskScore += decision.riskScore;
+   927→    const elapsed = Date.now() - startTime;
+   928→    this.stats.totalEvaluationTimeMs += elapsed;
+   929→
+   930→    if (decision.action === 'approve') this.stats.approvals++;
+   931→    else if (decision.action === 'deny') this.stats.denials++;
+   932→    else if (decision.action === 'modify') this.stats.modifications++;
+   933→    else if (decision.action === 'ask-user') this.stats.escalations++;
+   934→
+   935→    // Cache the decision
+   936→    this.cacheDecision(toolName, args, decision);
+   937→
+   938→    return decision;
+   939→  }
+   940→
+   941→  // -----------------------------------------------------------------------
+   942→  // Risk assessment
+   943→  // -----------------------------------------------------------------------
+   944→
+   945→  async assessRisk(
+   946→    toolName: string,
+   947→    args: Record<string, unknown>,
+   948→    context: ActionContext,
+   949→  ): Promise<ActionRisk> {
+   950→    const factors: RiskFactor[] = [];
+   951→
+   952→    // Run all built-in risk evaluators
+   953→    for (const evaluator of BUILTIN_RISK_EVALUATORS) {
+   954→      const factor = evaluator(toolName, args, context);
+   955→      if (factor) factors.push(factor);
+   956→    }
+   957→
+   958→    // Check protected paths from context awareness
+   959→    if (this.config.contextAwareness.checkProductionFiles) {
+   960→      const filePath = extractFilePath(args);
+   961→      if (filePath) {
+   962→        for (const protectedPath of this.config.contextAwareness.protectedPaths) {
+   963→          const regexStr = protectedPath
+   964→            .replace(/\./g, '\\.')
+   965→            .replace(/\*\*/g, '.*')
+   966→            .replace(/\*/g, '[^/]*');
+   967→          try {
+   968→            const re = new RegExp(regexStr, 'i');
+   969→            if (re.test(filePath)) {
+   970→              factors.push({
+   971→                name: 'protected-path-risk',
+   972→                contribution: 70,
+   973→                description: `Path "${filePath}" matches protected pattern "${protectedPath}"`,
+   974→              });
+   975→              break;
+   976→            }
+   977→          } catch {
+   978→            if (filePath.toLowerCase().includes(protectedPath.replace(/\*/g, '').toLowerCase())) {
+   979→              factors.push({
+   980→                name: 'protected-path-risk',
+   981→                contribution: 70,
+   982→                description: `Path "${filePath}" matches protected pattern "${protectedPath}"`,
+   983→              });
+   984→              break;
+   985→            }
+   986→          }
+   987→        }
+   988→      }
+   989→    }
+   990→
+   991→    // Check git status context
+   992→    if (this.config.contextAwareness.checkGitStatus && context.hasUncommittedChanges) {
+   993→      factors.push({
+   994→        name: 'git-status-risk',
+   995→        contribution: 20,
+   996→        description: 'There are uncommitted changes in the repository',
+   997→      });
+   998→    }
+   999→
+  1000→    // Compute weighted aggregate score
+  1001→    // Each factor contributes a weight; we use a weighted average with a
+  1002→    // minimum of 0 and ceiling of 100.
+  1003→    const totalContribution = factors.reduce((sum, f) => sum + f.contribution, 0);
+  1004→    const factorCount = factors.length || 1;
+  1005→    // Weighted average: contributions above 50 count double (amplification)
+  1006→    let score = 0;
+  1007→    for (const factor of factors) {
+  1008→      const weight = factor.contribution >= 50 ? 1.5 : 1.0;
+  1009→      score += factor.contribution * weight;
+  1010→    }
+  1011→    score = score / (factorCount + factors.filter((f) => f.contribution >= 50).length * 0.5);
+  1012→    score = Math.round(Math.max(0, Math.min(100, score)));
+  1013→
+  1014→    // Determine recommendation
+  1015→    let recommendation: ActionRisk['recommendation'];
+  1016→    if (score <= this.config.riskThresholds.autoApprove) {
+  1017→      recommendation = 'approve';
+  1018→    } else if (score >= this.config.riskThresholds.askUser) {
+  1019→      recommendation = 'ask-user';
+  1020→    } else {
+  1021→      // Factor in specific signals
+  1022→      const hasIrreversible = factors.some(
+  1023→        (f) => f.name === 'reversibility-risk' && f.contribution >= 60,
+  1024→      );
+  1025→      const hasDangerousCommand = factors.some(
+  1026→        (f) => f.name === 'command-risk' && f.contribution >= 70,
+  1027→      );
+  1028→      const hasProtectedPath = factors.some(
+  1029→        (f) => f.name === 'protected-path-risk',
+  1030→      );
+  1031→
+  1032→      if (hasIrreversible || hasDangerousCommand || hasProtectedPath) {
+  1033→        recommendation = 'ask-user';
+  1034→      } else {
+  1035→        recommendation = 'modify';
+  1036→      }
+  1037→    }
+  1038→
+  1039→    const reasoning = factors
+  1040→      .map((f) => `[${f.contribution}] ${f.name}: ${f.description}`)
+  1041→      .join('; ');
+  1042→
+  1043→    return { score, factors, recommendation, reasoning };
+  1044→  }
+  1045→
+  1046→  // -----------------------------------------------------------------------
+  1047→  // LLM evaluation
+  1048→  // -----------------------------------------------------------------------
+  1049→
+  1050→  private async evaluateWithLLM(
+  1051→    toolName: string,
+  1052→    args: Record<string, unknown>,
+  1053→    context: ActionContext,
+  1054→    risk: ActionRisk,
+  1055→  ): Promise<MonitorDecision> {
+  1056→    // Check cache first
+  1057→    const cacheKey = this.computeCacheKey(toolName, args);
+  1058→    const cached = this.evaluationCache.get(cacheKey);
+  1059→    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+  1060→      this.stats.cacheHits++;
+  1061→      return cached.decision;
+  1062→    }
+  1063→    this.stats.cacheMisses++;
+  1064→
+  1065→    const safeArgsPreview = this.sanitizeArgsForPrompt(args);
+  1066→
+  1067→    const prompt = `You are a safety monitor for an AI coding assistant. Evaluate this proposed action.
+  1068→
+  1069→Tool: ${toolName}
+  1070→Args: ${safeArgsPreview}
+  1071→Risk Score: ${risk.score}/100
+  1072→Risk Factors: ${risk.factors.map((f) => `${f.name}(${f.contribution})`).join(', ')}
+  1073→Safety Level: ${context.safetyLevel}
+  1074→Uncommitted Changes: ${context.hasUncommittedChanges}
+  1075→Current Cost: $${context.currentCost.toFixed(4)}${context.spendingLimit > 0 ? ` / $${context.spendingLimit}` : ''}
+  1076→
+  1077→Respond with exactly one line in this format:
+  1078→DECISION|confidence|reasoning
+  1079→
+  1080→Where DECISION is one of: approve, deny, modify, ask-user
+  1081→Confidence is 0.0 to 1.0
+  1082→If modify, add a second line with the modified args as JSON.
+  1083→If ask-user, add a second line with the question to ask.`;
+  1084→
+  1085→    try {
+  1086→      const result = await this.callEvaluatorModel(prompt);
+  1087→      return this.parseLLMResponse(result.text, risk.score);
+  1088→    } catch {
+  1089→      // LLM call failed — fall back to risk-based decision
+  1090→      return {
+  1091→        action: risk.score >= this.config.riskThresholds.askUser ? 'ask-user' : 'approve',
+  1092→        confidence: 0.5,
+  1093→        riskScore: risk.score,
+  1094→        reasoning: `LLM evaluation failed; falling back to risk threshold. ${risk.reasoning}`,
+  1095→        learned: false,
+  1096→      };
+  1097→    }
+  1098→  }
+  1099→
+  1100→  private async callEvaluatorModel(prompt: string): Promise<LLMCallResult> {
+  1101→    if (!this.apiClient || typeof this.apiClient.createChatCompletion !== 'function') {
+  1102→      throw new Error('API client not available for smart monitor evaluation');
+  1103→    }
+  1104→
+  1105→    const result = await this.apiClient.createChatCompletion({
+  1106→      model: this.config.evaluatorModel,
+  1107→      messages: [
+  1108→        {
+  1109→          role: 'system',
+  1110→          content: 'You are a concise safety evaluator. Respond only in the specified format. No explanations beyond the reasoning field.',
+  1111→        },
+  1112→        { role: 'user', content: prompt },
+  1113→      ],
+  1114→      max_tokens: 200,
+  1115→      temperature: 0.1,
+  1116→    });
+  1117→
+  1118→    const choice = result.choices?.[0];
+  1119→    if (!choice?.message?.content) {
+  1120→      throw new Error('Empty response from evaluator model');
+  1121→    }
+  1122→
+  1123→    return {
+  1124→      text: choice.message.content.trim(),
+  1125→      inputTokens: result.usage?.prompt_tokens ?? 0,
+  1126→      outputTokens: result.usage?.completion_tokens ?? 0,
+  1127→      cost: this.estimateCost(
+  1128→        result.usage?.prompt_tokens ?? 0,
+  1129→        result.usage?.completion_tokens ?? 0,
+  1130→      ),
+  1131→    };
+  1132→  }
+  1133→
+  1134→  private parseLLMResponse(text: string, riskScore: number): MonitorDecision {
+  1135→    const lines = text.split('\n').filter((l) => l.trim().length > 0);
+  1136→    const firstLine = lines[0] ?? '';
+  1137→
+  1138→    const parts = firstLine.split('|');
+  1139→    const actionStr = (parts[0] ?? 'approve').trim().toLowerCase();
+  1140→    const confidence = parseFloat(parts[1] ?? '0.5');
+  1141→    const reasoning = parts.slice(2).join('|').trim() || 'LLM evaluation';
+  1142→
+  1143→    const validActions = ['approve', 'deny', 'modify', 'ask-user'] as const;
+  1144→    const action: MonitorDecision['action'] = validActions.includes(actionStr as any)
+  1145→      ? (actionStr as MonitorDecision['action'])
+  1146→      : 'ask-user';
+  1147→
+  1148→    const decision: MonitorDecision = {
+  1149→      action,
+  1150→      confidence: isNaN(confidence) ? 0.5 : Math.max(0, Math.min(1, confidence)),
+  1151→      riskScore,
+  1152→      reasoning,
+  1153→      learned: false,
+  1154→    };
+  1155→
+  1156→    if (action === 'modify' && lines.length > 1) {
+  1157→      try {
+  1158→        decision.modifiedArgs = JSON.parse(lines[1]);
+  1159→      } catch {
+  1160→        // Could not parse modified args — ignore
+  1161→      }
+  1162→    }
+  1163→
+  1164→    if (action === 'ask-user' && lines.length > 1) {
+  1165→      decision.userQuestion = lines[1].trim();
+  1166→    }
+  1167→
+  1168→    return decision;
+  1169→  }
+  1170→
+  1171→  private estimateCost(inputTokens: number, outputTokens: number): number {
+  1172→    // Rough pricing for cheap models
+  1173→    const inputPricePer1M = 0.15; // ~gemma pricing
+  1174→    const outputPricePer1M = 0.15;
+  1175→    return (inputTokens * inputPricePer1M + outputTokens * outputPricePer1M) / 1_000_000;
+  1176→  }
+  1177→
+  1178→  // -----------------------------------------------------------------------
+  1179→  // Learning
+  1180→  // -----------------------------------------------------------------------
+  1181→
+  1182→  recordDecision(
+  1183→    toolName: string,
+  1184→    args: Record<string, unknown>,
+  1185→    decision: MonitorDecision,
+  1186→    userOverride?: boolean,
+  1187→  ): void {
+  1188→    if (!this.config.learning.enabled) return;
+  1189→
+  1190→    const patternKey = normalizePattern(toolName, args);
+  1191→    const existing = this.patterns.get(patternKey);
+  1192→
+  1193→    if (existing) {
+  1194→      existing.lastSeen = Date.now();
+  1195→      if (userOverride === true) {
+  1196→        // User explicitly overrode a deny → count as approval
+  1197→        existing.approvals++;
+  1198→      } else if (userOverride === false) {
+  1199→        // User explicitly overrode an approval → count as denial
+  1200→        existing.denials++;
+  1201→      } else if (decision.action === 'approve') {
+  1202→        existing.approvals++;
+  1203→      } else if (decision.action === 'deny') {
+  1204→        existing.denials++;
+  1205→      }
+  1206→      // Check if pattern now qualifies for auto-approve
+  1207→      existing.active =
+  1208→        existing.approvals >= this.config.learning.minSamples &&
+  1209→        existing.denials === 0;
+  1210→    } else {
+  1211→      this.patterns.set(patternKey, {
+  1212→        pattern: patternKey,
+  1213→        approvals: decision.action === 'approve' ? 1 : 0,
+  1214→        denials: decision.action === 'deny' ? 1 : 0,
+  1215→        lastSeen: Date.now(),
+  1216→        active: false,
+  1217→      });
+  1218→    }
+  1219→
+  1220→    this.persistPatterns();
+  1221→  }
+  1222→
+  1223→  getLearnedPatterns(): LearnedPattern[] {
+  1224→    return Array.from(this.patterns.values());
+  1225→  }
+  1226→
+  1227→  resetLearning(): void {
+  1228→    this.patterns.clear();
+  1229→    try {
+  1230→      if (existsSync(this.config.learning.storagePath)) {
+  1231→        const { unlinkSync } = require('fs');
+  1232→        unlinkSync(this.config.learning.storagePath);
+  1233→      }
+  1234→    } catch {
+  1235→      // Ignore
+  1236→    }
+  1237→  }
+  1238→
+  1239→  private checkLearnedPatterns(
+  1240→    toolName: string,
+  1241→    args: Record<string, unknown>,
+  1242→  ): MonitorDecision | null {
+  1243→    const patternKey = normalizePattern(toolName, args);
+  1244→    const pattern = this.patterns.get(patternKey);
+  1245→
+  1246→    if (!pattern || !pattern.active) return null;
+  1247→    if (pattern.approvals < this.config.learning.minSamples) return null;
+  1248→    if (pattern.denials > 0) return null;
+  1249→
+  1250→    return {
+  1251→      action: 'approve',
+  1252→      confidence: Math.min(0.95, 0.6 + pattern.approvals * 0.03),
+  1253→      riskScore: 10,
+  1254→      reasoning: `Auto-approved based on ${pattern.approvals} past approvals for pattern "${patternKey}"`,
+  1255→      learned: true,
+  1256→    };
+  1257→  }
+  1258→
+  1259→  private loadPatterns(): void {
+  1260→    try {
+  1261→      if (existsSync(this.config.learning.storagePath)) {
+  1262→        const data = JSON.parse(readFileSync(this.config.learning.storagePath, 'utf-8'));
+  1263→        if (Array.isArray(data)) {
+  1264→          for (const p of data) {
+  1265→            if (p.pattern) {
+  1266→              this.patterns.set(p.pattern, p as LearnedPattern);
+  1267→            }
+  1268→          }
+  1269→        }
+  1270→      }
+  1271→    } catch {
+  1272→      // Corrupt or missing file — start fresh
+  1273→    }
+  1274→  }
+  1275→
+  1276→  private persistPatterns(): void {
+  1277→    try {
+  1278→      const dir = join(this.config.learning.storagePath, '..');
+  1279→      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  1280→      const data = Array.from(this.patterns.values());
+  1281→      writeFileSync(this.config.learning.storagePath, JSON.stringify(data, null, 2), 'utf-8');
+  1282→    } catch {
+  1283→      // Cannot persist — continue in-memory
+  1284→    }
+  1285→  }
+  1286→
+  1287→  // -----------------------------------------------------------------------
+  1288→  // Configuration
+  1289→  // -----------------------------------------------------------------------
+  1290→
+  1291→  updateThresholds(thresholds: Partial<SmartMonitorConfig['riskThresholds']>): void {
+  1292→    if (thresholds.autoApprove !== undefined) {
+  1293→      this.config.riskThresholds.autoApprove = thresholds.autoApprove;
+  1294→    }
+  1295→    if (thresholds.askUser !== undefined) {
+  1296→      this.config.riskThresholds.askUser = thresholds.askUser;
+  1297→    }
+  1298→    // Ensure autoApprove < askUser
+  1299→    if (this.config.riskThresholds.autoApprove >= this.config.riskThresholds.askUser) {
+  1300→      this.config.riskThresholds.askUser = this.config.riskThresholds.autoApprove + 1;
+  1301→    }
+  1302→  }
+  1303→
+  1304→  addEscalationRule(rule: EscalationRule): void {
+  1305→    // Avoid duplicate conditions
+  1306→    const exists = this.config.escalationRules.some((r) => r.condition === rule.condition);
+  1307→    if (!exists) {
+  1308→      this.config.escalationRules.push(rule);
+  1309→    }
+  1310→  }
+  1311→
+  1312→  removeEscalationRule(condition: string): void {
+  1313→    this.config.escalationRules = this.config.escalationRules.filter(
+  1314→      (r) => r.condition !== condition,
+  1315→    );
+  1316→  }
+  1317→
+  1318→  getConfig(): Readonly<SmartMonitorConfig> {
+  1319→    return Object.freeze({
+  1320→      ...this.config,
+  1321→      riskThresholds: { ...this.config.riskThresholds },
+  1322→      learning: { ...this.config.learning },
+  1323→      contextAwareness: { ...this.config.contextAwareness },
+  1324→      escalationRules: [...this.config.escalationRules],
+  1325→    });
+  1326→  }
+  1327→
+  1328→  setEnabled(enabled: boolean): void {
+  1329→    this.config.enabled = enabled;
+  1330→  }
+  1331→
+  1332→  isEnabled(): boolean {
+  1333→    return this.config.enabled;
+  1334→  }
+  1335→
+  1336→  setEvaluatorModel(model: string): void {
+  1337→    this.config.evaluatorModel = model;
+  1338→  }
+  1339→
+  1340→  addProtectedPath(pathPattern: string): void {
+  1341→    if (!this.config.contextAwareness.protectedPaths.includes(pathPattern)) {
+  1342→      this.config.contextAwareness.protectedPaths.push(pathPattern);
+  1343→    }
+  1344→  }
+  1345→
+  1346→  removeProtectedPath(pathPattern: string): void {
+  1347→    this.config.contextAwareness.protectedPaths =
+  1348→      this.config.contextAwareness.protectedPaths.filter((p) => p !== pathPattern);
+  1349→  }
+  1350→
+  1351→  // -----------------------------------------------------------------------
+  1352→  // Statistics
+  1353→  // -----------------------------------------------------------------------
+  1354→
+  1355→  getStats(): MonitorStats {
+  1356→    const total = this.stats.totalEvaluations || 1;
+  1357→    const cacheTotal = this.stats.cacheHits + this.stats.cacheMisses || 1;
+  1358→    return {
+  1359→      totalEvaluations: this.stats.totalEvaluations,
+  1360→      approvals: this.stats.approvals,
+  1361→      denials: this.stats.denials,
+  1362→      modifications: this.stats.modifications,
+  1363→      escalations: this.stats.escalations,
+  1364→      approvalRate: this.stats.approvals / total,
+  1365→      avgRiskScore: this.stats.totalRiskScore / total,
+  1366→      avgEvaluationTimeMs: this.stats.totalEvaluationTimeMs / total,
+  1367→      learnedDecisions: this.stats.learnedDecisions,
+  1368→      cacheHitRate: this.stats.cacheHits / cacheTotal,
+  1369→    };
+  1370→  }
+  1371→
+  1372→  resetStats(): void {
+  1373→    this.stats = this.freshStats();
+  1374→  }
+  1375→
+  1376→  // -----------------------------------------------------------------------
+  1377→  // Context helpers — gather live project context
+  1378→  // -----------------------------------------------------------------------
+  1379→
+  1380→  gatherContext(workingDirectory: string, currentCost: number, spendingLimit: number): ActionContext {
+  1381→    let hasUncommittedChanges = false;
+  1382→    if (this.config.contextAwareness.checkGitStatus) {
+  1383→      try {
+  1384→        const status = execSync('git status --porcelain', {
+  1385→          cwd: workingDirectory,
+  1386→          encoding: 'utf-8',
+  1387→          timeout: 5000,
+  1388→        });
+  1389→        hasUncommittedChanges = status.trim().length > 0;
+  1390→      } catch {
+  1391→        // Not a git repo or git not available
+  1392→      }
+  1393→    }
+  1394→
+  1395→    let neuroMdContent: string | undefined;
+  1396→    const neuroMdPath = join(workingDirectory, 'NEURO.md');
+  1397→    try {
+  1398→      if (existsSync(neuroMdPath)) {
+  1399→        neuroMdContent = readFileSync(neuroMdPath, 'utf-8');
+  1400→      }
+  1401→    } catch {
+  1402→      // Cannot read
+  1403→    }
+  1404→
+  1405→    return {
+  1406→      workingDirectory,
+  1407→      modifiedFiles: [],
+  1408→      currentCost,
+  1409→      spendingLimit,
+  1410→      safetyLevel: 'moderate',
+  1411→      recentHistory: [],
+  1412→      hasUncommittedChanges,
+  1413→      neuroMdContent,
+  1414→    };
+  1415→  }
+  1416→
+  1417→  // -----------------------------------------------------------------------
+  1418→  // Internal utilities
+  1419→  // -----------------------------------------------------------------------
+  1420→
+  1421→  private adjustForSafetyLevel(
+  1422→    decision: MonitorDecision,
+  1423→    level: ActionContext['safetyLevel'],
+  1424→  ): MonitorDecision {
+  1425→    if (level === 'conservative') {
+  1426→      // Conservative: escalate moderate decisions
+  1427→      if (decision.action === 'approve' && decision.riskScore > 20) {
+  1428→        return {
+  1429→          ...decision,
+  1430→          action: 'ask-user',
+  1431→          userQuestion: `Conservative mode: risk score ${decision.riskScore}. ${decision.reasoning}. Allow?`,
+  1432→        };
+  1433→      }
+  1434→      if (decision.action === 'modify') {
+  1435→        return {
+  1436→          ...decision,
+  1437→          action: 'ask-user',
+  1438→          userQuestion: `Conservative mode requires approval for modifications. ${decision.reasoning}. Allow?`,
+  1439→        };
+  1440→      }
+  1441→    }
+  1442→
+  1443→    if (level === 'aggressive') {
+  1444→      // Aggressive: auto-approve moderate decisions
+  1445→      if (decision.action === 'ask-user' && decision.riskScore < 60) {
+  1446→        return {
+  1447→          ...decision,
+  1448→          action: 'approve',
+  1449→          reasoning: `Aggressive mode auto-approved (risk ${decision.riskScore} < 60). ${decision.reasoning}`,
+  1450→        };
+  1451→      }
+  1452→    }
+  1453→
+  1454→    return decision;
+  1455→  }
+  1456→
+  1457→  private scoreToConfidence(score: number, action: string): number {
+  1458→    if (action === 'approve') {
+  1459→      // Lower score → higher confidence in approving
+  1460→      return Math.max(0.5, 1.0 - score / 100);
+  1461→    }
+  1462→    // Higher score → higher confidence in escalating
+  1463→    return Math.max(0.5, score / 100);
+  1464→  }
+  1465→
+  1466→  private computeCacheKey(toolName: string, args: Record<string, unknown>): string {
+  1467→    const filePath = extractFilePath(args);
+  1468→    const command = extractCommand(args);
+  1469→    return `${toolName}:${filePath ?? ''}:${command ?? ''}:${this.sanitizeArgsForPrompt(args).slice(0, 100)}`;
+  1470→  }
+  1471→
+  1472→  private cacheDecision(
+  1473→    toolName: string,
+  1474→    args: Record<string, unknown>,
+  1475→    decision: MonitorDecision,
+  1476→  ): void {
+  1477→    const key = this.computeCacheKey(toolName, args);
+  1478→    this.evaluationCache.set(key, { key, decision, timestamp: Date.now() });
+  1479→
+  1480→    // Evict old entries if cache is too large
+  1481→    if (this.evaluationCache.size > MAX_CACHE_ENTRIES) {
+  1482→      const entries = Array.from(this.evaluationCache.entries());
+  1483→      entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+  1484→      const toRemove = entries.slice(0, entries.length - MAX_CACHE_ENTRIES);
+  1485→      for (const [k] of toRemove) {
+  1486→        this.evaluationCache.delete(k);
+  1487→      }
+  1488→    }
+  1489→  }
+  1490→
+  1491→  private sanitizeArgsForPrompt(args: Record<string, unknown>): string {
+  1492→    try {
+  1493→      const sanitized: Record<string, unknown> = {};
+  1494→      for (const [key, value] of Object.entries(args)) {
+  1495→        if (typeof value === 'string') {
+  1496→          sanitized[key] = value.length > 200 ? value.slice(0, 200) + '...' : value;
+  1497→        } else if (typeof value === 'number' || typeof value === 'boolean') {
+  1498→          sanitized[key] = value;
+  1499→        } else if (Array.isArray(value)) {
+  1500→          sanitized[key] = `[Array:${value.length}]`;
+  1501→        } else if (value && typeof value === 'object') {
+  1502→          sanitized[key] = '{Object}';
+  1503→        } else {
+  1504→          sanitized[key] = String(value);
+  1505→        }
+  1506→      }
+  1507→      return JSON.stringify(sanitized);
+  1508→    } catch {
+  1509→      return '{unable to serialize args}';
+  1510→    }
+  1511→  }
+  1512→
+  1513→  private freshStats() {
+  1514→    return {
+  1515→      totalEvaluations: 0,
+  1516→      approvals: 0,
+  1517→      denials: 0,
+  1518→      modifications: 0,
+  1519→      escalations: 0,
+  1520→      learnedDecisions: 0,
+  1521→      cacheHits: 0,
+  1522→      cacheMisses: 0,
+  1523→      totalRiskScore: 0,
+  1524→      totalEvaluationTimeMs: 0,
+  1525→    };
+  1526→  }
+  1527→}
+  1528→
+  1529→// ---------------------------------------------------------------------------
+  1530→// Factory helper
+  1531→// ---------------------------------------------------------------------------
+  1532→
+  1533→export function createSmartMonitor(
+  1534→  config: Partial<SmartMonitorConfig> = {},
+  1535→  apiClient: any = null,
+  1536→): SmartMonitor {
+  1537→  return new SmartMonitor(config, apiClient);
+  1538→}
+  1539→
+  1540→export function defaultSmartMonitorConfig(): SmartMonitorConfig {
+  1541→  return { ...DEFAULT_CONFIG };
+  1542→}
+  1543→

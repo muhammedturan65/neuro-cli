@@ -1,0 +1,908 @@
+     1→// ============================================================
+     2→// NeuroCLI - GAP-36: OpenTelemetry / Observability Integration
+     3→// Zero-dependency OTLP JSON over HTTP export, custom spans,
+     4→// metrics, session tracing, and console pretty-printer.
+     5→// Compatible with Datadog, Jaeger, Dynatrace, Grafana.
+     6→// ============================================================
+     7→
+     8→import chalk from 'chalk';
+     9→
+    10→// -----------------------------------------------------------
+    11→// Public interfaces
+    12→// -----------------------------------------------------------
+    13→
+    14→export interface ObservabilityConfig {
+    15→  enabled: boolean;
+    16→  serviceName: string;
+    17→  endpoint: string;
+    18→  headers: Record<string, string>;
+    19→  exportInterval: number;
+    20→  maxBatchSize: number;
+    21→  consoleExporter: boolean;
+    22→  sampleRate: number;
+    23→}
+    24→
+    25→export interface SpanEvent {
+    26→  name: string;
+    27→  timestamp: number;
+    28→  attributes: Record<string, unknown>;
+    29→}
+    30→
+    31→export interface Span {
+    32→  traceId: string;
+    33→  spanId: string;
+    34→  parentSpanId?: string;
+    35→  name: string;
+    36→  kind: 'internal' | 'client' | 'server';
+    37→  startTime: number;
+    38→  endTime: number;
+    39→  attributes: Record<string, unknown>;
+    40→  events: SpanEvent[];
+    41→  status: { code: 'ok' | 'error'; message?: string };
+    42→}
+    43→
+    44→export interface Metric {
+    45→  name: string;
+    46→  type: 'counter' | 'gauge' | 'histogram';
+    47→  value: number;
+    48→  attributes: Record<string, unknown>;
+    49→  timestamp: number;
+    50→}
+    51→
+    52→// -----------------------------------------------------------
+    53→// OTLP constants
+    54→// -----------------------------------------------------------
+    55→
+    56→const SPAN_KIND_MAP: Record<Span['kind'], number> = {
+    57→  internal: 1,
+    58→  server: 2,
+    59→  client: 3,
+    60→};
+    61→
+    62→const STATUS_CODE_MAP: Record<Span['status']['code'], number> = {
+    63→  ok: 1,
+    64→  error: 2,
+    65→};
+    66→
+    67→const DEFAULT_HISTOGRAM_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
+    68→
+    69→// -----------------------------------------------------------
+    70→// ID generation (crypto-quality random hex)
+    71→// -----------------------------------------------------------
+    72→
+    73→function generateTraceId(): string {
+    74→  const bytes = new Uint8Array(16);
+    75→  globalThis.crypto.getRandomValues(bytes);
+    76→  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    77→}
+    78→
+    79→function generateSpanId(): string {
+    80→  const bytes = new Uint8Array(8);
+    81→  globalThis.crypto.getRandomValues(bytes);
+    82→  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    83→}
+    84→
+    85→// -----------------------------------------------------------
+    86→// OTLP JSON encoders
+    87→// -----------------------------------------------------------
+    88→
+    89→function encodeAttributeValue(value: unknown): Record<string, unknown> {
+    90→  if (typeof value === 'string') {
+    91→    return { stringValue: value };
+    92→  }
+    93→  if (typeof value === 'number') {
+    94→    return Number.isInteger(value)
+    95→      ? { intValue: value }
+    96→      : { doubleValue: value };
+    97→  }
+    98→  if (typeof value === 'boolean') {
+    99→    return { boolValue: value };
+   100→  }
+   101→  return { stringValue: String(value) };
+   102→}
+   103→
+   104→function encodeAttributes(attrs: Record<string, unknown>): Array<{ key: string; value: Record<string, unknown> }> {
+   105→  return Object.entries(attrs).map(([key, value]) => ({
+   106→    key,
+   107→    value: encodeAttributeValue(value),
+   108→  }));
+   109→}
+   110→
+   111→function encodeSpanToOTLP(span: Span, serviceName: string): Record<string, unknown> {
+   112→  return {
+   113→    traceId: span.traceId,
+   114→    spanId: span.spanId,
+   115→    parentSpanId: span.parentSpanId ?? '',
+   116→    name: span.name,
+   117→    kind: SPAN_KIND_MAP[span.kind] ?? 1,
+   118→    startTimeUnixNano: String(span.startTime * 1_000_000),
+   119→    endTimeUnixNano: String(span.endTime * 1_000_000),
+   120→    attributes: encodeAttributes({ 'service.name': serviceName, ...span.attributes }),
+   121→    events: span.events.map(evt => ({
+   122→      name: evt.name,
+   123→      timeUnixNano: String(evt.timestamp * 1_000_000),
+   124→      attributes: encodeAttributes(evt.attributes),
+   125→    })),
+   126→    status: {
+   127→      code: STATUS_CODE_MAP[span.status.code] ?? 0,
+   128→      message: span.status.message ?? '',
+   129→    },
+   130→  };
+   131→}
+   132→
+   133→function buildTracesPayload(spans: Span[], serviceName: string): Record<string, unknown> {
+   134→  return {
+   135→    resourceSpans: [{
+   136→      resource: {
+   137→        attributes: [{ key: 'service.name', value: { stringValue: serviceName } }],
+   138→      },
+   139→      scopeSpans: [{
+   140→        scope: { name: serviceName, version: '1.0.0' },
+   141→        spans: spans.map(s => encodeSpanToOTLP(s, serviceName)),
+   142→      }],
+   143→    }],
+   144→  };
+   145→}
+   146→
+   147→function buildMetricsPayload(metrics: Metric[], serviceName: string): Record<string, unknown> {
+   148→  const grouped = new Map<string, Metric[]>();
+   149→  for (const m of metrics) {
+   150→    const key = `${m.name}:${m.type}`;
+   151→    const list = grouped.get(key) ?? [];
+   152→    list.push(m);
+   153→    grouped.set(key, list);
+   154→  }
+   155→
+   156→  const otlpMetrics: Array<Record<string, unknown>> = [];
+   157→
+   158→  for (const [, group] of grouped) {
+   159→    const first = group[0];
+   160→    const dataPoints = group.map(m => ({
+   161→      asDouble: m.value,
+   162→      timeUnixNano: String(m.timestamp * 1_000_000),
+   163→      attributes: encodeAttributes(m.attributes),
+   164→    }));
+   165→
+   166→    let metricData: Record<string, unknown>;
+   167→    if (first.type === 'counter') {
+   168→      metricData = { sum: { dataPoints, isMonotonic: true } };
+   169→    } else if (first.type === 'gauge') {
+   170→      metricData = { gauge: { dataPoints } };
+   171→    } else {
+   172→      const values = group.map(m => m.value);
+   173→      const sorted = [...values].sort((a, b) => a - b);
+   174→      const count = sorted.length;
+   175→      const sum = sorted.reduce((a, b) => a + b, 0);
+   176→      const min = sorted[0] ?? 0;
+   177→      const max = sorted[count - 1] ?? 0;
+   178→      const bucketCounts = new Array(DEFAULT_HISTOGRAM_BUCKETS.length + 1).fill(0);
+   179→      for (const v of sorted) {
+   180→        let placed = false;
+   181→        for (let i = 0; i < DEFAULT_HISTOGRAM_BUCKETS.length; i++) {
+   182→          if (v <= DEFAULT_HISTOGRAM_BUCKETS[i]) {
+   183→            bucketCounts[i]++;
+   184→            placed = true;
+   185→            break;
+   186→          }
+   187→        }
+   188→        if (!placed) bucketCounts[DEFAULT_HISTOGRAM_BUCKETS.length]++;
+   189→      }
+   190→      metricData = {
+   191→        histogram: {
+   192→          dataPoints: [{
+   193→            asDouble: sum,
+   194→            timeUnixNano: String(first.timestamp * 1_000_000),
+   195→            attributes: encodeAttributes(first.attributes),
+   196→            count,
+   197→            sum,
+   198→            min,
+   199→            max,
+   200→            explicitBounds: DEFAULT_HISTOGRAM_BUCKETS,
+   201→            bucketCounts,
+   202→          }],
+   203→        },
+   204→      };
+   205→    }
+   206→
+   207→    otlpMetrics.push({ name: first.name, ...metricData });
+   208→  }
+   209→
+   210→  return {
+   211→    resourceMetrics: [{
+   212→      resource: {
+   213→        attributes: [{ key: 'service.name', value: { stringValue: serviceName } }],
+   214→      },
+   215→      scopeMetrics: [{
+   216→        scope: { name: serviceName, version: '1.0.0' },
+   217→        metrics: otlpMetrics,
+   218→      }],
+   219→    }],
+   220→  };
+   221→}
+   222→
+   223→// -----------------------------------------------------------
+   224→// Ring buffer (fixed-capacity, overwrites oldest)
+   225→// -----------------------------------------------------------
+   226→
+   227→class RingBuffer<T> {
+   228→  private buffer: (T | undefined)[];
+   229→  private head = 0;
+   230→  private tail = 0;
+   231→  private size = 0;
+   232→  private readonly capacity: number;
+   233→
+   234→  constructor(capacity: number) {
+   235→    this.capacity = capacity;
+   236→    this.buffer = new Array(capacity);
+   237→  }
+   238→
+   239→  push(item: T): void {
+   240→    this.buffer[this.tail] = item;
+   241→    this.tail = (this.tail + 1) % this.capacity;
+   242→    if (this.size === this.capacity) {
+   243→      this.head = (this.head + 1) % this.capacity;
+   244→    } else {
+   245→      this.size++;
+   246→    }
+   247→  }
+   248→
+   249→  items(): T[] {
+   250→    const result: T[] = [];
+   251→    for (let i = 0; i < this.size; i++) {
+   252→      const idx = (this.head + i) % this.capacity;
+   253→      const item = this.buffer[idx];
+   254→      if (item !== undefined) result.push(item);
+   255→    }
+   256→    return result;
+   257→  }
+   258→
+   259→  clear(): void {
+   260→    this.buffer = new Array(this.capacity);
+   261→    this.head = 0;
+   262→    this.tail = 0;
+   263→    this.size = 0;
+   264→  }
+   265→
+   266→  get length(): number {
+   267→    return this.size;
+   268→  }
+   269→}
+   270→
+   271→// -----------------------------------------------------------
+   272→// Console pretty-printer
+   273→// -----------------------------------------------------------
+   274→
+   275→function formatDuration(ms: number): string {
+   276→  if (ms < 1) return `${(ms * 1000).toFixed(0)}μs`;
+   277→  if (ms < 1000) return `${ms.toFixed(1)}ms`;
+   278→  return `${(ms / 1000).toFixed(2)}s`;
+   279→}
+   280→
+   281→function formatTimestamp(unixMs: number): string {
+   282→  return new Date(unixMs).toISOString();
+   283→}
+   284→
+   285→function consolePrintSpan(span: Span, depth: number): string {
+   286→  const indent = '  '.repeat(depth);
+   287→  const duration = span.endTime - span.startTime;
+   288→  const statusIcon = span.status.code === 'ok'
+   289→    ? chalk.green('✓')
+   290→    : chalk.red('✗');
+   291→  const kindBadge = {
+   292→    internal: chalk.gray('INT'),
+   293→    client: chalk.blue('CLI'),
+   294→    server: chalk.magenta('SRV'),
+   295→  }[span.kind] ?? chalk.gray('???');
+   296→
+   297→  const lines: string[] = [];
+   298→  lines.push(
+   299→    `${indent}${statusIcon} ${chalk.bold(span.name)} ${kindBadge} ${chalk.gray(formatDuration(duration))}`,
+   300→  );
+   301→
+   302→  if (span.status.code === 'error' && span.status.message) {
+   303→    lines.push(`${indent}  ${chalk.red('error:')} ${span.status.message}`);
+   304→  }
+   305→
+   306→  const attrEntries = Object.entries(span.attributes);
+   307→  if (attrEntries.length > 0) {
+   308→    const attrStr = attrEntries
+   309→      .slice(0, 5)
+   310→      .map(([k, v]) => `${chalk.cyan(k)}=${chalk.yellow(String(v))}`)
+   311→      .join(' ');
+   312→    const overflow = attrEntries.length > 5 ? ` ${chalk.gray(`+${attrEntries.length - 5} more`)}` : '';
+   313→    lines.push(`${indent}  ${attrStr}${overflow}`);
+   314→  }
+   315→
+   316→  for (const evt of span.events) {
+   317→    lines.push(
+   318→      `${indent}  ${chalk.gray('@')} ${chalk.white(evt.name)} ${chalk.gray(formatTimestamp(evt.timestamp))}`,
+   319→    );
+   320→  }
+   321→
+   322→  return lines.join('\n');
+   323→}
+   324→
+   325→function consolePrintSpanTree(spans: Span[]): string {
+   326→  if (spans.length === 0) return chalk.gray('No spans recorded.');
+   327→
+   328→  const spanMap = new Map(spans.map(s => [s.spanId, s]));
+   329→  const children = new Map<string, Span[]>();
+   330→  const roots: Span[] = [];
+   331→
+   332→  for (const span of spans) {
+   333→    if (!span.parentSpanId || !spanMap.has(span.parentSpanId)) {
+   334→      roots.push(span);
+   335→    } else {
+   336→      const list = children.get(span.parentSpanId) ?? [];
+   337→      list.push(span);
+   338→      children.set(span.parentSpanId, list);
+   339→    }
+   340→  }
+   341→
+   342→  const lines: string[] = [];
+   343→  lines.push('');
+   344→  lines.push(chalk.bold('━━━ NeuroCLI Trace ━━━'));
+   345→
+   346→  function render(span: Span, depth: number): void {
+   347→    lines.push(consolePrintSpan(span, depth));
+   348→    const kids = children.get(span.spanId) ?? [];
+   349→    kids.sort((a, b) => a.startTime - b.startTime);
+   350→    for (const child of kids) {
+   351→      render(child, depth + 1);
+   352→    }
+   353→  }
+   354→
+   355→  roots.sort((a, b) => a.startTime - b.startTime);
+   356→  for (const root of roots) {
+   357→    render(root, 0);
+   358→  }
+   359→
+   360→  lines.push(chalk.bold('━━━━━━━━━━━━━━━━━━━━'));
+   361→  lines.push('');
+   362→  return lines.join('\n');
+   363→}
+   364→
+   365→// -----------------------------------------------------------
+   366→// HTTP export helper
+   367→// -----------------------------------------------------------
+   368→
+   369→async function exportOTLPJson(
+   370→  url: string,
+   371→  payload: Record<string, unknown>,
+   372→  headers: Record<string, string>,
+   373→): Promise<boolean> {
+   374→  try {
+   375→    const response = await fetch(url, {
+   376→      method: 'POST',
+   377→      headers: {
+   378→        'Content-Type': 'application/json',
+   379→        ...headers,
+   380→      },
+   381→      body: JSON.stringify(payload),
+   382→    });
+   383→    return response.status >= 200 && response.status < 300;
+   384→  } catch {
+   385→    return false;
+   386→  }
+   387→}
+   388→
+   389→// -----------------------------------------------------------
+   390→// ObservabilityManager
+   391→// -----------------------------------------------------------
+   392→
+   393→export class ObservabilityManager {
+   394→  private config: ObservabilityConfig;
+   395→  private pendingSpans: Span[] = [];
+   396→  private pendingMetrics: Metric[] = [];
+   397→  private spanBuffer: RingBuffer<Span>;
+   398→  private sessionTraceId: string;
+   399→  private sessionRootSpanId: string | undefined;
+   400→  private exportTimer: ReturnType<typeof setInterval> | undefined;
+   401→  private activeSpans: Map<string, Span> = new Map();
+   402→  private histogramBuckets: Map<string, { bounds: number[]; counts: number[]; sum: number; count: number; min: number; max: number }> = new Map();
+   403→  private counters: Map<string, number> = new Map();
+   404→  private gauges: Map<string, number> = new Map();
+   405→
+   406→  constructor(config: ObservabilityConfig) {
+   407→    this.config = config;
+   408→    this.spanBuffer = new RingBuffer<Span>(1000);
+   409→    this.sessionTraceId = generateTraceId();
+   410→  }
+   411→
+   412→  // ----------------------------------------------------------
+   413→  // Lifecycle
+   414→  // ----------------------------------------------------------
+   415→
+   416→  start(): void {
+   417→    if (!this.config.enabled) return;
+   418→    if (this.config.exportInterval > 0) {
+   419→      this.exportTimer = setInterval(() => {
+   420→        this.flush().catch(() => { /* silent */ });
+   421→      }, this.config.exportInterval);
+   422→      if (this.exportTimer.unref) {
+   423→        this.exportTimer.unref();
+   424→      }
+   425→    }
+   426→  }
+   427→
+   428→  async stop(): Promise<void> {
+   429→    if (this.exportTimer !== undefined) {
+   430→      clearInterval(this.exportTimer);
+   431→      this.exportTimer = undefined;
+   432→    }
+   433→    await this.flush();
+   434→  }
+   435→
+   436→  // ----------------------------------------------------------
+   437→  // Sampling
+   438→  // ----------------------------------------------------------
+   439→
+   440→  private shouldSample(): boolean {
+   441→    if (this.config.sampleRate >= 1) return true;
+   442→    if (this.config.sampleRate <= 0) return false;
+   443→    return Math.random() < this.config.sampleRate;
+   444→  }
+   445→
+   446→  // ----------------------------------------------------------
+   447→  // Tracing
+   448→  // ----------------------------------------------------------
+   449→
+   450→  startSpan(name: string, parent?: Span, attributes?: Record<string, unknown>): Span {
+   451→    if (!this.config.enabled) {
+   452→      return this.createNoopSpan();
+   453→    }
+   454→
+   455→    const traceId = parent?.traceId ?? this.sessionTraceId;
+   456→    const spanId = generateSpanId();
+   457→    const span: Span = {
+   458→      traceId,
+   459→      spanId,
+   460→      parentSpanId: parent?.spanId ?? this.sessionRootSpanId,
+   461→      name,
+   462→      kind: 'internal',
+   463→      startTime: Date.now(),
+   464→      endTime: 0,
+   465→      attributes: attributes ?? {},
+   466→      events: [],
+   467→      status: { code: 'ok' },
+   468→    };
+   469→
+   470→    this.activeSpans.set(spanId, span);
+   471→    return span;
+   472→  }
+   473→
+   474→  endSpan(span: Span, status?: Span['status']): void {
+   475→    if (!this.config.enabled) return;
+   476→
+   477→    span.endTime = Date.now();
+   478→    if (status) {
+   479→      span.status = status;
+   480→    }
+   481→
+   482→    this.activeSpans.delete(span.spanId);
+   483→
+   484→    if (!this.shouldSample()) return;
+   485→
+   486→    this.pendingSpans.push(span);
+   487→    this.spanBuffer.push(span);
+   488→
+   489→    if (this.config.consoleExporter) {
+   490→      this.printSpanToConsole(span);
+   491→    }
+   492→
+   493→    if (this.pendingSpans.length >= this.config.maxBatchSize) {
+   494→      this.flush().catch(() => { /* silent */ });
+   495→    }
+   496→  }
+   497→
+   498→  addEvent(span: Span, name: string, attributes?: Record<string, unknown>): void {
+   499→    if (!this.config.enabled) return;
+   500→
+   501→    span.events.push({
+   502→      name,
+   503→      timestamp: Date.now(),
+   504→      attributes: attributes ?? {},
+   505→    });
+   506→  }
+   507→
+   508→  // ----------------------------------------------------------
+   509→  // Metrics
+   510→  // ----------------------------------------------------------
+   511→
+   512→  incrementCounter(name: string, value: number = 1, attributes: Record<string, unknown> = {}): void {
+   513→    if (!this.config.enabled) return;
+   514→
+   515→    const key = `${name}:${JSON.stringify(attributes)}`;
+   516→    const current = this.counters.get(key) ?? 0;
+   517→    this.counters.set(key, current + value);
+   518→
+   519→    const metric: Metric = {
+   520→      name,
+   521→      type: 'counter',
+   522→      value: current + value,
+   523→      attributes,
+   524→      timestamp: Date.now(),
+   525→    };
+   526→    this.pendingMetrics.push(metric);
+   527→
+   528→    if (this.pendingMetrics.length >= this.config.maxBatchSize) {
+   529→      this.flush().catch(() => { /* silent */ });
+   530→    }
+   531→  }
+   532→
+   533→  recordGauge(name: string, value: number, attributes: Record<string, unknown> = {}): void {
+   534→    if (!this.config.enabled) return;
+   535→
+   536→    const key = `${name}:${JSON.stringify(attributes)}`;
+   537→    this.gauges.set(key, value);
+   538→
+   539→    const metric: Metric = {
+   540→      name,
+   541→      type: 'gauge',
+   542→      value,
+   543→      attributes,
+   544→      timestamp: Date.now(),
+   545→    };
+   546→    this.pendingMetrics.push(metric);
+   547→
+   548→    if (this.pendingMetrics.length >= this.config.maxBatchSize) {
+   549→      this.flush().catch(() => { /* silent */ });
+   550→    }
+   551→  }
+   552→
+   553→  recordHistogram(name: string, value: number, attributes: Record<string, unknown> = {}): void {
+   554→    if (!this.config.enabled) return;
+   555→
+   556→    const key = `${name}:${JSON.stringify(attributes)}`;
+   557→    let bucket = this.histogramBuckets.get(key);
+   558→    if (!bucket) {
+   559→      const bounds = [...DEFAULT_HISTOGRAM_BUCKETS];
+   560→      bucket = { bounds, counts: new Array(bounds.length + 1).fill(0), sum: 0, count: 0, min: Infinity, max: -Infinity };
+   561→      this.histogramBuckets.set(key, bucket);
+   562→    }
+   563→
+   564→    bucket.sum += value;
+   565→    bucket.count++;
+   566→    if (value < bucket.min) bucket.min = value;
+   567→    if (value > bucket.max) bucket.max = value;
+   568→
+   569→    let placed = false;
+   570→    for (let i = 0; i < bucket.bounds.length; i++) {
+   571→      if (value <= bucket.bounds[i]) {
+   572→        bucket.counts[i]++;
+   573→        placed = true;
+   574→        break;
+   575→      }
+   576→    }
+   577→    if (!placed) {
+   578→      bucket.counts[bucket.bounds.length]++;
+   579→    }
+   580→
+   581→    const metric: Metric = {
+   582→      name,
+   583→      type: 'histogram',
+   584→      value,
+   585→      attributes,
+   586→      timestamp: Date.now(),
+   587→    };
+   588→    this.pendingMetrics.push(metric);
+   589→
+   590→    if (this.pendingMetrics.length >= this.config.maxBatchSize) {
+   591→      this.flush().catch(() => { /* silent */ });
+   592→    }
+   593→  }
+   594→
+   595→  // ----------------------------------------------------------
+   596→  // Convenience tracing methods
+   597→  // ----------------------------------------------------------
+   598→
+   599→  traceLLMRequest(
+   600→    model: string,
+   601→    promptTokens: number,
+   602→    completionTokens: number,
+   603→    duration: number,
+   604→    cost: number,
+   605→  ): Span {
+   606→    const span = this.startSpan('llm.request', undefined, {
+   607→      'llm.model': model,
+   608→      'llm.prompt_tokens': promptTokens,
+   609→      'llm.completion_tokens': completionTokens,
+   610→      'llm.total_tokens': promptTokens + completionTokens,
+   611→      'llm.cost_usd': cost,
+   612→      'llm.duration_ms': duration,
+   613→    });
+   614→    span.kind = 'client';
+   615→    span.endTime = span.startTime + duration;
+   616→    span.status = { code: 'ok' };
+   617→
+   618→    this.activeSpans.delete(span.spanId);
+   619→
+   620→    if (this.shouldSample()) {
+   621→      this.pendingSpans.push(span);
+   622→      this.spanBuffer.push(span);
+   623→    }
+   624→
+   625→    this.incrementCounter('llm.requests.total', 1, { model });
+   626→    this.incrementCounter('llm.tokens.prompt', promptTokens, { model });
+   627→    this.incrementCounter('llm.tokens.completion', completionTokens, { model });
+   628→    this.recordGauge('llm.cost', cost, { model });
+   629→    this.recordHistogram('llm.latency', duration, { model });
+   630→
+   631→    if (this.config.consoleExporter) {
+   632→      this.printSpanToConsole(span);
+   633→    }
+   634→
+   635→    return span;
+   636→  }
+   637→
+   638→  traceToolCall(tool: string, args: unknown, duration: number, success: boolean): Span {
+   639→    const span = this.startSpan('tool.call', undefined, {
+   640→      'tool.name': tool,
+   641→      'tool.duration_ms': duration,
+   642→      'tool.success': success,
+   643→      'tool.args_preview': typeof args === 'string' ? args.slice(0, 200) : JSON.stringify(args).slice(0, 200),
+   644→    });
+   645→    span.kind = 'client';
+   646→    span.endTime = span.startTime + duration;
+   647→    span.status = success ? { code: 'ok' } : { code: 'error', message: `Tool '${tool}' failed` };
+   648→
+   649→    this.activeSpans.delete(span.spanId);
+   650→
+   651→    if (this.shouldSample()) {
+   652→      this.pendingSpans.push(span);
+   653→      this.spanBuffer.push(span);
+   654→    }
+   655→
+   656→    this.incrementCounter('tool.calls.total', 1, { tool, success: String(success) });
+   657→    this.incrementCounter(success ? 'tool.calls.success' : 'tool.calls.error', 1, { tool });
+   658→    this.recordHistogram('tool.duration', duration, { tool });
+   659→
+   660→    if (this.config.consoleExporter) {
+   661→      this.printSpanToConsole(span);
+   662→    }
+   663→
+   664→    return span;
+   665→  }
+   666→
+   667→  traceAgentAction(agent: string, action: string, duration: number): Span {
+   668→    const span = this.startSpan('agent.action', undefined, {
+   669→      'agent.name': agent,
+   670→      'agent.action': action,
+   671→      'agent.duration_ms': duration,
+   672→    });
+   673→    span.kind = 'internal';
+   674→    span.endTime = span.startTime + duration;
+   675→    span.status = { code: 'ok' };
+   676→
+   677→    this.activeSpans.delete(span.spanId);
+   678→
+   679→    if (this.shouldSample()) {
+   680→      this.pendingSpans.push(span);
+   681→      this.spanBuffer.push(span);
+   682→    }
+   683→
+   684→    this.incrementCounter('agent.actions.total', 1, { agent, action });
+   685→    this.recordHistogram('agent.action.duration', duration, { agent, action });
+   686→
+   687→    if (this.config.consoleExporter) {
+   688→      this.printSpanToConsole(span);
+   689→    }
+   690→
+   691→    return span;
+   692→  }
+   693→
+   694→  // ----------------------------------------------------------
+   695→  // Export
+   696→  // ----------------------------------------------------------
+   697→
+   698→  async flush(): Promise<void> {
+   699→    if (!this.config.enabled) return;
+   700→
+   701→    const spansToExport = this.pendingSpans.splice(0);
+   702→    const metricsToExport = this.pendingMetrics.splice(0);
+   703→
+   704→    if (spansToExport.length === 0 && metricsToExport.length === 0) return;
+   705→
+   706→    const tracesUrl = this.config.endpoint.replace(/\/$/, '');
+   707→    const metricsUrl = tracesUrl.replace(/\/v1\/traces$/, '/v1/metrics');
+   708→
+   709→    const exportPromises: Promise<boolean>[] = [];
+   710→
+   711→    if (spansToExport.length > 0) {
+   712→      const tracesPayload = buildTracesPayload(spansToExport, this.config.serviceName);
+   713→      exportPromises.push(exportOTLPJson(tracesUrl, tracesPayload, this.config.headers));
+   714→    }
+   715→
+   716→    if (metricsToExport.length > 0) {
+   717→      const metricsPayload = buildMetricsPayload(metricsToExport, this.config.serviceName);
+   718→      exportPromises.push(exportOTLPJson(metricsUrl, metricsPayload, this.config.headers));
+   719→    }
+   720→
+   721→    await Promise.allSettled(exportPromises);
+   722→  }
+   723→
+   724→  getPendingCount(): { spans: number; metrics: number } {
+   725→    return {
+   726→      spans: this.pendingSpans.length,
+   727→      metrics: this.pendingMetrics.length,
+   728→    };
+   729→  }
+   730→
+   731→  // ----------------------------------------------------------
+   732→  // Session tracing
+   733→  // ----------------------------------------------------------
+   734→
+   735→  startSession(sessionName?: string): Span {
+   736→    this.sessionTraceId = generateTraceId();
+   737→    const rootSpan = this.startSpan(sessionName ?? 'session', undefined, {
+   738→      'session.id': this.sessionTraceId,
+   739→    });
+   740→    rootSpan.kind = 'server';
+   741→    this.sessionRootSpanId = rootSpan.spanId;
+   742→    return rootSpan;
+   743→  }
+   744→
+   745→  endSession(rootSpan: Span): void {
+   746→    this.endSpan(rootSpan, { code: 'ok' });
+   747→    this.sessionRootSpanId = undefined;
+   748→  }
+   749→
+   750→  getSessionTrace(): Span[] {
+   751→    return this.spanBuffer.items().filter(s => s.traceId === this.sessionTraceId);
+   752→  }
+   753→
+   754→  printTrace(): string {
+   755→    const spans = this.getSessionTrace();
+   756→    return consolePrintSpanTree(spans);
+   757→  }
+   758→
+   759→  // ----------------------------------------------------------
+   760→  // Configuration
+   761→  // ----------------------------------------------------------
+   762→
+   763→  getConfig(): ObservabilityConfig {
+   764→    return { ...this.config };
+   765→  }
+   766→
+   767→  updateConfig(partial: Partial<ObservabilityConfig>): void {
+   768→    Object.assign(this.config, partial);
+   769→  }
+   770→
+   771→  getSessionTraceId(): string {
+   772→    return this.sessionTraceId;
+   773→  }
+   774→
+   775→  setSessionTraceId(traceId: string): void {
+   776→    this.sessionTraceId = traceId;
+   777→  }
+   778→
+   779→  getActiveSpanCount(): number {
+   780→    return this.activeSpans.size;
+   781→  }
+   782→
+   783→  // ----------------------------------------------------------
+   784→  // Metric summaries
+   785→  // ----------------------------------------------------------
+   786→
+   787→  getCounterValue(name: string, attributes: Record<string, unknown> = {}): number {
+   788→    const key = `${name}:${JSON.stringify(attributes)}`;
+   789→    return this.counters.get(key) ?? 0;
+   790→  }
+   791→
+   792→  getGaugeValue(name: string, attributes: Record<string, unknown> = {}): number | undefined {
+   793→    const key = `${name}:${JSON.stringify(attributes)}`;
+   794→    return this.gauges.get(key);
+   795→  }
+   796→
+   797→  getHistogramSummary(name: string, attributes: Record<string, unknown> = {}): {
+   798→    count: number; sum: number; min: number; max: number; avg: number;
+   799→  } | undefined {
+   800→    const key = `${name}:${JSON.stringify(attributes)}`;
+   801→    const bucket = this.histogramBuckets.get(key);
+   802→    if (!bucket) return undefined;
+   803→    return {
+   804→      count: bucket.count,
+   805→      sum: bucket.sum,
+   806→      min: bucket.min === Infinity ? 0 : bucket.min,
+   807→      max: bucket.max === -Infinity ? 0 : bucket.max,
+   808→      avg: bucket.count > 0 ? bucket.sum / bucket.count : 0,
+   809→    };
+   810→  }
+   811→
+   812→  // ----------------------------------------------------------
+   813→  // Private helpers
+   814→  // ----------------------------------------------------------
+   815→
+   816→  private createNoopSpan(): Span {
+   817→    return {
+   818→      traceId: '0'.repeat(32),
+   819→      spanId: '0'.repeat(16),
+   820→      name: 'noop',
+   821→      kind: 'internal',
+   822→      startTime: 0,
+   823→      endTime: 0,
+   824→      attributes: {},
+   825→      events: [],
+   826→      status: { code: 'ok' },
+   827→    };
+   828→  }
+   829→
+   830→  private printSpanToConsole(span: Span): void {
+   831→    const duration = span.endTime > 0 ? span.endTime - span.startTime : 0;
+   832→    const statusIcon = span.status.code === 'ok' ? chalk.green('✓') : chalk.red('✗');
+   833→    const kindLabel = {
+   834→      internal: chalk.gray('INT'),
+   835→      client: chalk.blue('CLI'),
+   836→      server: chalk.magenta('SRV'),
+   837→    }[span.kind] ?? chalk.gray('???');
+   838→
+   839→    const parts: string[] = [
+   840→      statusIcon,
+   841→      chalk.bold(span.name),
+   842→      kindLabel,
+   843→      chalk.gray(formatDuration(duration)),
+   844→    ];
+   845→
+   846→    if (span.status.code === 'error' && span.status.message) {
+   847→      parts.push(chalk.red(`(${span.status.message})`));
+   848→    }
+   849→
+   850→    const attrEntries = Object.entries(span.attributes);
+   851→    if (attrEntries.length > 0) {
+   852→      const attrStr = attrEntries
+   853→        .slice(0, 3)
+   854→        .map(([k, v]) => `${chalk.cyan(k)}=${chalk.yellow(String(v))}`)
+   855→        .join(' ');
+   856→      const overflow = attrEntries.length > 3 ? chalk.gray(` +${attrEntries.length - 3}`) : '';
+   857→      parts.push(attrStr + overflow);
+   858→    }
+   859→
+   860→    try {
+   861→      console.log(parts.join(' '));
+   862→    } catch {
+   863→      // Silently fail if console is not available (e.g., during tests)
+   864→    }
+   865→  }
+   866→}
+   867→
+   868→// -----------------------------------------------------------
+   869→// Default config factory
+   870→// -----------------------------------------------------------
+   871→
+   872→export function defaultObservabilityConfig(): ObservabilityConfig {
+   873→  return {
+   874→    enabled: false,
+   875→    serviceName: 'neuro-cli',
+   876→    endpoint: 'http://localhost:4318/v1/traces',
+   877→    headers: {},
+   878→    exportInterval: 5000,
+   879→    maxBatchSize: 512,
+   880→    consoleExporter: true,
+   881→    sampleRate: 1.0,
+   882→  };
+   883→}
+   884→
+   885→// -----------------------------------------------------------
+   886→// Singleton accessor (optional convenience)
+   887→// -----------------------------------------------------------
+   888→
+   889→let globalInstance: ObservabilityManager | null = null;
+   890→
+   891→export function initObservability(config?: Partial<ObservabilityConfig>): ObservabilityManager {
+   892→  const full = { ...defaultObservabilityConfig(), ...config };
+   893→  globalInstance = new ObservabilityManager(full);
+   894→  globalInstance.start();
+   895→  return globalInstance;
+   896→}
+   897→
+   898→export function getObservability(): ObservabilityManager | null {
+   899→  return globalInstance;
+   900→}
+   901→
+   902→export function resetObservability(): void {
+   903→  if (globalInstance) {
+   904→    globalInstance.stop().catch(() => { /* silent */ });
+   905→    globalInstance = null;
+   906→  }
+   907→}
+   908→

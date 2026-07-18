@@ -1,0 +1,1522 @@
+     1→// ============================================================
+     2→// NeuroCLI - OS-Level Sandbox with Network Isolation (GAP-29)
+     3→// Docker-based and native OS sandboxing for secure execution
+     4→// Network policy engine, command filtering, audit logging
+     5→// ============================================================
+     6→
+     7→import { execSync, spawn, ChildProcess } from 'child_process';
+     8→import { resolve, normalize, relative } from 'path';
+     9→import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+    10→import { platform } from 'os';
+    11→import chalk from 'chalk';
+    12→
+    13→// ---- Type Definitions ----
+    14→
+    15→export interface OSSandboxConfig {
+    16→  type: 'docker' | 'os-native' | 'hybrid';
+    17→  docker?: {
+    18→    image: string;
+    19→    mountProject: boolean;
+    20→    mountMode: 'ro' | 'rw';
+    21→    networkMode: 'none' | 'limited' | 'bridge';
+    22→    allowedDomains: string[];
+    23→    memory: string;
+    24→    cpus: number;
+    25→    timeout: number;
+    26→  };
+    27→  network?: {
+    28→    mode: 'open' | 'filtered' | 'blocked';
+    29→    allowedDomains: string[];
+    30→    allowedPorts: number[];
+    31→    blockPrivateNetworks: boolean;
+    32→  };
+    33→  filesystem?: {
+    34→    readOnlyPaths: string[];
+    35→    readWritePaths: string[];
+    36→    deniedPaths: string[];
+    37→    allowHiddenFiles: boolean;
+    38→  };
+    39→  commands?: {
+    40→    blockedCommands: string[];
+    41→    allowedPrefixes: string[];
+    42→    maxArgLength: number;
+    43→    allowPipes: boolean;
+    44→    allowBackground: boolean;
+    45→  };
+    46→}
+    47→
+    48→export interface NetworkAccessEntry {
+    49→  timestamp: number;
+    50→  host: string;
+    51→  port: number;
+    52→  protocol: string;
+    53→  action: 'allowed' | 'blocked';
+    54→  reason?: string;
+    55→}
+    56→
+    57→export interface FileAccessEntry {
+    58→  timestamp: number;
+    59→  path: string;
+    60→  mode: 'read' | 'write' | 'delete';
+    61→  action: 'allowed' | 'blocked';
+    62→  reason?: string;
+    63→}
+    64→
+    65→export interface AuditLogEntry {
+    66→  timestamp: number;
+    67→  category: 'command' | 'network' | 'filesystem' | 'container' | 'config';
+    68→  action: string;
+    69→  detail: string;
+    70→  allowed: boolean;
+    71→  reason?: string;
+    72→}
+    73→
+    74→export interface ExecOptions {
+    75→  cwd?: string;
+    76→  env?: Record<string, string>;
+    77→  timeout?: number;
+    78→  stdin?: string;
+    79→}
+    80→
+    81→export interface SandboxResult {
+    82→  stdout: string;
+    83→  stderr: string;
+    84→  exitCode: number;
+    85→  networkAccessLog: NetworkAccessEntry[];
+    86→  fileAccessLog: FileAccessEntry[];
+    87→  duration: number;
+    88→  timedOut: boolean;
+    89→}
+    90→
+    91→// ---- Default Configuration ----
+    92→
+    93→export const DEFAULT_OS_SANDBOX_CONFIG: OSSandboxConfig = {
+    94→  type: 'docker',
+    95→  docker: {
+    96→    image: 'neurocli-sandbox:latest',
+    97→    mountProject: true,
+    98→    mountMode: 'rw',
+    99→    networkMode: 'none',
+   100→    allowedDomains: [],
+   101→    memory: '512m',
+   102→    cpus: 1,
+   103→    timeout: 120000,
+   104→  },
+   105→  network: {
+   106→    mode: 'filtered',
+   107→    allowedDomains: [
+   108→      'api.openai.com',
+   109→      'api.anthropic.com',
+   110→      'registry.npmjs.org',
+   111→      'pypi.org',
+   112→      'github.com',
+   113→    ],
+   114→    allowedPorts: [80, 443],
+   115→    blockPrivateNetworks: true,
+   116→  },
+   117→  filesystem: {
+   118→    readOnlyPaths: ['/usr', '/lib', '/etc', '/bin', '/sbin'],
+   119→    readWritePaths: [],
+   120→    deniedPaths: [
+   121→      '/etc/shadow',
+   122→      '/etc/passwd',
+   123→      '/etc/ssh',
+   124→      '/root/.ssh',
+   125→      '/home/*/.ssh',
+   126→    ],
+   127→    allowHiddenFiles: false,
+   128→  },
+   129→  commands: {
+   130→    blockedCommands: [
+   131→      'rm -rf /',
+   132→      'sudo',
+   133→      'su',
+   134→      'chmod 777 /',
+   135→      'chmod 777 -R /',
+   136→      'mkfs',
+   137→      'dd if=',
+   138→      ':(){ :|:& };:',
+   139→      'curl | sh',
+   140→      'wget | sh',
+   141→      'passwd',
+   142→      'shutdown',
+   143→      'reboot',
+   144→      'halt',
+   145→      'init',
+   146→      'telinit',
+   147→      'systemctl',
+   148→      'service',
+   149→    ],
+   150→    allowedPrefixes: [],
+   151→    maxArgLength: 8192,
+   152→    allowPipes: true,
+   153→    allowBackground: false,
+   154→  },
+   155→};
+   156→
+   157→// ---- Private Network Ranges for Filtering ----
+   158→
+   159→const PRIVATE_NETWORK_RANGES: Array<{ start: number; end: number }> = [
+   160→  { start: ipToNumber('10.0.0.0'), end: ipToNumber('10.255.255.255') },
+   161→  { start: ipToNumber('172.16.0.0'), end: ipToNumber('172.31.255.255') },
+   162→  { start: ipToNumber('192.168.0.0'), end: ipToNumber('192.168.255.255') },
+   163→  { start: ipToNumber('127.0.0.0'), end: ipToNumber('127.255.255.255') },
+   164→  { start: ipToNumber('169.254.0.0'), end: ipToNumber('169.254.255.255') },
+   165→  { start: ipToNumber('0.0.0.0'), end: ipToNumber('0.255.255.255') },
+   166→];
+   167→
+   168→function ipToNumber(ip: string): number {
+   169→  const parts = ip.split('.').map(Number);
+   170→  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+   171→}
+   172→
+   173→function isPrivateIP(ip: string): boolean {
+   174→  const num = ipToNumber(ip);
+   175→  return PRIVATE_NETWORK_RANGES.some(
+   176→    range => num >= range.start && num <= range.end
+   177→  );
+   178→}
+   179→
+   180→// ---- Docker Sandbox Image Dockerfile ----
+   181→
+   182→const SANDBOX_DOCKERFILE = `FROM alpine:3.19
+   183→RUN apk add --no-cache bash coreutils curl wget git nodejs npm python3 py3-pip
+   184→RUN adduser -D -s /bin/bash sandbox
+   185→USER sandbox
+   186→WORKDIR /workspace
+   187→`;
+   188→
+   189→// ---- Network Policy Engine ----
+   190→
+   191→class NetworkPolicyEngine {
+   192→  private allowedDomains: Set<string>;
+   193→  private allowedPorts: Set<number>;
+   194→  private blockPrivateNetworks: boolean;
+   195→  private mode: 'open' | 'filtered' | 'blocked';
+   196→  private accessLog: NetworkAccessEntry[] = [];
+   197→  private rateLimiter: Map<string, number[]> = new Map();
+   198→  private maxRequestsPerMinute: number = 60;
+   199→
+   200→  constructor(config: OSSandboxConfig['network']) {
+   201→    this.mode = config?.mode ?? 'filtered';
+   202→    this.allowedDomains = new Set(config?.allowedDomains ?? []);
+   203→    this.allowedPorts = new Set(config?.allowedPorts ?? [80, 443]);
+   204→    this.blockPrivateNetworks = config?.blockPrivateNetworks ?? true;
+   205→  }
+   206→
+   207→  validate(host: string, port: number, protocol: string = 'tcp'): { allowed: boolean; reason?: string } {
+   208→    const entry: NetworkAccessEntry = {
+   209→      timestamp: Date.now(),
+   210→      host,
+   211→      port,
+   212→      protocol,
+   213→      action: 'allowed',
+   214→    };
+   215→
+   216→    if (this.mode === 'blocked') {
+   217→      entry.action = 'blocked';
+   218→      entry.reason = 'All network access is blocked';
+   219→      this.accessLog.push(entry);
+   220→      return { allowed: false, reason: entry.reason };
+   221→    }
+   222→
+   223→    if (this.mode === 'open') {
+   224→      this.accessLog.push(entry);
+   225→      return { allowed: true };
+   226→    }
+   227→
+   228→    // mode === 'filtered'
+   229→    // Check private network blocking
+   230→    if (this.blockPrivateNetworks) {
+   231→      const resolvedIP = this.resolveHost(host);
+   232→      if (resolvedIP && isPrivateIP(resolvedIP)) {
+   233→        entry.action = 'blocked';
+   234→        entry.reason = `Access to private network address ${resolvedIP} is blocked`;
+   235→        this.accessLog.push(entry);
+   236→        return { allowed: false, reason: entry.reason };
+   237→      }
+   238→    }
+   239→
+   240→    // Check allowed domains
+   241→    if (this.allowedDomains.size > 0) {
+   242→      const isDomainAllowed = this.isDomainMatch(host);
+   243→      if (!isDomainAllowed) {
+   244→        entry.action = 'blocked';
+   245→        entry.reason = `Domain ${host} is not in the allowed list`;
+   246→        this.accessLog.push(entry);
+   247→        return { allowed: false, reason: entry.reason };
+   248→      }
+   249→    }
+   250→
+   251→    // Check allowed ports
+   252→    if (this.allowedPorts.size > 0 && !this.allowedPorts.has(port)) {
+   253→      entry.action = 'blocked';
+   254→      entry.reason = `Port ${port} is not in the allowed list`;
+   255→      this.accessLog.push(entry);
+   256→      return { allowed: false, reason: entry.reason };
+   257→    }
+   258→
+   259→    // Rate limiting
+   260→    if (!this.checkRateLimit(host)) {
+   261→      entry.action = 'blocked';
+   262→      entry.reason = `Rate limit exceeded for ${host}`;
+   263→      this.accessLog.push(entry);
+   264→      return { allowed: false, reason: entry.reason };
+   265→    }
+   266→
+   267→    this.accessLog.push(entry);
+   268→    return { allowed: true };
+   269→  }
+   270→
+   271→  getAccessLog(): NetworkAccessEntry[] {
+   272→    return [...this.accessLog];
+   273→  }
+   274→
+   275→  clearLog(): void {
+   276→    this.accessLog = [];
+   277→  }
+   278→
+   279→  private isDomainMatch(host: string): boolean {
+   280→    if (this.allowedDomains.has(host)) return true;
+   281→    for (const allowed of this.allowedDomains) {
+   282→      if (host.endsWith('.' + allowed)) return true;
+   283→      if (allowed.startsWith('*.') && host.endsWith(allowed.slice(1))) return true;
+   284→    }
+   285→    return false;
+   286→  }
+   287→
+   288→  private resolveHost(host: string): string | null {
+   289→    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) {
+   290→      return host;
+   291→    }
+   292→    try {
+   293→      const result = execSync(`nslookup ${host} 2>/dev/null`, {
+   294→        encoding: 'utf-8',
+   295→        timeout: 5000,
+   296→      });
+   297→      const match = result.match(/Address:\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g);
+   298→      if (match && match.length > 1) {
+   299→        const ip = match[match.length - 1].replace('Address:\s*', '').trim();
+   300→        return ip || null;
+   301→      }
+   302→    } catch {
+   303→      // DNS resolution failed, can't determine if private
+   304→    }
+   305→    return null;
+   306→  }
+   307→
+   308→  private checkRateLimit(host: string): boolean {
+   309→    const now = Date.now();
+   310→    const windowStart = now - 60000;
+   311→    const timestamps = this.rateLimiter.get(host) ?? [];
+   312→    const recent = timestamps.filter(ts => ts > windowStart);
+   313→    recent.push(now);
+   314→    this.rateLimiter.set(host, recent);
+   315→    return recent.length <= this.maxRequestsPerMinute;
+   316→  }
+   317→}
+   318→
+   319→// ---- Command Filter ----
+   320→
+   321→class CommandFilter {
+   322→  private blockedCommands: string[];
+   323→  private allowedPrefixes: string[];
+   324→  private maxArgLength: number;
+   325→  private allowPipes: boolean;
+   326→  private allowBackground: boolean;
+   327→
+   328→  private static readonly DANGEROUS_PATTERNS: RegExp[] = [
+   329→    /rm\s+-rf\s+\//,
+   330→    /mkfs/,
+   331→    /dd\s+if=/,
+   332→    /:\(\)\{.*;\}/,
+   333→    /wget.*\|\s*sh/,
+   334→    /curl.*\|\s*sh/,
+   335→    /chmod\s+-R\s+777/,
+   336→    /chmod\s+777\s+\//,
+   337→    />\s*\/dev\/sda/,
+   338→    /mv\s+.*\s+\/dev\/null/,
+   339→  ];
+   340→
+   341→  constructor(config: OSSandboxConfig['commands']) {
+   342→    this.blockedCommands = config?.blockedCommands ?? DEFAULT_OS_SANDBOX_CONFIG.commands!.blockedCommands;
+   343→    this.allowedPrefixes = config?.allowedPrefixes ?? [];
+   344→    this.maxArgLength = config?.maxArgLength ?? 8192;
+   345→    this.allowPipes = config?.allowPipes ?? true;
+   346→    this.allowBackground = config?.allowBackground ?? false;
+   347→  }
+   348→
+   349→  validate(command: string): { allowed: boolean; reason?: string } {
+   350→    const trimmed = command.trim();
+   351→
+   352→    // Check argument length
+   353→    if (trimmed.length > this.maxArgLength) {
+   354→      return { allowed: false, reason: `Command exceeds maximum length of ${this.maxArgLength} characters` };
+   355→    }
+   356→
+   357→    // Check blocked commands list
+   358→    for (const blocked of this.blockedCommands) {
+   359→      if (trimmed.includes(blocked) || trimmed.startsWith(blocked.split(' ')[0])) {
+   360→        return { allowed: false, reason: `Blocked command pattern: "${blocked}"` };
+   361→      }
+   362→    }
+   363→
+   364→    // Check dangerous patterns
+   365→    for (const pattern of CommandFilter.DANGEROUS_PATTERNS) {
+   366→      if (pattern.test(trimmed)) {
+   367→        return { allowed: false, reason: 'Command matches a dangerous pattern' };
+   368→      }
+   369→    }
+   370→
+   371→    // Check for shell injection attempts
+   372→    const injectionPatterns = [
+   373→      /\$\(.*\)/,    // Command substitution
+   374→      /`.*`/,        // Backtick command substitution
+   375→      /&&\s*rm/,     // Chained destructive commands
+   376→      /\|\s*sh\b/,   // Pipe to shell
+   377→    ];
+   378→    for (const pattern of injectionPatterns) {
+   379→      if (pattern.test(trimmed)) {
+   380→        return { allowed: false, reason: 'Potential shell injection detected' };
+   381→      }
+   382→    }
+   383→
+   384→    // Check pipe restrictions
+   385→    if (!this.allowPipes && trimmed.includes('|')) {
+   386→      return { allowed: false, reason: 'Pipes are not allowed in sandbox mode' };
+   387→    }
+   388→
+   389→    // Check background execution
+   390→    if (!this.allowBackground && trimmed.includes('&')) {
+   391→      const ampersands = trimmed.match(/[^&]&[^&]|&$/g);
+   392→      if (ampersands) {
+   393→        return { allowed: false, reason: 'Background execution is not allowed in sandbox mode' };
+   394→      }
+   395→    }
+   396→
+   397→    // Check allowed prefixes (if set)
+   398→    if (this.allowedPrefixes.length > 0) {
+   399→      const cmdBase = trimmed.split(/\s+/)[0];
+   400→      const isAllowed = this.allowedPrefixes.some(
+   401→        prefix => cmdBase === prefix || trimmed.startsWith(prefix)
+   402→      );
+   403→      if (!isAllowed) {
+   404→        return { allowed: false, reason: `Command "${cmdBase}" is not in the allowed prefixes list` };
+   405→      }
+   406→    }
+   407→
+   408→    return { allowed: true };
+   409→  }
+   410→
+   411→  sanitizeEnv(env: Record<string, string>): Record<string, string> {
+   412→    const sensitiveKeys = [
+   413→      'AWS_SECRET_ACCESS_KEY',
+   414→      'AWS_ACCESS_KEY_ID',
+   415→      'API_KEY',
+   416→      'SECRET',
+   417→      'TOKEN',
+   418→      'PASSWORD',
+   419→      'PRIVATE_KEY',
+   420→      'DATABASE_URL',
+   421→      'MONGODB_URI',
+   422→      'REDIS_URL',
+   423→    ];
+   424→
+   425→    const sanitized: Record<string, string> = {};
+   426→    for (const [key, value] of Object.entries(env)) {
+   427→      const isSensitive = sensitiveKeys.some(s =>
+   428→        key.toUpperCase().includes(s)
+   429→      );
+   430→      if (!isSensitive) {
+   431→        sanitized[key] = value;
+   432→      }
+   433→    }
+   434→    return sanitized;
+   435→  }
+   436→}
+   437→
+   438→// ---- Filesystem Policy ----
+   439→
+   440→class FilesystemPolicy {
+   441→  private readOnlyPaths: string[];
+   442→  private readWritePaths: string[];
+   443→  private deniedPaths: string[];
+   444→  private allowHiddenFiles: boolean;
+   445→  private accessLog: FileAccessEntry[] = [];
+   446→
+   447→  constructor(config: OSSandboxConfig['filesystem']) {
+   448→    this.readOnlyPaths = config?.readOnlyPaths ?? [];
+   449→    this.readWritePaths = config?.readWritePaths ?? [];
+   450→    this.deniedPaths = config?.deniedPaths ?? DEFAULT_OS_SANDBOX_CONFIG.filesystem!.deniedPaths;
+   451→    this.allowHiddenFiles = config?.allowHiddenFiles ?? false;
+   452→  }
+   453→
+   454→  validate(path: string, mode: 'read' | 'write' | 'delete'): { allowed: boolean; reason?: string } {
+   455→    const absPath = normalize(resolve(path));
+   456→    const entry: FileAccessEntry = {
+   457→      timestamp: Date.now(),
+   458→      path: absPath,
+   459→      mode,
+   460→      action: 'allowed',
+   461→    };
+   462→
+   463→    // Check denied paths
+   464→    for (const denied of this.deniedPaths) {
+   465→      const deniedPattern = denied.replace(/\*/g, '.*');
+   466→      try {
+   467→        const regex = new RegExp('^' + deniedPattern + '$');
+   468→        if (regex.test(absPath)) {
+   469→          entry.action = 'blocked';
+   470→          entry.reason = `Path matches denied pattern: ${denied}`;
+   471→          this.accessLog.push(entry);
+   472→          return { allowed: false, reason: entry.reason };
+   473→        }
+   474→      } catch {
+   475→        // Invalid pattern, skip
+   476→      }
+   477→    }
+   478→
+   479→    // Check hidden files
+   480→    if (!this.allowHiddenFiles) {
+   481→      const parts = absPath.split('/');
+   482→      if (parts.some(part => part.startsWith('.') && part !== '.' && part !== '..')) {
+   483→        entry.action = 'blocked';
+   484→        entry.reason = 'Access to hidden files is not allowed';
+   485→        this.accessLog.push(entry);
+   486→        return { allowed: false, reason: entry.reason };
+   487→      }
+   488→    }
+   489→
+   490→    // For write and delete, check read-only paths
+   491→    if (mode === 'write' || mode === 'delete') {
+   492→      for (const roPath of this.readOnlyPaths) {
+   493→        if (absPath.startsWith(roPath)) {
+   494→          // Check if explicitly in read-write paths
+   495→          const isExplicitlyRW = this.readWritePaths.some(rwPath =>
+   496→            absPath.startsWith(rwPath)
+   497→          );
+   498→          if (!isExplicitlyRW) {
+   499→            entry.action = 'blocked';
+   500→            entry.reason = `Path is read-only: ${roPath}`;
+   501→            this.accessLog.push(entry);
+   502→            return { allowed: false, reason: entry.reason };
+   503→          }
+   504→        }
+   505→      }
+   506→    }
+   507→
+   508→    this.accessLog.push(entry);
+   509→    return { allowed: true };
+   510→  }
+   511→
+   512→  getAccessLog(): FileAccessEntry[] {
+   513→    return [...this.accessLog];
+   514→  }
+   515→
+   516→  clearLog(): void {
+   517→    this.accessLog = [];
+   518→  }
+   519→}
+   520→
+   521→// ---- Main OSSandboxManager Class ----
+   522→
+   523→export class OSSandboxManager {
+   524→  private config: OSSandboxConfig;
+   525→  private networkPolicy: NetworkPolicyEngine;
+   526→  private commandFilter: CommandFilter;
+   527→  private filesystemPolicy: FilesystemPolicy;
+   528→  private auditLog: AuditLogEntry[] = [];
+   529→  private dockerAvailable: boolean | null = null;
+   530→  private sandboxImageBuilt: boolean = false;
+   531→  private activeContainers: Map<string, { id: string; startedAt: number }> = new Map();
+   532→  private projectDir: string;
+   533→
+   534→  constructor(config: Partial<OSSandboxConfig> = {}) {
+   535→    this.config = this.mergeConfig(config);
+   536→    this.networkPolicy = new NetworkPolicyEngine(this.config.network);
+   537→    this.commandFilter = new CommandFilter(this.config.commands);
+   538→    this.filesystemPolicy = new FilesystemPolicy(this.config.filesystem);
+   539→    this.projectDir = process.cwd();
+   540→  }
+   541→
+   542→  // ---- Docker Availability ----
+   543→
+   544→  async isDockerAvailable(): Promise<boolean> {
+   545→    if (this.dockerAvailable !== null) return this.dockerAvailable;
+   546→    try {
+   547→      const result = execSync('docker info --format "{{.ServerVersion}}" 2>/dev/null', {
+   548→        encoding: 'utf-8',
+   549→        timeout: 5000,
+   550→      });
+   551→      this.dockerAvailable = result.trim().length > 0;
+   552→    } catch {
+   553→      this.dockerAvailable = false;
+   554→    }
+   555→    this.addAuditLog('container', 'docker_availability_check',
+   556→      `Docker is ${this.dockerAvailable ? 'available' : 'not available'}`, true);
+   557→    return this.dockerAvailable;
+   558→  }
+   559→
+   560→  // ---- Native Sandbox Availability ----
+   561→
+   562→  isNativeSandboxAvailable(): boolean {
+   563→    const currentPlatform = platform();
+   564→    if (currentPlatform === 'linux') {
+   565→      try {
+   566→        execSync('unshare --help 2>/dev/null', { encoding: 'utf-8', timeout: 3000 });
+   567→        return true;
+   568→      } catch {
+   569→        return false;
+   570→      }
+   571→    }
+   572→    if (currentPlatform === 'darwin') {
+   573→      try {
+   574→        execSync('sandbox-exec -n no-network /bin/true 2>/dev/null', {
+   575→          encoding: 'utf-8',
+   576→          timeout: 3000,
+   577→        });
+   578→        return true;
+   579→      } catch {
+   580→        return false;
+   581→      }
+   582→    }
+   583→    return false;
+   584→  }
+   585→
+   586→  // ---- Command Execution ----
+   587→
+   588→  async execute(command: string, options?: ExecOptions): Promise<SandboxResult> {
+   589→    const startTime = Date.now();
+   590→
+   591→    // Validate command against filter
+   592→    const cmdValidation = this.validateCommand(command);
+   593→    if (!cmdValidation.allowed) {
+   594→      this.addAuditLog('command', 'execute_blocked', command, false, cmdValidation.reason);
+   595→      return {
+   596→        stdout: '',
+   597→        stderr: `Sandbox: Command blocked - ${cmdValidation.reason}`,
+   598→        exitCode: 126,
+   599→        networkAccessLog: this.networkPolicy.getAccessLog(),
+   600→        fileAccessLog: this.filesystemPolicy.getAccessLog(),
+   601→        duration: Date.now() - startTime,
+   602→        timedOut: false,
+   603→      };
+   604→    }
+   605→
+   606→    this.addAuditLog('command', 'execute', command, true);
+   607→
+   608→    const timeout = options?.timeout ?? this.config.docker?.timeout ?? 120000;
+   609→
+   610→    try {
+   611→      if (this.config.type === 'docker') {
+   612→        return await this.executeInDocker(command, options, timeout, startTime);
+   613→      }
+   614→      if (this.config.type === 'os-native') {
+   615→        return await this.executeNative(command, options, timeout, startTime);
+   616→      }
+   617→      // hybrid: try docker first, fall back to native
+   618→      if (await this.isDockerAvailable()) {
+   619→        return await this.executeInDocker(command, options, timeout, startTime);
+   620→      }
+   621→      if (this.isNativeSandboxAvailable()) {
+   622→        return await this.executeNative(command, options, timeout, startTime);
+   623→      }
+   624→      // No sandboxing available, execute with filtering only
+   625→      return await this.executeFiltered(command, options, timeout, startTime);
+   626→    } catch (error: any) {
+   627→      return {
+   628→        stdout: '',
+   629→        stderr: `Sandbox execution error: ${error.message}`,
+   630→        exitCode: 1,
+   631→        networkAccessLog: this.networkPolicy.getAccessLog(),
+   632→        fileAccessLog: this.filesystemPolicy.getAccessLog(),
+   633→        duration: Date.now() - startTime,
+   634→        timedOut: false,
+   635→      };
+   636→    }
+   637→  }
+   638→
+   639→  // ---- Container Lifecycle ----
+   640→
+   641→  async createContainer(): Promise<string> {
+   642→    if (!(await this.isDockerAvailable())) {
+   643→      throw new Error('Docker is not available for container creation');
+   644→    }
+   645→
+   646→    await this.ensureSandboxImage();
+   647→
+   648→    const dockerConfig = this.config.docker!;
+   649→    const args: string[] = ['create'];
+   650→
+   651→    // Resource limits
+   652→    args.push('--memory', dockerConfig.memory);
+   653→    args.push('--cpus', String(dockerConfig.cpus));
+   654→
+   655→    // Network configuration
+   656→    if (dockerConfig.networkMode === 'none') {
+   657→      args.push('--network', 'none');
+   658→    } else if (dockerConfig.networkMode === 'limited') {
+   659→      // Use bridge network with iptables rules applied later
+   660→      args.push('--network', 'bridge');
+   661→    } else {
+   662→      args.push('--network', 'bridge');
+   663→    }
+   664→
+   665→    // DNS configuration for filtered mode
+   666→    if (dockerConfig.networkMode === 'limited') {
+   667→      args.push('--dns', '127.0.0.1');
+   668→    }
+   669→
+   670→    // Security options
+   671→    args.push('--security-opt', 'no-new-privileges');
+   672→    args.push('--cap-drop', 'ALL');
+   673→    args.push('--cap-add', 'CHOWN');
+   674→    args.push('--cap-add', 'SETUID');
+   675→    args.push('--cap-add', 'SETGID');
+   676→    args.push('--cap-add', 'DAC_OVERRIDE');
+   677→    args.push('--pids-limit', '64');
+   678→    args.push('--read-only');
+   679→
+   680→    // Mount project directory
+   681→    if (dockerConfig.mountProject) {
+   682→      const mountMode = dockerConfig.mountMode === 'ro' ? ':ro' : ':rw';
+   683→      args.push('-v', `${this.projectDir}:/workspace${mountMode}`);
+   684→    }
+   685→
+   686→    // Tmpfs for write paths
+   687→    args.push('--tmpfs', '/tmp:rw,noexec,nosuid,size=64m');
+   688→    args.push('--tmpfs', '/home/sandbox:rw,noexec,nosuid,size=64m');
+   689→
+   690→    // Working directory
+   691→    args.push('-w', '/workspace');
+   692→
+   693→    // Image
+   694→    args.push(dockerConfig.image);
+   695→
+   696→    // Default command: keep container alive
+   697→    args.push('tail', '-f', '/dev/null');
+   698→
+   699→    try {
+   700→      const containerId = execSync(`docker ${args.join(' ')}`, {
+   701→        encoding: 'utf-8',
+   702→        timeout: 30000,
+   703→      }).trim();
+   704→
+   705→      this.activeContainers.set(containerId, {
+   706→        id: containerId,
+   707→        startedAt: Date.now(),
+   708→      });
+   709→
+   710→      // Apply network rules for limited mode
+   711→      if (dockerConfig.networkMode === 'limited') {
+   712→        await this.applyContainerNetworkRules(containerId);
+   713→      }
+   714→
+   715→      this.addAuditLog('container', 'create', `Container ${containerId.substring(0, 12)} created`, true);
+   716→      return containerId;
+   717→    } catch (error: any) {
+   718→      this.addAuditLog('container', 'create_failed', error.message, false);
+   719→      throw new Error(`Failed to create container: ${error.message}`);
+   720→    }
+   721→  }
+   722→
+   723→  async stopContainer(id: string): Promise<void> {
+   724→    try {
+   725→      execSync(`docker stop ${id} 2>/dev/null`, { encoding: 'utf-8', timeout: 10000 });
+   726→      execSync(`docker rm ${id} 2>/dev/null`, { encoding: 'utf-8', timeout: 10000 });
+   727→      this.activeContainers.delete(id);
+   728→      this.addAuditLog('container', 'stop', `Container ${id.substring(0, 12)} stopped and removed`, true);
+   729→    } catch (error: any) {
+   730→      this.addAuditLog('container', 'stop_failed', `Failed to stop container ${id.substring(0, 12)}: ${error.message}`, false);
+   731→      throw new Error(`Failed to stop container: ${error.message}`);
+   732→    }
+   733→  }
+   734→
+   735→  // ---- Validation Methods ----
+   736→
+   737→  validateCommand(command: string): { allowed: boolean; reason?: string } {
+   738→    return this.commandFilter.validate(command);
+   739→  }
+   740→
+   741→  validatePath(path: string, mode: 'read' | 'write'): { allowed: boolean; reason?: string } {
+   742→    return this.filesystemPolicy.validate(path, mode);
+   743→  }
+   744→
+   745→  validateNetwork(host: string, port: number): { allowed: boolean; reason?: string } {
+   746→    return this.networkPolicy.validate(host, port);
+   747→  }
+   748→
+   749→  // ---- Audit Log ----
+   750→
+   751→  getAuditLog(): AuditLogEntry[] {
+   752→    return [...this.auditLog];
+   753→  }
+   754→
+   755→  clearAuditLog(): void {
+   756→    this.auditLog = [];
+   757→    this.networkPolicy.clearLog();
+   758→    this.filesystemPolicy.clearLog();
+   759→  }
+   760→
+   761→  // ---- Cleanup ----
+   762→
+   763→  async cleanup(): Promise<void> {
+   764→    const containerIds = [...this.activeContainers.keys()];
+   765→    for (const id of containerIds) {
+   766→      try {
+   767→        await this.stopContainer(id);
+   768→      } catch {
+   769→        // Best-effort cleanup
+   770→      }
+   771→    }
+   772→    this.addAuditLog('config', 'cleanup', 'All containers cleaned up', true);
+   773→  }
+   774→
+   775→  // ---- Print Status ----
+   776→
+   777→  printStatus(): void {
+   778→    const typeLabel = this.config.type.toUpperCase();
+   779→    console.log(chalk.bold(`\n  OS-Level Sandbox: ${chalk.cyan(typeLabel)}`));
+   780→
+   781→    if (this.config.type === 'docker' || this.config.type === 'hybrid') {
+   782→      const dockerStatus = this.dockerAvailable === null
+   783→        ? chalk.yellow('NOT CHECKED')
+   784→        : this.dockerAvailable
+   785→          ? chalk.green('AVAILABLE')
+   786→          : chalk.red('NOT AVAILABLE');
+   787→      console.log(`  Docker: ${dockerStatus}`);
+   788→      if (this.config.docker) {
+   789→        console.log(`  Image: ${chalk.cyan(this.config.docker.image)}`);
+   790→        console.log(`  Mount: ${this.config.docker.mountProject ? chalk.green('YES') : chalk.gray('NO')} (${this.config.docker.mountMode})`);
+   791→        console.log(`  Network: ${chalk.yellow(this.config.docker.networkMode)}`);
+   792→        console.log(`  Memory: ${this.config.docker.memory}, CPUs: ${this.config.docker.cpus}`);
+   793→      }
+   794→    }
+   795→
+   796→    if (this.config.type === 'os-native' || this.config.type === 'hybrid') {
+   797→      const nativeStatus = this.isNativeSandboxAvailable()
+   798→        ? chalk.green('AVAILABLE')
+   799→        : chalk.red('NOT AVAILABLE');
+   800→      console.log(`  Native Sandbox: ${nativeStatus}`);
+   801→    }
+   802→
+   803→    if (this.config.network) {
+   804→      console.log(`  Network Mode: ${chalk.yellow(this.config.network.mode)}`);
+   805→      if (this.config.network.mode === 'filtered') {
+   806→        console.log(`  Allowed Domains: ${this.config.network.allowedDomains.length > 0
+   807→          ? chalk.cyan(this.config.network.allowedDomains.join(', '))
+   808→          : chalk.gray('none')}`);
+   809→        console.log(`  Allowed Ports: ${this.config.network.allowedPorts.length > 0
+   810→          ? chalk.cyan(this.config.network.allowedPorts.join(', '))
+   811→          : chalk.gray('all')}`);
+   812→        console.log(`  Block Private Networks: ${this.config.network.blockPrivateNetworks
+   813→          ? chalk.green('YES')
+   814→          : chalk.red('NO')}`);
+   815→      }
+   816→    }
+   817→
+   818→    if (this.config.commands) {
+   819→      console.log(`  Blocked Commands: ${chalk.red(String(this.config.commands.blockedCommands.length))}`);
+   820→      console.log(`  Allow Pipes: ${this.config.commands.allowPipes ? chalk.green('YES') : chalk.red('NO')}`);
+   821→      console.log(`  Allow Background: ${this.config.commands.allowBackground ? chalk.green('YES') : chalk.red('NO')}`);
+   822→    }
+   823→
+   824→    if (this.activeContainers.size > 0) {
+   825→      console.log(`  Active Containers: ${chalk.green(String(this.activeContainers.size))}`);
+   826→    }
+   827→
+   828→    if (this.auditLog.length > 0) {
+   829→      const blocked = this.auditLog.filter(e => !e.allowed).length;
+   830→      console.log(`  Audit Entries: ${this.auditLog.length} (${chalk.red(String(blocked))} blocked)`);
+   831→    }
+   832→
+   833→    console.log();
+   834→  }
+   835→
+   836→  // ============================================================
+   837→  // Private Methods
+   838→  // ============================================================
+   839→
+   840→  private mergeConfig(partial: Partial<OSSandboxConfig>): OSSandboxConfig {
+   841→    const base = { ...DEFAULT_OS_SANDBOX_CONFIG };
+   842→    return {
+   843→      ...base,
+   844→      ...partial,
+   845→      docker: { ...base.docker!, ...partial.docker },
+   846→      network: { ...base.network!, ...partial.network },
+   847→      filesystem: { ...base.filesystem!, ...partial.filesystem },
+   848→      commands: { ...base.commands!, ...partial.commands },
+   849→    };
+   850→  }
+   851→
+   852→  private addAuditLog(
+   853→    category: AuditLogEntry['category'],
+   854→    action: string,
+   855→    detail: string,
+   856→    allowed: boolean,
+   857→    reason?: string
+   858→  ): void {
+   859→    this.auditLog.push({
+   860→      timestamp: Date.now(),
+   861→      category,
+   862→      action,
+   863→      detail,
+   864→      allowed,
+   865→      reason,
+   866→    });
+   867→  }
+   868→
+   869→  // ---- Docker Execution ----
+   870→
+   871→  private async executeInDocker(
+   872→    command: string,
+   873→    options: ExecOptions | undefined,
+   874→    timeout: number,
+   875→    startTime: number
+   876→  ): Promise<SandboxResult> {
+   877→    if (!(await this.isDockerAvailable())) {
+   878→      if (this.config.type === 'docker') {
+   879→        return {
+   880→          stdout: '',
+   881→          stderr: 'Docker is not available. Cannot run in Docker sandbox mode.',
+   882→          exitCode: 127,
+   883→          networkAccessLog: this.networkPolicy.getAccessLog(),
+   884→          fileAccessLog: this.filesystemPolicy.getAccessLog(),
+   885→          duration: Date.now() - startTime,
+   886→          timedOut: false,
+   887→        };
+   888→      }
+   889→      // Fall back to filtered execution for hybrid mode
+   890→      return this.executeFiltered(command, options, timeout, startTime);
+   891→    }
+   892→
+   893→    await this.ensureSandboxImage();
+   894→
+   895→    const dockerConfig = this.config.docker!;
+   896→    const args: string[] = ['run', '--rm'];
+   897→
+   898→    // Resource limits
+   899→    args.push('--memory', dockerConfig.memory);
+   900→    args.push('--memory-swap', dockerConfig.memory);
+   901→    args.push('--cpus', String(dockerConfig.cpus));
+   902→
+   903→    // Network configuration
+   904→    if (dockerConfig.networkMode === 'none') {
+   905→      args.push('--network', 'none');
+   906→    } else if (dockerConfig.networkMode === 'limited') {
+   907→      args.push('--network', 'bridge');
+   908→    } else {
+   909→      args.push('--network', 'bridge');
+   910→    }
+   911→
+   912→    // Security options
+   913→    args.push('--security-opt', 'no-new-privileges');
+   914→    args.push('--cap-drop', 'ALL');
+   915→    args.push('--cap-add', 'CHOWN');
+   916→    args.push('--cap-add', 'SETUID');
+   917→    args.push('--cap-add', 'SETGID');
+   918→    args.push('--cap-add', 'DAC_OVERRIDE');
+   919→    args.push('--pids-limit', '64');
+   920→
+   921→    // Mount project directory
+   922→    if (dockerConfig.mountProject) {
+   923→      const mountMode = dockerConfig.mountMode === 'ro' ? ':ro' : ':rw';
+   924→      args.push('-v', `${this.projectDir}:/workspace${mountMode}`);
+   925→    }
+   926→
+   927→    // Tmpfs for temporary writes
+   928→    args.push('--tmpfs', '/tmp:rw,noexec,nosuid,size=64m');
+   929→
+   930→    // Working directory
+   931→    args.push('-w', '/workspace');
+   932→
+   933→    // Environment variables (sanitized)
+   934→    if (options?.env) {
+   935→      const sanitizedEnv = this.commandFilter.sanitizeEnv(options.env);
+   936→      for (const [key, value] of Object.entries(sanitizedEnv)) {
+   937→        args.push('-e', `${key}=${value}`);
+   938→      }
+   939→    }
+   940→
+   941→    // Timeout
+   942→    const dockerTimeout = Math.min(timeout, 300000);
+   943→
+   944→    // Image
+   945→    args.push(dockerConfig.image);
+   946→
+   947→    // Command to execute
+   948→    args.push('sh', '-c', command);
+   949→
+   950→    this.addAuditLog('command', 'docker_execute',
+   951→      `Executing in Docker: ${command.substring(0, 100)}`, true);
+   952→
+   953→    return new Promise<SandboxResult>((resolveResult) => {
+   954→      let stdout = '';
+   955→      let stderr = '';
+   956→      let timedOut = false;
+   957→
+   958→      const child: ChildProcess = spawn('docker', args, {
+   959→        cwd: options?.cwd ?? this.projectDir,
+   960→        env: { ...process.env, FORCE_COLOR: '0' },
+   961→        stdio: ['pipe', 'pipe', 'pipe'],
+   962→      });
+   963→
+   964→      const timer = setTimeout(() => {
+   965→        timedOut = true;
+   966→        child.kill('SIGKILL');
+   967→      }, dockerTimeout);
+   968→
+   969→      child.stdout?.on('data', (data: Buffer) => {
+   970→        stdout += data.toString();
+   971→      });
+   972→
+   973→      child.stderr?.on('data', (data: Buffer) => {
+   974→        stderr += data.toString();
+   975→      });
+   976→
+   977→      if (options?.stdin) {
+   978→        child.stdin?.write(options.stdin);
+   979→        child.stdin?.end();
+   980→      }
+   981→
+   982→      child.on('close', (exitCode) => {
+   983→        clearTimeout(timer);
+   984→        const duration = Date.now() - startTime;
+   985→
+   986→        resolveResult({
+   987→          stdout: this.truncateOutput(stdout),
+   988→          stderr: this.truncateOutput(stderr),
+   989→          exitCode: timedOut ? 124 : (exitCode ?? 1),
+   990→          networkAccessLog: this.networkPolicy.getAccessLog(),
+   991→          fileAccessLog: this.filesystemPolicy.getAccessLog(),
+   992→          duration,
+   993→          timedOut,
+   994→        });
+   995→      });
+   996→
+   997→      child.on('error', (error) => {
+   998→        clearTimeout(timer);
+   999→        resolveResult({
+  1000→          stdout: '',
+  1001→          stderr: `Docker execution error: ${error.message}`,
+  1002→          exitCode: 1,
+  1003→          networkAccessLog: this.networkPolicy.getAccessLog(),
+  1004→          fileAccessLog: this.filesystemPolicy.getAccessLog(),
+  1005→          duration: Date.now() - startTime,
+  1006→          timedOut: false,
+  1007→        });
+  1008→      });
+  1009→    });
+  1010→  }
+  1011→
+  1012→  // ---- Native OS Execution ----
+  1013→
+  1014→  private async executeNative(
+  1015→    command: string,
+  1016→    options: ExecOptions | undefined,
+  1017→    timeout: number,
+  1018→    startTime: number
+  1019→  ): Promise<SandboxResult> {
+  1020→    const currentPlatform = platform();
+  1021→
+  1022→    if (currentPlatform === 'linux') {
+  1023→      return this.executeLinuxSandbox(command, options, timeout, startTime);
+  1024→    }
+  1025→    if (currentPlatform === 'darwin') {
+  1026→      return this.executeMacOSSandbox(command, options, timeout, startTime);
+  1027→    }
+  1028→
+  1029→    // Unsupported platform, fall back to filtered execution
+  1030→    return this.executeFiltered(command, options, timeout, startTime);
+  1031→  }
+  1032→
+  1033→  private async executeLinuxSandbox(
+  1034→    command: string,
+  1035→    options: ExecOptions | undefined,
+  1036→    timeout: number,
+  1037→    startTime: number
+  1038→  ): Promise<SandboxResult> {
+  1039→    const networkConfig = this.config.network!;
+  1040→    let unshareFlags = '--pid --mount --uts --ipc';
+  1041→
+  1042→    // Network isolation
+  1043→    if (networkConfig.mode === 'blocked') {
+  1044→      unshareFlags += ' --net';
+  1045→    }
+  1046→
+  1047→    // Build the sandboxed command with namespace isolation
+  1048→    let sandboxedCommand = command;
+  1049→
+  1050→    // Apply filesystem restrictions via bind mounts where possible
+  1051→    const fsConfig = this.config.filesystem;
+  1052→    if (fsConfig && fsConfig.deniedPaths.length > 0) {
+  1053→      // Add a wrapper that checks path access
+  1054→      const deniedChecks = fsConfig.deniedPaths
+  1055→        .map(p => p.replace(/\*/g, '.*'))
+  1056→        .join('|');
+  1057→      sandboxedCommand = `bash -c '
+  1058→        deny_pattern="${deniedChecks}";
+  1059→        original_command="${command.replace(/"/g, '\\"').replace(/'/g, "'\\''")}";
+  1060→        $original_command
+  1061→      '`;
+  1062→    }
+  1063→
+  1064→    const fullCommand = `unshare ${unshareFlags} sh -c ${shellEscape(sandboxedCommand)}`;
+  1065→
+  1066→    this.addAuditLog('command', 'native_linux_execute',
+  1067→      `Executing with namespaces: ${command.substring(0, 100)}`, true);
+  1068→
+  1069→    return new Promise<SandboxResult>((resolveResult) => {
+  1070→      let stdout = '';
+  1071→      let stderr = '';
+  1072→      let timedOut = false;
+  1073→
+  1074→      const child: ChildProcess = spawn('sh', ['-c', fullCommand], {
+  1075→        cwd: options?.cwd ?? this.projectDir,
+  1076→        env: options?.env
+  1077→          ? { ...process.env, ...this.commandFilter.sanitizeEnv(options.env) }
+  1078→          : { ...process.env, FORCE_COLOR: '0' },
+  1079→        stdio: ['pipe', 'pipe', 'pipe'],
+  1080→      });
+  1081→
+  1082→      const timer = setTimeout(() => {
+  1083→        timedOut = true;
+  1084→        child.kill('SIGKILL');
+  1085→      }, timeout);
+  1086→
+  1087→      child.stdout?.on('data', (data: Buffer) => {
+  1088→        stdout += data.toString();
+  1089→      });
+  1090→
+  1091→      child.stderr?.on('data', (data: Buffer) => {
+  1092→        stderr += data.toString();
+  1093→      });
+  1094→
+  1095→      if (options?.stdin) {
+  1096→        child.stdin?.write(options.stdin);
+  1097→        child.stdin?.end();
+  1098→      }
+  1099→
+  1100→      child.on('close', (exitCode) => {
+  1101→        clearTimeout(timer);
+  1102→
+  1103→        // If network was blocked, log any attempted network access via audit
+  1104→        if (networkConfig.mode === 'blocked') {
+  1105→          this.addAuditLog('network', 'namespace_isolation',
+  1106→            'Network namespace isolation applied (no external access)', true);
+  1107→        }
+  1108→
+  1109→        resolveResult({
+  1110→          stdout: this.truncateOutput(stdout),
+  1111→          stderr: this.truncateOutput(stderr),
+  1112→          exitCode: timedOut ? 124 : (exitCode ?? 1),
+  1113→          networkAccessLog: this.networkPolicy.getAccessLog(),
+  1114→          fileAccessLog: this.filesystemPolicy.getAccessLog(),
+  1115→          duration: Date.now() - startTime,
+  1116→          timedOut,
+  1117→        });
+  1118→      });
+  1119→
+  1120→      child.on('error', (error) => {
+  1121→        clearTimeout(timer);
+  1122→        resolveResult({
+  1123→          stdout: '',
+  1124→          stderr: `Native sandbox error: ${error.message}`,
+  1125→          exitCode: 1,
+  1126→          networkAccessLog: this.networkPolicy.getAccessLog(),
+  1127→          fileAccessLog: this.filesystemPolicy.getAccessLog(),
+  1128→          duration: Date.now() - startTime,
+  1129→          timedOut: false,
+  1130→        });
+  1131→      });
+  1132→    });
+  1133→  }
+  1134→
+  1135→  private async executeMacOSSandbox(
+  1136→    command: string,
+  1137→    options: ExecOptions | undefined,
+  1138→    timeout: number,
+  1139→    startTime: number
+  1140→  ): Promise<SandboxResult> {
+  1141→    const networkConfig = this.config.network!;
+  1142→    const fsConfig = this.config.filesystem;
+  1143→
+  1144→    // Build sandbox-exec profile
+  1145→    let profile = '(version 1)\n(deny default)\n';
+  1146→
+  1147→    // Allow basic process operations
+  1148→    profile += '(allow process-exec)\n';
+  1149→    profile += '(allow process-fork)\n';
+  1150→    profile += '(allow signal)\n';
+  1151→    profile += '(allow sysctl-read)\n';
+  1152→    profile += '(allow file-read*)\n';
+  1153→
+  1154→    // Filesystem write rules
+  1155→    if (fsConfig) {
+  1156→      // Allow writing to project directory
+  1157→      profile += `(allow file-write* (subpath "${this.projectDir}"))\n`;
+  1158→
+  1159→      // Allow writing to temp
+  1160→      profile += '(allow file-write* (subpath "/tmp"))\n';
+  1161→      profile += '(allow file-write* (subpath "/var/folders"))\n';
+  1162→
+  1163→      // Deny specific paths
+  1164→      for (const denied of fsConfig.deniedPaths) {
+  1165→        const expanded = denied.replace(/\/\*/g, '');
+  1166→        if (expanded.startsWith('/')) {
+  1167→          profile += `(deny file-read* (subpath "${expanded}"))\n`;
+  1168→          profile += `(deny file-write* (subpath "${expanded}"))\n`;
+  1169→        }
+  1170→      }
+  1171→    }
+  1172→
+  1173→    // Network rules
+  1174→    if (networkConfig.mode === 'blocked') {
+  1175→      profile += '(deny network*)\n';
+  1176→    } else if (networkConfig.mode === 'filtered') {
+  1177→      profile += '(deny network*)\n';
+  1178→      for (const domain of networkConfig.allowedDomains) {
+  1179→        profile += `(allow network-outbound (host "${domain}"))\n`;
+  1180→      }
+  1181→      for (const port of networkConfig.allowedPorts) {
+  1182→        profile += `(allow network-outbound (port "${port}"))\n`;
+  1183→      }
+  1184→    } else {
+  1185→      profile += '(allow network*)\n';
+  1186→    }
+  1187→
+  1188→    // Write profile to temp file
+  1189→    const profilePath = `/tmp/neurocli-sandbox-${Date.now()}.sb`;
+  1190→    writeFileSync(profilePath, profile, 'utf-8');
+  1191→
+  1192→    const sandboxedCommand = `sandbox-exec -f ${profilePath} sh -c ${shellEscape(command)}`;
+  1193→
+  1194→    this.addAuditLog('command', 'native_macos_execute',
+  1195→      `Executing with sandbox-exec: ${command.substring(0, 100)}`, true);
+  1196→
+  1197→    return new Promise<SandboxResult>((resolveResult) => {
+  1198→      let stdout = '';
+  1199→      let stderr = '';
+  1200→      let timedOut = false;
+  1201→
+  1202→      const child: ChildProcess = spawn('sh', ['-c', sandboxedCommand], {
+  1203→        cwd: options?.cwd ?? this.projectDir,
+  1204→        env: options?.env
+  1205→          ? { ...process.env, ...this.commandFilter.sanitizeEnv(options.env) }
+  1206→          : { ...process.env, FORCE_COLOR: '0' },
+  1207→        stdio: ['pipe', 'pipe', 'pipe'],
+  1208→      });
+  1209→
+  1210→      const timer = setTimeout(() => {
+  1211→        timedOut = true;
+  1212→        child.kill('SIGKILL');
+  1213→      }, timeout);
+  1214→
+  1215→      child.stdout?.on('data', (data: Buffer) => {
+  1216→        stdout += data.toString();
+  1217→      });
+  1218→
+  1219→      child.stderr?.on('data', (data: Buffer) => {
+  1220→        stderr += data.toString();
+  1221→      });
+  1222→
+  1223→      if (options?.stdin) {
+  1224→        child.stdin?.write(options.stdin);
+  1225→        child.stdin?.end();
+  1226→      }
+  1227→
+  1228→      child.on('close', (exitCode) => {
+  1229→        clearTimeout(timer);
+  1230→        // Clean up profile file
+  1231→        try {
+  1232→          const { unlinkSync } = require('fs');
+  1233→          unlinkSync(profilePath);
+  1234→        } catch {
+  1235→          // Best-effort cleanup
+  1236→        }
+  1237→
+  1238→        resolveResult({
+  1239→          stdout: this.truncateOutput(stdout),
+  1240→          stderr: this.truncateOutput(stderr),
+  1241→          exitCode: timedOut ? 124 : (exitCode ?? 1),
+  1242→          networkAccessLog: this.networkPolicy.getAccessLog(),
+  1243→          fileAccessLog: this.filesystemPolicy.getAccessLog(),
+  1244→          duration: Date.now() - startTime,
+  1245→          timedOut,
+  1246→        });
+  1247→      });
+  1248→
+  1249→      child.on('error', (error) => {
+  1250→        clearTimeout(timer);
+  1251→        resolveResult({
+  1252→          stdout: '',
+  1253→          stderr: `macOS sandbox error: ${error.message}`,
+  1254→          exitCode: 1,
+  1255→          networkAccessLog: this.networkPolicy.getAccessLog(),
+  1256→          fileAccessLog: this.filesystemPolicy.getAccessLog(),
+  1257→          duration: Date.now() - startTime,
+  1258→          timedOut: false,
+  1259→        });
+  1260→      });
+  1261→    });
+  1262→  }
+  1263→
+  1264→  // ---- Filtered Execution (Fallback, No OS Isolation) ----
+  1265→
+  1266→  private async executeFiltered(
+  1267→    command: string,
+  1268→    options: ExecOptions | undefined,
+  1269→    timeout: number,
+  1270→    startTime: number
+  1271→  ): Promise<SandboxResult> {
+  1272→    this.addAuditLog('command', 'filtered_execute',
+  1273→      `Executing with command filtering only (no OS isolation): ${command.substring(0, 100)}`, true);
+  1274→
+  1275→    return new Promise<SandboxResult>((resolveResult) => {
+  1276→      let stdout = '';
+  1277→      let stderr = '';
+  1278→      let timedOut = false;
+  1279→
+  1280→      const child: ChildProcess = spawn('sh', ['-c', command], {
+  1281→        cwd: options?.cwd ?? this.projectDir,
+  1282→        env: options?.env
+  1283→          ? { ...process.env, ...this.commandFilter.sanitizeEnv(options.env) }
+  1284→          : { ...process.env, FORCE_COLOR: '0' },
+  1285→        stdio: ['pipe', 'pipe', 'pipe'],
+  1286→      });
+  1287→
+  1288→      const timer = setTimeout(() => {
+  1289→        timedOut = true;
+  1290→        child.kill('SIGKILL');
+  1291→      }, timeout);
+  1292→
+  1293→      child.stdout?.on('data', (data: Buffer) => {
+  1294→        stdout += data.toString();
+  1295→      });
+  1296→
+  1297→      child.stderr?.on('data', (data: Buffer) => {
+  1298→        stderr += data.toString();
+  1299→      });
+  1300→
+  1301→      if (options?.stdin) {
+  1302→        child.stdin?.write(options.stdin);
+  1303→        child.stdin?.end();
+  1304→      }
+  1305→
+  1306→      child.on('close', (exitCode) => {
+  1307→        clearTimeout(timer);
+  1308→
+  1309→        // Infer network access from command content for audit purposes
+  1310→        if (command.includes('curl') || command.includes('wget') || command.includes('fetch')) {
+  1311→          const urlMatch = command.match(/(?:https?:\/\/)([^/\s]+)/g);
+  1312→          if (urlMatch) {
+  1313→            for (const url of urlMatch) {
+  1314→              const host = url.replace('https://', '').replace('http://', '').split('/')[0].split(':')[0];
+  1315→              const port = url.includes(':443') ? 443 : url.includes(':80') ? 80 : url.startsWith('https') ? 443 : 80;
+  1316→              this.networkPolicy.validate(host, port);
+  1317→            }
+  1318→          }
+  1319→        }
+  1320→
+  1321→        resolveResult({
+  1322→          stdout: this.truncateOutput(stdout),
+  1323→          stderr: this.truncateOutput(stderr),
+  1324→          exitCode: timedOut ? 124 : (exitCode ?? 1),
+  1325→          networkAccessLog: this.networkPolicy.getAccessLog(),
+  1326→          fileAccessLog: this.filesystemPolicy.getAccessLog(),
+  1327→          duration: Date.now() - startTime,
+  1328→          timedOut,
+  1329→        });
+  1330→      });
+  1331→
+  1332→      child.on('error', (error) => {
+  1333→        clearTimeout(timer);
+  1334→        resolveResult({
+  1335→          stdout: '',
+  1336→          stderr: `Filtered execution error: ${error.message}`,
+  1337→          exitCode: 1,
+  1338→          networkAccessLog: this.networkPolicy.getAccessLog(),
+  1339→          fileAccessLog: this.filesystemPolicy.getAccessLog(),
+  1340→          duration: Date.now() - startTime,
+  1341→          timedOut: false,
+  1342→        });
+  1343→      });
+  1344→    });
+  1345→  }
+  1346→
+  1347→  // ---- Docker Image Management ----
+  1348→
+  1349→  private async ensureSandboxImage(): Promise<void> {
+  1350→    if (this.sandboxImageBuilt) return;
+  1351→
+  1352→    const imageName = this.config.docker!.image;
+  1353→
+  1354→    // Check if image already exists
+  1355→    try {
+  1356→      execSync(`docker image inspect ${imageName} 2>/dev/null`, {
+  1357→        encoding: 'utf-8',
+  1358→        timeout: 10000,
+  1359→      });
+  1360→      this.sandboxImageBuilt = true;
+  1361→      this.addAuditLog('container', 'image_exists',
+  1362→        `Sandbox image ${imageName} already exists`, true);
+  1363→      return;
+  1364→    } catch {
+  1365→      // Image doesn't exist, need to build it
+  1366→    }
+  1367→
+  1368→    // Create a temporary directory for the Dockerfile
+  1369→    const buildDir = `/tmp/neurocli-sandbox-build-${Date.now()}`;
+  1370→    try {
+  1371→      mkdirSync(buildDir, { recursive: true });
+  1372→      writeFileSync(`${buildDir}/Dockerfile`, SANDBOX_DOCKERFILE, 'utf-8');
+  1373→
+  1374→      this.addAuditLog('container', 'build_image',
+  1375→        `Building sandbox image ${imageName}...`, true);
+  1376→
+  1377→      execSync(`docker build -t ${imageName} ${buildDir}`, {
+  1378→        encoding: 'utf-8',
+  1379→        timeout: 120000,
+  1380→      });
+  1381→
+  1382→      this.sandboxImageBuilt = true;
+  1383→      this.addAuditLog('container', 'build_image_complete',
+  1384→        `Sandbox image ${imageName} built successfully`, true);
+  1385→    } catch (error: any) {
+  1386→      this.addAuditLog('container', 'build_image_failed',
+  1387→        `Failed to build sandbox image: ${error.message}`, false);
+  1388→      throw new Error(`Failed to build sandbox Docker image: ${error.message}`);
+  1389→    }
+  1390→  }
+  1391→
+  1392→  // ---- Container Network Rules ----
+  1393→
+  1394→  private async applyContainerNetworkRules(containerId: string): Promise<void> {
+  1395→    const dockerConfig = this.config.docker!;
+  1396→    if (dockerConfig.networkMode !== 'limited') return;
+  1397→
+  1398→    try {
+  1399→      // Get container PID for network namespace
+  1400→      const pid = execSync(
+  1401→        `docker inspect --format '{{.State.Pid}}' ${containerId} 2>/dev/null`,
+  1402→        { encoding: 'utf-8', timeout: 5000 }
+  1403→      ).trim();
+  1404→
+  1405→      if (pid === '0') {
+  1406→        this.addAuditLog('network', 'network_rules_skip',
+  1407→          `Container ${containerId.substring(0, 12)} not running, skipping network rules`, true);
+  1408→        return;
+  1409→      }
+  1410→
+  1411→      // Set up iptables rules to restrict outbound traffic
+  1412→      // Allow established connections
+  1413→      execSync(
+  1414→        `docker exec ${containerId} sh -c "` +
+  1415→        `which iptables >/dev/null 2>&1 && ` +
+  1416→        `iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT && ` +
+  1417→        `iptables -A OUTPUT -o lo -j ACCEPT` +
+  1418→        `" 2>/dev/null`,
+  1419→        { encoding: 'utf-8', timeout: 5000 }
+  1420→      );
+  1421→
+  1422→      // Allow DNS
+  1423→      execSync(
+  1424→        `docker exec ${containerId} sh -c "` +
+  1425→        `which iptables >/dev/null 2>&1 && ` +
+  1426→        `iptables -A OUTPUT -p udp --dport 53 -j ACCEPT` +
+  1427→        `" 2>/dev/null`,
+  1428→        { encoding: 'utf-8', timeout: 5000 }
+  1429→      );
+  1430→
+  1431→      // Allow HTTPS to whitelisted domains (via DNS resolution)
+  1432→      for (const domain of dockerConfig.allowedDomains) {
+  1433→        try {
+  1434→          execSync(
+  1435→            `docker exec ${containerId} sh -c "` +
+  1436→            `which iptables >/dev/null 2>&1 && ` +
+  1437→            `iptables -A OUTPUT -p tcp --dport 443 -d $(nslookup ${domain} 2>/dev/null | tail -1 | awk '{print $2}') -j ACCEPT` +
+  1438→            `" 2>/dev/null`,
+  1439→            { encoding: 'utf-8', timeout: 5000 }
+  1440→          );
+  1441→        } catch {
+  1442→          // DNS resolution may fail, skip this domain
+  1443→        }
+  1444→      }
+  1445→
+  1446→      // Drop all other outbound
+  1447→      execSync(
+  1448→        `docker exec ${containerId} sh -c "` +
+  1449→        `which iptables >/dev/null 2>&1 && ` +
+  1450→        `iptables -A OUTPUT -j DROP` +
+  1451→        `" 2>/dev/null`,
+  1452→        { encoding: 'utf-8', timeout: 5000 }
+  1453→      );
+  1454→
+  1455→      this.addAuditLog('network', 'network_rules_applied',
+  1456→        `Network rules applied to container ${containerId.substring(0, 12)}`, true);
+  1457→    } catch (error: any) {
+  1458→      this.addAuditLog('network', 'network_rules_failed',
+  1459→        `Failed to apply network rules: ${error.message}`, false);
+  1460→      // Non-fatal: container still has bridge network but without custom iptables
+  1461→    }
+  1462→  }
+  1463→
+  1464→  // ---- Utility Methods ----
+  1465→
+  1466→  private truncateOutput(output: string, maxLength: number = 30000): string {
+  1467→    if (output.length <= maxLength) return output;
+  1468→    const half = Math.floor(maxLength / 2);
+  1469→    return output.slice(0, half) + '\n\n... [output truncated] ...\n\n' + output.slice(-half);
+  1470→  }
+  1471→}
+  1472→
+  1473→// ---- Helper: Shell Escape ----
+  1474→
+  1475→function shellEscape(str: string): string {
+  1476→  return "'" + str.replace(/'/g, "'\\''") + "'";
+  1477→}
+  1478→
+  1479→// ---- Exported Helper: Create Default Manager ----
+  1480→
+  1481→export function createOSSandboxManager(
+  1482→  config?: Partial<OSSandboxConfig>,
+  1483→  projectDir?: string
+  1484→): OSSandboxManager {
+  1485→  const manager = new OSSandboxManager(config);
+  1486→  if (projectDir) {
+  1487→    (manager as any).projectDir = resolve(projectDir);
+  1488→  }
+  1489→  return manager;
+  1490→}
+  1491→
+  1492→// ---- Exported Helper: Quick Availability Check ----
+  1493→
+  1494→export async function checkSandboxCapabilities(): Promise<{
+  1495→  docker: boolean;
+  1496→  nativeSandbox: boolean;
+  1497→  platform: string;
+  1498→  recommendedType: OSSandboxConfig['type'];
+  1499→}> {
+  1500→  const currentPlatform = platform();
+  1501→
+  1502→  const manager = new OSSandboxManager();
+  1503→  const docker = await manager.isDockerAvailable();
+  1504→  const nativeSandbox = manager.isNativeSandboxAvailable();
+  1505→
+  1506→  let recommendedType: OSSandboxConfig['type'] = 'docker';
+  1507→  if (docker) {
+  1508→    recommendedType = 'docker';
+  1509→  } else if (nativeSandbox) {
+  1510→    recommendedType = 'os-native';
+  1511→  } else {
+  1512→    recommendedType = 'hybrid';
+  1513→  }
+  1514→
+  1515→  return {
+  1516→    docker,
+  1517→    nativeSandbox,
+  1518→    platform: currentPlatform,
+  1519→    recommendedType,
+  1520→  };
+  1521→}
+  1522→

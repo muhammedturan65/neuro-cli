@@ -1,0 +1,779 @@
+     1→// ============================================================
+     2→// NeuroCLI - LLM Evaluator Hooks (GAP-31)
+     3→// LLM-based approval/denial evaluators for hook lifecycle events
+     4→// ============================================================
+     5→
+     6→import { createHash } from 'node:crypto';
+     7→import { readFile, readdir, stat } from 'node:fs/promises';
+     8→import { join } from 'node:path';
+     9→import { OpenRouterClient } from '../api/openrouter.js';
+    10→import { FileChange } from '../core/types.js';
+    11→import { HookEvent } from './hooks.js';
+    12→
+    13→// ---------------------------------------------------------------------------
+    14→// Types
+    15→// ---------------------------------------------------------------------------
+    16→
+    17→/** A hook backed by an LLM evaluator instead of a shell command. */
+    18→export interface LLMEvaluatorHook {
+    19→  /** Unique identifier for this evaluator. */
+    20→  id: string;
+    21→  /** Human-readable name. */
+    22→  name: string;
+    23→  /** Lifecycle event this evaluator subscribes to. */
+    24→  event: HookEvent;
+    25→  /** Model identifier used for evaluation (e.g. "google/gemma-4-31b-it:free"). */
+    26→  evaluatorModel: string;
+    27→  /** Evaluation criteria / instructions for the LLM. */
+    28→  rubric: string;
+    29→  /** Default action when the evaluator is undecided. */
+    30→  action: 'approve' | 'deny' | 'modify' | 'ask-user';
+    31→  /** Maximum tokens the evaluator may generate. */
+    32→  maxTokens: number;
+    33→  /** Sampling temperature for the evaluator. */
+    34→  temperature: number;
+    35→  /** Whether to cache evaluation decisions. */
+    36→  cacheDecisions: boolean;
+    37→  /** Time-to-live for cached decisions in seconds. */
+    38→  cacheTTL: number;
+    39→  /** Optional glob-style matcher to filter by tool name. */
+    40→  matcher?: string;
+    41→  /** Whether this evaluator is enabled. */
+    42→  enabled?: boolean;
+    43→  /** Optional provider override ("openrouter" | "ollama"). */
+    44→  provider?: 'openrouter' | 'ollama';
+    45→  /** Ollama base URL (only used when provider is "ollama"). */
+    46→  ollamaBaseUrl?: string;
+    47→}
+    48→
+    49→/** Context passed to an evaluator describing the pending action. */
+    50→export interface EvaluationContext {
+    51→  /** Name of the tool about to be (or having been) called. */
+    52→  toolName: string;
+    53→  /** Arguments that will be passed to the tool. */
+    54→  toolArgs: Record<string, any>;
+    55→  /** File changes that the tool would cause (if known). */
+    56→  fileChanges?: FileChange[];
+    57→  /** Output from the tool (only available in post-tool hooks). */
+    58→  commandOutput?: string;
+    59→  /** Recent conversation messages for situational awareness. */
+    60→  conversationContext?: string;
+    61→  /** Contents of NEURO.md for project-level context. */
+    62→  projectContext?: string;
+    63→}
+    64→
+    65→/** Result returned by an LLM evaluator. */
+    66→export interface EvaluationResult {
+    67→  /** The evaluator's decision. */
+    68→  decision: 'approve' | 'deny' | 'modify' | 'ask-user';
+    69→  /** Confidence level between 0 and 1. */
+    70→  confidence: number;
+    71→  /** Free-text reasoning from the evaluator. */
+    72→  reasoning: string;
+    73→  /** Suggested modified tool arguments (only when decision is "modify"). */
+    74→  suggestedModification?: Record<string, any>;
+    75→  /** Question to surface to the user (only when decision is "ask-user"). */
+    76→  userQuestion?: string;
+    77→  /** Whether this result was served from cache. */
+    78→  cached: boolean;
+    79→  /** The model that was actually used for the evaluation. */
+    80→  modelUsed: string;
+    81→  /** Number of tokens consumed by the evaluation call. */
+    82→  tokensUsed: number;
+    83→  /** Wall-clock duration of the evaluation in milliseconds. */
+    84→  duration: number;
+    85→}
+    86→
+    87→/** Aggregate statistics about evaluator usage. */
+    88→export interface EvaluatorStats {
+    89→  totalEvaluations: number;
+    90→  totalTokensUsed: number;
+    91→  totalCost: number;
+    92→  cacheHits: number;
+    93→  cacheMisses: number;
+    94→  decisions: Record<'approve' | 'deny' | 'modify' | 'ask-user', number>;
+    95→  byEvaluator: Record<string, {
+    96→    evaluations: number;
+    97→    tokensUsed: number;
+    98→    cost: number;
+    99→  }>;
+   100→}
+   101→
+   102→/** Configuration for the LLMEvaluatorManager. */
+   103→export interface EvaluatorConfig {
+   104→  /** Default model when none is specified on a hook. */
+   105→  defaultModel?: string;
+   106→  /** Default rubric when none is specified. */
+   107→  defaultRubric?: string;
+   108→  /** Confidence threshold below which decisions escalate to "ask-user". */
+   109→  confidenceThreshold?: number;
+   110→  /** Global toggle for caching. */
+   111→  cacheEnabled?: boolean;
+   112→  /** Default cache TTL in seconds. */
+   113→  defaultCacheTTL?: number;
+   114→  /** Maximum number of cache entries. */
+   115→  maxCacheEntries?: number;
+   116→  /** Ollama base URL for local evaluation models. */
+   117→  ollamaBaseUrl?: string;
+   118→}
+   119→
+   120→// ---------------------------------------------------------------------------
+   121→// Internal cache entry
+   122→// ---------------------------------------------------------------------------
+   123→
+   124→interface CacheEntry {
+   125→  result: EvaluationResult;
+   126→  expiresAt: number;
+   127→}
+   128→
+   129→// ---------------------------------------------------------------------------
+   130→// YAML frontmatter parser (lightweight, no external dependency)
+   131→// ---------------------------------------------------------------------------
+   132→
+   133→function parseYamlFrontmatter(text: string): { frontmatter: Record<string, any>; body: string } {
+   134→  const trimmed = text.trimStart();
+   135→  if (!trimmed.startsWith('---')) {
+   136→    return { frontmatter: {}, body: text };
+   137→  }
+   138→  const closingIndex = trimmed.indexOf('---', 3);
+   139→  if (closingIndex === -1) {
+   140→    return { frontmatter: {}, body: text };
+   141→  }
+   142→  const yamlBlock = trimmed.slice(3, closingIndex).trim();
+   143→  const body = trimmed.slice(closingIndex + 3).trim();
+   144→  const frontmatter: Record<string, any> = {};
+   145→
+   146→  for (const line of yamlBlock.split('\n')) {
+   147→    const colonIdx = line.indexOf(':');
+   148→    if (colonIdx === -1) continue;
+   149→    const key = line.slice(0, colonIdx).trim();
+   150→    let value: any = line.slice(colonIdx + 1).trim();
+   151→
+   152→    if (value === 'true') value = true;
+   153→    else if (value === 'false') value = false;
+   154→    else if (value === 'null' || value === '~') value = null;
+   155→    else if (/^-?\d+$/.test(value)) value = Number(value);
+   156→    else if (/^-?\d+\.\d+$/.test(value)) value = Number(value);
+   157→    else if (/^["']/.test(value) && /["']$/.test(value)) value = value.slice(1, -1);
+   158→
+   159→    const keys = key.split('.');
+   160→    let target = frontmatter;
+   161→    for (let i = 0; i < keys.length - 1; i++) {
+   162→      if (target[keys[i]] === undefined) target[keys[i]] = {};
+   163→      target = target[keys[i]] as Record<string, any>;
+   164→    }
+   165→    target[keys[keys.length - 1]] = value;
+   166→  }
+   167→
+   168→  return { frontmatter, body };
+   169→}
+   170→
+   171→// ---------------------------------------------------------------------------
+   172→// Prompt construction helpers
+   173→// ---------------------------------------------------------------------------
+   174→
+   175→const SYSTEM_PROMPT = `You are an action evaluator for NeuroCLI, an AI-powered terminal coding assistant.
+   176→Your job is to evaluate whether a proposed tool action should be approved, denied, modified, or escalated to the user.
+   177→
+   178→You MUST respond with a JSON object (and nothing else) in the following format:
+   179→{
+   180→  "decision": "approve" | "deny" | "modify" | "ask-user",
+   181→  "confidence": <number between 0 and 1>,
+   182→  "reasoning": "<your reasoning>",
+   183→  "suggestedModification": { ... } // only when decision is "modify"
+   184→  "userQuestion": "<question>"      // only when decision is "ask-user"
+   185→}
+   186→
+   187→Guidelines:
+   188→- "approve": The action is safe and aligns with project goals.
+   189→- "deny": The action is unsafe, destructive, or violates the rubric.
+   190→- "modify": The action is mostly fine but needs adjustments to the arguments.
+   191→- "ask-user": You are uncertain and the user should decide.
+   192→- If your confidence is below 0.7, prefer "ask-user" over a direct decision.
+   193→- Always explain your reasoning clearly.`;
+   194→
+   195→function buildEvaluationPrompt(
+   196→  hook: LLMEvaluatorHook,
+   197→  context: EvaluationContext,
+   198→): string {
+   199→  const parts: string[] = [];
+   200→
+   201→  parts.push(`## Evaluation Rubric\n${hook.rubric}`);
+   202→
+   203→  parts.push(`## Proposed Action\nTool: ${context.toolName}`);
+   204→  parts.push(`Arguments:\n\`\`\`json\n${JSON.stringify(context.toolArgs, null, 2)}\n\`\`\``);
+   205→
+   206→  if (context.fileChanges && context.fileChanges.length > 0) {
+   207→    parts.push(`## File Changes\n${context.fileChanges.map(fc => {
+   208→      const label = fc.type === 'create' ? 'CREATE' : fc.type === 'delete' ? 'DELETE' : 'MODIFY';
+   209→      return `- [${label}] ${fc.path}${fc.diff ? '\n' + fc.diff : ''}`;
+   210→    }).join('\n')}`);
+   211→  }
+   212→
+   213→  if (context.commandOutput) {
+   214→    parts.push(`## Command Output\n\`\`\`\n${context.commandOutput.slice(0, 4000)}\n\`\`\``);
+   215→  }
+   216→
+   217→  if (context.conversationContext) {
+   218→    parts.push(`## Conversation Context\n${context.conversationContext.slice(0, 4000)}`);
+   219→  }
+   220→
+   221→  if (context.projectContext) {
+   222→    parts.push(`## Project Context (NEURO.md)\n${context.projectContext.slice(0, 4000)}`);
+   223→  }
+   224→
+   225→  return parts.join('\n\n');
+   226→}
+   227→
+   228→// ---------------------------------------------------------------------------
+   229→// Cache key computation
+   230→// ---------------------------------------------------------------------------
+   231→
+   232→function computeCacheKey(
+   233→  hook: LLMEvaluatorHook,
+   234→  context: EvaluationContext,
+   235→): string {
+   236→  const payload = JSON.stringify({
+   237→    tool: context.toolName,
+   238→    args: context.toolArgs,
+   239→    rubric: hook.rubric,
+   240→    model: hook.evaluatorModel,
+   241→  });
+   242→  return createHash('sha256').update(payload).digest('hex');
+   243→}
+   244→
+   245→// ---------------------------------------------------------------------------
+   246→// Ollama client (minimal, for local evaluation models)
+   247→// ---------------------------------------------------------------------------
+   248→
+   249→async function callOllama(
+   250→  baseUrl: string,
+   251→  model: string,
+   252→  systemPrompt: string,
+   253→  userPrompt: string,
+   254→  temperature: number,
+   255→  maxTokens: number,
+   256→): Promise<{ content: string; duration: number }> {
+   257→  const start = Date.now();
+   258→  const response = await fetch(`${baseUrl}/api/chat`, {
+   259→    method: 'POST',
+   260→    headers: { 'Content-Type': 'application/json' },
+   261→    body: JSON.stringify({
+   262→      model,
+   263→      messages: [
+   264→        { role: 'system', content: systemPrompt },
+   265→        { role: 'user', content: userPrompt },
+   266→      ],
+   267→      stream: false,
+   268→      options: { temperature, num_predict: maxTokens },
+   269→    }),
+   270→    signal: AbortSignal.timeout(60_000),
+   271→  });
+   272→
+   273→  if (!response.ok) {
+   274→    const body = await response.text();
+   275→    throw new Error(`Ollama API error (${response.status}): ${body}`);
+   276→  }
+   277→
+   278→  const data = await response.json() as any;
+   279→  const content: string = data.message?.content ?? '';
+   280→  return { content, duration: Date.now() - start };
+   281→}
+   282→
+   283→// ---------------------------------------------------------------------------
+   284→// LLMEvaluatorManager
+   285→// ---------------------------------------------------------------------------
+   286→
+   287→export class LLMEvaluatorManager {
+   288→  private evaluators: Map<string, LLMEvaluatorHook> = new Map();
+   289→  private eventIndex: Map<HookEvent, string[]> = new Map();
+   290→  private cache: Map<string, CacheEntry> = new Map();
+   291→  private stats: EvaluatorStats = {
+   292→    totalEvaluations: 0,
+   293→    totalTokensUsed: 0,
+   294→    totalCost: 0,
+   295→    cacheHits: 0,
+   296→    cacheMisses: 0,
+   297→    decisions: { approve: 0, deny: 0, modify: 0, 'ask-user': 0 },
+   298→    byEvaluator: {},
+   299→  };
+   300→
+   301→  private readonly defaultModel: string;
+   302→  private readonly defaultRubric: string;
+   303→  private readonly confidenceThreshold: number;
+   304→  private readonly cacheEnabled: boolean;
+   305→  private readonly defaultCacheTTL: number;
+   306→  private readonly maxCacheEntries: number;
+   307→  private readonly ollamaBaseUrl: string;
+   308→
+   309→  constructor(
+   310→    private apiClient: OpenRouterClient,
+   311→    config?: EvaluatorConfig,
+   312→  ) {
+   313→    this.defaultModel = config?.defaultModel ?? 'google/gemma-4-31b-it:free';
+   314→    this.defaultRubric = config?.defaultRubric ?? 'Evaluate whether this action is safe and aligns with project goals';
+   315→    this.confidenceThreshold = config?.confidenceThreshold ?? 0.7;
+   316→    this.cacheEnabled = config?.cacheEnabled ?? true;
+   317→    this.defaultCacheTTL = config?.defaultCacheTTL ?? 600;
+   318→    this.maxCacheEntries = config?.maxCacheEntries ?? 1000;
+   319→    this.ollamaBaseUrl = config?.ollamaBaseUrl ?? 'http://localhost:11434';
+   320→  }
+   321→
+   322→  // -----------------------------------------------------------------------
+   323→  // Evaluator registration
+   324→  // -----------------------------------------------------------------------
+   325→
+   326→  /** Register a new LLM evaluator hook. */
+   327→  registerEvaluator(hook: LLMEvaluatorHook): void {
+   328→    const resolved: LLMEvaluatorHook = {
+   329→      ...hook,
+   330→      evaluatorModel: hook.evaluatorModel || this.defaultModel,
+   331→      rubric: hook.rubric || this.defaultRubric,
+   332→      maxTokens: hook.maxTokens || 512,
+   333→      temperature: hook.temperature ?? 0.2,
+   334→      cacheDecisions: hook.cacheDecisions ?? this.cacheEnabled,
+   335→      cacheTTL: hook.cacheTTL || this.defaultCacheTTL,
+   336→      enabled: hook.enabled !== false,
+   337→    };
+   338→
+   339→    this.evaluators.set(resolved.id, resolved);
+   340→
+   341→    if (!this.eventIndex.has(resolved.event)) {
+   342→      this.eventIndex.set(resolved.event, []);
+   343→    }
+   344→    const list = this.eventIndex.get(resolved.event)!;
+   345→    if (!list.includes(resolved.id)) {
+   346→      list.push(resolved.id);
+   347→    }
+   348→  }
+   349→
+   350→  /** Remove a registered evaluator by its id. */
+   351→  unregisterEvaluator(id: string): void {
+   352→    const hook = this.evaluators.get(id);
+   353→    if (!hook) return;
+   354→
+   355→    this.evaluators.delete(id);
+   356→
+   357→    const list = this.eventIndex.get(hook.event);
+   358→    if (list) {
+   359→      const idx = list.indexOf(id);
+   360→      if (idx !== -1) list.splice(idx, 1);
+   361→      if (list.length === 0) this.eventIndex.delete(hook.event);
+   362→    }
+   363→
+   364→    delete this.stats.byEvaluator[id];
+   365→  }
+   366→
+   367→  /** Return all registered evaluators. */
+   368→  listEvaluators(): LLMEvaluatorHook[] {
+   369→    return Array.from(this.evaluators.values());
+   370→  }
+   371→
+   372→  // -----------------------------------------------------------------------
+   373→  // Core evaluation
+   374→  // -----------------------------------------------------------------------
+   375→
+   376→  /**
+   377→   * Run all evaluators registered for `event` against the given `context`.
+   378→   * Evaluators are executed sequentially in registration order.
+   379→   * The first "deny" short-circuits; "modify" updates the context for
+   380→   * subsequent evaluators; "ask-user" is collected and returned.
+   381→   */
+   382→  async evaluate(event: HookEvent, context: EvaluationContext): Promise<EvaluationResult> {
+   383→    const evaluatorIds = this.eventIndex.get(event) ?? [];
+   384→    const matchingEvaluators = evaluatorIds
+   385→      .map(id => this.evaluators.get(id)!)
+   386→      .filter(h => h.enabled !== false)
+   387→      .filter(h => {
+   388→        if (!h.matcher) return true;
+   389→        return new RegExp(h.matcher).test(context.toolName);
+   390→      });
+   391→
+   392→    if (matchingEvaluators.length === 0) {
+   393→      return {
+   394→        decision: 'approve',
+   395→        confidence: 1.0,
+   396→        reasoning: 'No evaluators registered for this event/tool combination.',
+   397→        cached: false,
+   398→        modelUsed: 'none',
+   399→        tokensUsed: 0,
+   400→        duration: 0,
+   401→      };
+   402→    }
+   403→
+   404→    let lastResult: EvaluationResult | null = null;
+   405→    let aggregatedTokens = 0;
+   406→    let aggregatedDuration = 0;
+   407→
+   408→    for (const hook of matchingEvaluators) {
+   409→      const result = await this.evaluateSingle(hook, context);
+   410→
+   411→      aggregatedTokens += result.tokensUsed;
+   412→      aggregatedDuration += result.duration;
+   413→
+   414→      // If confidence is below threshold, escalate to ask-user
+   415→      if (result.confidence < this.confidenceThreshold && result.decision !== 'ask-user') {
+   416→        result.decision = 'ask-user';
+   417→        result.userQuestion = `Low confidence (${(result.confidence * 100).toFixed(0)}%) on evaluation. Reasoning: ${result.reasoning}`;
+   418→      }
+   419→
+   420→      // Track stats
+   421→      this.stats.totalEvaluations += 1;
+   422→      this.stats.totalTokensUsed += result.tokensUsed;
+   423→      this.stats.decisions[result.decision] = (this.stats.decisions[result.decision] ?? 0) + 1;
+   424→
+   425→      if (!this.stats.byEvaluator[hook.id]) {
+   426→        this.stats.byEvaluator[hook.id] = { evaluations: 0, tokensUsed: 0, cost: 0 };
+   427→      }
+   428→      this.stats.byEvaluator[hook.id].evaluations += 1;
+   429→      this.stats.byEvaluator[hook.id].tokensUsed += result.tokensUsed;
+   430→
+   431→      lastResult = result;
+   432→
+   433→      // Short-circuit on deny
+   434→      if (result.decision === 'deny') {
+   435→        return {
+   436→          ...result,
+   437→          tokensUsed: aggregatedTokens,
+   438→          duration: aggregatedDuration,
+   439→        };
+   440→      }
+   441→
+   442→      // Apply modifications to context for downstream evaluators
+   443→      if (result.decision === 'modify' && result.suggestedModification) {
+   444→        context.toolArgs = { ...context.toolArgs, ...result.suggestedModification };
+   445→      }
+   446→    }
+   447→
+   448→    return {
+   449→      ...lastResult!,
+   450→      tokensUsed: aggregatedTokens,
+   451→      duration: aggregatedDuration,
+   452→    };
+   453→  }
+   454→
+   455→  // -----------------------------------------------------------------------
+   456→  // Single evaluator execution
+   457→  // -----------------------------------------------------------------------
+   458→
+   459→  private async evaluateSingle(
+   460→    hook: LLMEvaluatorHook,
+   461→    context: EvaluationContext,
+   462→  ): Promise<EvaluationResult> {
+   463→    const startTime = Date.now();
+   464→
+   465→    // Check cache
+   466→    if (hook.cacheDecisions) {
+   467→      const cached = this.getFromCache(hook, context);
+   468→      if (cached) {
+   469→        this.stats.cacheHits += 1;
+   470→        return { ...cached, cached: true, duration: Date.now() - startTime };
+   471→      }
+   472→      this.stats.cacheMisses += 1;
+   473→    }
+   474→
+   475→    // Build prompt
+   476→    const userPrompt = buildEvaluationPrompt(hook, context);
+   477→
+   478→    let rawContent: string;
+   479→    let tokensUsed: number;
+   480→    let cost: number;
+   481→    let modelUsed = hook.evaluatorModel;
+   482→
+   483→    try {
+   484→      if (hook.provider === 'ollama') {
+   485→        const ollamaResult = await callOllama(
+   486→          hook.ollamaBaseUrl ?? this.ollamaBaseUrl,
+   487→          hook.evaluatorModel,
+   488→          SYSTEM_PROMPT,
+   489→          userPrompt,
+   490→          hook.temperature,
+   491→          hook.maxTokens,
+   492→        );
+   493→        rawContent = ollamaResult.content;
+   494→        tokensUsed = this.estimateTokens(rawContent);
+   495→        cost = 0; // local model, no cost
+   496→        modelUsed = hook.evaluatorModel;
+   497→      } else {
+   498→        // Use OpenRouter client
+   499→        const chatResult = await this.apiClient.quickChat(
+   500→          hook.evaluatorModel,
+   501→          [
+   502→            { role: 'system', content: SYSTEM_PROMPT },
+   503→            { role: 'user', content: userPrompt },
+   504→          ],
+   505→          undefined,
+   506→          hook.temperature,
+   507→        );
+   508→        rawContent = chatResult.content;
+   509→        tokensUsed = chatResult.usage.inputTokens + chatResult.usage.outputTokens;
+   510→        cost = chatResult.usage.cost;
+   511→        modelUsed = hook.evaluatorModel;
+   512→      }
+   513→    } catch (error) {
+   514→      // On error, fall back to the hook's default action
+   515→      return {
+   516→        decision: hook.action,
+   517→        confidence: 0,
+   518→        reasoning: `Evaluator call failed: ${error instanceof Error ? error.message : String(error)}. Falling back to default action.`,
+   519→        cached: false,
+   520→        modelUsed: 'error-fallback',
+   521→        tokensUsed: 0,
+   522→        duration: Date.now() - startTime,
+   523→      };
+   524→    }
+   525→
+   526→    // Parse the LLM response
+   527→    const result = this.parseEvaluationResponse(rawContent, modelUsed, tokensUsed);
+   528→    result.duration = Date.now() - startTime;
+   529→    result.cached = false;
+   530→
+   531→    // Track cost
+   532→    this.stats.totalCost += cost;
+   533→    if (this.stats.byEvaluator[hook.id]) {
+   534→      this.stats.byEvaluator[hook.id].cost += cost;
+   535→    }
+   536→
+   537→    // Store in cache
+   538→    if (hook.cacheDecisions) {
+   539→      this.storeInCache(hook, context, result);
+   540→    }
+   541→
+   542→    return result;
+   543→  }
+   544→
+   545→  // -----------------------------------------------------------------------
+   546→  // Response parsing
+   547→  // -----------------------------------------------------------------------
+   548→
+   549→  private parseEvaluationResponse(
+   550→    rawContent: string,
+   551→    modelUsed: string,
+   552→    tokensUsed: number,
+   553→  ): EvaluationResult {
+   554→    // Try to extract JSON from the response
+   555→    let parsed: any = null;
+   556→
+   557→    // Attempt 1: Direct parse of the full content
+   558→    try {
+   559→      parsed = JSON.parse(rawContent);
+   560→    } catch {
+   561→      // Attempt 2: Extract JSON from markdown code fences
+   562→      const fenceMatch = rawContent.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+   563→      if (fenceMatch) {
+   564→        try {
+   565→          parsed = JSON.parse(fenceMatch[1]);
+   566→        } catch {
+   567→          // continue to fallback
+   568→        }
+   569→      }
+   570→
+   571→      // Attempt 3: Find the first { ... } block
+   572→      if (!parsed) {
+   573→        const braceMatch = rawContent.match(/\{[\s\S]*\}/);
+   574→        if (braceMatch) {
+   575→          try {
+   576→            parsed = JSON.parse(braceMatch[0]);
+   577→          } catch {
+   578→            // continue to fallback
+   579→          }
+   580→        }
+   581→      }
+   582→    }
+   583→
+   584→    // Fallback: if we could not parse JSON, create a heuristic result
+   585→    if (!parsed || typeof parsed !== 'object') {
+   586→      const lower = rawContent.toLowerCase();
+   587→      let decision: 'approve' | 'deny' | 'modify' | 'ask-user' = 'approve';
+   588→      if (lower.includes('deny') || lower.includes('block') || lower.includes('reject')) {
+   589→        decision = 'deny';
+   590→      } else if (lower.includes('modify') || lower.includes('adjust') || lower.includes('suggest')) {
+   591→        decision = 'modify';
+   592→      } else if (lower.includes('ask') || lower.includes('unsure') || lower.includes('uncertain')) {
+   593→        decision = 'ask-user';
+   594→      }
+   595→
+   596→      return {
+   597→        decision,
+   598→        confidence: 0.5,
+   599→        reasoning: rawContent.slice(0, 1000),
+   600→        cached: false,
+   601→        modelUsed,
+   602→        tokensUsed,
+   603→        duration: 0,
+   604→      };
+   605→    }
+   606→
+   607→    // Validate and normalise parsed object
+   608→    const validDecisions = new Set(['approve', 'deny', 'modify', 'ask-user']);
+   609→    const decision = validDecisions.has(parsed.decision) ? parsed.decision : 'ask-user';
+   610→    const confidence = typeof parsed.confidence === 'number'
+   611→      ? Math.max(0, Math.min(1, parsed.confidence))
+   612→      : 0.5;
+   613→    const reasoning = typeof parsed.reasoning === 'string' ? parsed.reasoning : '';
+   614→    const suggestedModification = parsed.suggestedModification ?? undefined;
+   615→    const userQuestion = parsed.userQuestion ?? undefined;
+   616→
+   617→    return {
+   618→      decision,
+   619→      confidence,
+   620→      reasoning,
+   621→      suggestedModification,
+   622→      userQuestion,
+   623→      cached: false,
+   624→      modelUsed,
+   625→      tokensUsed,
+   626→      duration: 0,
+   627→    };
+   628→  }
+   629→
+   630→  // -----------------------------------------------------------------------
+   631→  // Cache management
+   632→  // -----------------------------------------------------------------------
+   633→
+   634→  private getFromCache(hook: LLMEvaluatorHook, context: EvaluationContext): EvaluationResult | null {
+   635→    const key = computeCacheKey(hook, context);
+   636→    const entry = this.cache.get(key);
+   637→    if (!entry) return null;
+   638→    if (Date.now() > entry.expiresAt) {
+   639→      this.cache.delete(key);
+   640→      return null;
+   641→    }
+   642→    return { ...entry.result };
+   643→  }
+   644→
+   645→  private storeInCache(
+   646→    hook: LLMEvaluatorHook,
+   647→    context: EvaluationContext,
+   648→    result: EvaluationResult,
+   649→  ): void {
+   650→    // Evict oldest entries when cache is full
+   651→    if (this.cache.size >= this.maxCacheEntries) {
+   652→      const keys = Array.from(this.cache.keys());
+   653→      const toDelete = Math.ceil(this.maxCacheEntries * 0.2);
+   654→      for (let i = 0; i < toDelete && i < keys.length; i++) {
+   655→        this.cache.delete(keys[i]);
+   656→      }
+   657→    }
+   658→
+   659→    const key = computeCacheKey(hook, context);
+   660→    this.cache.set(key, {
+   661→      result: { ...result },
+   662→      expiresAt: Date.now() + hook.cacheTTL * 1000,
+   663→    });
+   664→  }
+   665→
+   666→  /** Remove all cached decisions. */
+   667→  clearCache(): void {
+   668→    this.cache.clear();
+   669→  }
+   670→
+   671→  // -----------------------------------------------------------------------
+   672→  // Loading evaluators from .neuro/hooks/ YAML files
+   673→  // -----------------------------------------------------------------------
+   674→
+   675→  /**
+   676→   * Scan `dir/.neuro/hooks/` for YAML files with frontmatter and register
+   677→   * them as evaluators.
+   678→   *
+   679→   * Expected file format:
+   680→   * ```
+   681→   * ---
+   682→   * id: my-evaluator
+   683→   * name: My Safety Evaluator
+   684→   * event: BeforeTool
+   685→   * evaluatorModel: google/gemma-4-31b-it:free
+   686→   * action: deny
+   687→   * maxTokens: 256
+   688→   * temperature: 0.1
+   689→   * cacheDecisions: true
+   690→   * cacheTTL: 300
+   691→   * matcher: "write|delete|exec"
+   692→   * provider: openrouter
+   693→   * ---
+   694→   * Never allow modifications to .env files or deletion of test files.
+   695→   * ```
+   696→   *
+   697→   * The body (after frontmatter) becomes the rubric.
+   698→   */
+   699→  async loadFromConfig(dir: string): Promise<void> {
+   700→    const hooksDir = join(dir, '.neuro', 'hooks');
+   701→
+   702→    let entries: string[];
+   703→    try {
+   704→      entries = await readdir(hooksDir);
+   705→    } catch {
+   706→      // Directory does not exist — nothing to load
+   707→      return;
+   708→    }
+   709→
+   710→    for (const entry of entries) {
+   711→      if (!entry.endsWith('.yml') && !entry.endsWith('.yaml')) continue;
+   712→
+   713→      const filePath = join(hooksDir, entry);
+   714→      let fileStat: import('node:fs').Stats;
+   715→      try {
+   716→        fileStat = await stat(filePath);
+   717→      } catch {
+   718→        continue;
+   719→      }
+   720→      if (!fileStat.isFile()) continue;
+   721→
+   722→      const content = await readFile(filePath, 'utf-8');
+   723→      const { frontmatter, body } = parseYamlFrontmatter(content);
+   724→
+   725→      if (!frontmatter.id || !frontmatter.event) {
+   726→        // Skip files missing required fields
+   727→        continue;
+   728→      }
+   729→
+   730→      const hook: LLMEvaluatorHook = {
+   731→        id: String(frontmatter.id),
+   732→        name: String(frontmatter.name ?? frontmatter.id),
+   733→        event: frontmatter.event as HookEvent,
+   734→        evaluatorModel: String(frontmatter.evaluatorModel ?? this.defaultModel),
+   735→        rubric: String(frontmatter.rubric ?? body ?? this.defaultRubric),
+   736→        action: (frontmatter.action as LLMEvaluatorHook['action']) ?? 'ask-user',
+   737→        maxTokens: typeof frontmatter.maxTokens === 'number' ? frontmatter.maxTokens : 512,
+   738→        temperature: typeof frontmatter.temperature === 'number' ? frontmatter.temperature : 0.2,
+   739→        cacheDecisions: frontmatter.cacheDecisions !== false,
+   740→        cacheTTL: typeof frontmatter.cacheTTL === 'number' ? frontmatter.cacheTTL : this.defaultCacheTTL,
+   741→        matcher: frontmatter.matcher != null ? String(frontmatter.matcher) : undefined,
+   742→        enabled: frontmatter.enabled !== false,
+   743→        provider: (frontmatter.provider as LLMEvaluatorHook['provider']) ?? undefined,
+   744→        ollamaBaseUrl: frontmatter.ollamaBaseUrl != null ? String(frontmatter.ollamaBaseUrl) : undefined,
+   745→      };
+   746→
+   747→      this.registerEvaluator(hook);
+   748→    }
+   749→  }
+   750→
+   751→  // -----------------------------------------------------------------------
+   752→  // Statistics
+   753→  // -----------------------------------------------------------------------
+   754→
+   755→  /** Return a snapshot of aggregate evaluation statistics. */
+   756→  getStats(): EvaluatorStats {
+   757→    return {
+   758→      totalEvaluations: this.stats.totalEvaluations,
+   759→      totalTokensUsed: this.stats.totalTokensUsed,
+   760→      totalCost: this.stats.totalCost,
+   761→      cacheHits: this.stats.cacheHits,
+   762→      cacheMisses: this.stats.cacheMisses,
+   763→      decisions: { ...this.stats.decisions },
+   764→      byEvaluator: Object.fromEntries(
+   765→        Object.entries(this.stats.byEvaluator).map(([id, s]) => [id, { ...s }]),
+   766→      ),
+   767→    };
+   768→  }
+   769→
+   770→  // -----------------------------------------------------------------------
+   771→  // Helpers
+   772→  // -----------------------------------------------------------------------
+   773→
+   774→  /** Rough token estimator when exact counts are unavailable. */
+   775→  private estimateTokens(text: string): number {
+   776→    return Math.ceil(text.length / 4);
+   777→  }
+   778→}
+   779→
