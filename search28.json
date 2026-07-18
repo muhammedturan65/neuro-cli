@@ -1,0 +1,47 @@
+[
+  {
+    "url": "https://blakecrosley.com/guides/codex",
+    "name": "Codex CLI Guide 2026: Setup, Sandbox, AGENTS.md & MCP",
+    "snippet": "Complete Codex CLI reference: install and auth, models and pricing, sandbox and approval modes, AGENTS.md, MCP, skills, and cloud tasks.",
+    "host_name": "blakecrosley.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://aiopsschool.com/blog/complete-codex-slash-commands-and-cli-options-guide-updated-april-2026",
+    "name": "Complete Codex / Slash Commands and CLI Options Guide",
+    "snippet": "Slash commands are not the same as shell commands. They control the Codex session itself: model selection, approvals, review mode, conversation ... Missing: Rust kernel network",
+    "host_name": "aiopsschool.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.aibuilderclub.com/blog/codex-cli-guide-2026",
+    "name": "Codex CLI Guide (2026): How It Works, Costs, Models",
+    "snippet": "Full-auto plus the kernel sandbox is the combination that makes unattended runs safe enough to walk away from. Missing: network plugins",
+    "host_name": "www.aibuilderclub.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/openai/codex",
+    "name": "openai/codex: Lightweight coding agent that runs in your terminal",
+    "snippet": "Codex CLI is a coding agent from OpenAI that runs locally on your computer. Installing and running Codex CLI Run the following on Mac or Linux to install Codex Missing: isolation | Show results with: isolation",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://itecsonline.com/post/how-to-install-codex-cli-on-windows-2026-guide",
+    "name": "How To Install Codex CLI on Windows (2026 Guide) - ITECS",
+    "snippet": "This guide walks through every viable installation method for Windows in 2026, explains the security implications of each approach, and gets you ... Missing: kernel | Show results with: kernel",
+    "host_name": "itecsonline.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  }
+]

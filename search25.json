@@ -1,0 +1,47 @@
+[
+  {
+    "url": "https://www.mindstudio.ai/blog/claude-code-auto-mode-goal-routines-autonomous-agents",
+    "name": "Claude Code Auto Mode, /goal, and /routines: How to Run Agents",
+    "snippet": "Learn how to combine Claude Code's auto mode, /goal command, and routines to build AI workflows that run scheduled tasks without human supervision. Missing: daemon | Show results with: daemon\nLearn how to combine Claude Code's auto mode, /goal command, and routines to build AI workflows that run scheduled tasks without human ...\nLearn how to combine Claude Code's auto mode, /goal command, and routines to build AI workflows that run scheduled tasks without human ... Missing: daemon | Show results with: daemon",
+    "host_name": "www.mindstudio.ai",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://claudefa.st/blog/guide/development/scheduled-tasks",
+    "name": "Claude Code Scheduled Tasks: Complete Setup Guide (2026)",
+    "snippet": "Claude Code scheduled tasks let you save a prompt and have it run automatically on a recurring cadence. No more opening a new session every ... Missing: background daemon",
+    "host_name": "claudefa.st",
+    "rank": 1,
+    "date": "Jul 14, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://code.claude.com/docs/en/whats-new/2026-w21",
+    "name": "Week 21 · May 18–22, 2026 - Claude Code Docs",
+    "snippet": "Auto mode is now available on the Pro plan and supports Sonnet 4.6 alongside Opus. It replaces permission prompts with background safety checks: routine ...",
+    "host_name": "code.claude.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/ClaudeAI/comments/1rna5mb/anthropic_just_made_claude_code_run_without_you",
+    "name": "Anthropic just made Claude Code run without you. Scheduled tasks",
+    "snippet": "Claude Code now supports local scheduled tasks through the /loop command. You can set up recurring jobs at fixed intervals (minutes, hours, ...\nYou can set up recurring jobs at fixed intervals (minutes, hours, days) that run in the background as long as Claude Code is active. Claude Code just shipped /loop - schedule recurring tasks for up to 3 ... Claude Code Scheduled Tasks: Why Automated AI Workflows Are Here More results from www.reddit.com\nClaude Code now supports local scheduled tasks through the /loop command. You can set up recurring jobs at fixed intervals (minutes, hours, ... Claude now works my night shift, here's how I set up scheduled autonomous coding Thoughts on Claude Code 2.1.139 Agent View & Background Sessions More results from www.reddit.com",
+    "host_name": "www.reddit.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/anthropics/claude-code/issues/28229",
+    "name": "[FEATURE] Native agent scheduling / daemon mode (watch + wake)",
+    "snippet": "Claude Code sessions are ephemeral -- when a session ends, all background work dies. Run an agent on a schedule. Keep an agent alive between ...\nClaude Code sessions are ephemeral -- when a session ends, all background work dies. Keep an agent alive between sessions (daemon mode for long ...",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  }
+]

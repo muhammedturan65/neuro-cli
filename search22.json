@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://geminicli.com/extensions",
+    "name": "Browse Extensions - Gemini CLI",
+    "snippet": "A Gemini CLI extension that allows you to use the Gemini CLI to orchestrate the Jules asynchronous agent to perform coding tasks like bug fixing ...",
+    "host_name": "geminicli.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://geminicliextensions.com/browse",
+    "name": "Browse Extensions - Gemini CLI",
+    "snippet": "Explore the complete directory of Gemini CLI extensions. Search, filter by category, and discover AI-powered command line tools for developers.",
+    "host_name": "geminicliextensions.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://codelabs.developers.google.com/getting-started-gemini-cli-extensions",
+    "name": "Getting Started with Gemini CLI Extensions - Google Codelabs",
+    "snippet": "Use the gemini extensions command-line interface to install, list, and manage Extensions. Explore a few Gemini CLI Extensions. What you'll learn.",
+    "host_name": "codelabs.developers.google.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/google-gemini/gemini-cli",
+    "name": "GitHub - google-gemini/gemini-cli: An open-source AI agent that brings",
+    "snippet": "Gemini CLI is an open-source AI agent that brings the power of Gemini directly into your terminal. Built-in tools: Google Search grounding, ...",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "Jul 15, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://blog.google/innovation-and-ai/technology/developers-tools/gemini-cli-extensions",
+    "name": "Now open for building: Introducing Gemini CLI extensions - Google Blog",
+    "snippet": "Gemini CLI extensions are here so you can customize your command line. Integrate the tools you want from Google partners like Dynatrace Elastic ... Missing: list | Show results with: list",
+    "host_name": "blog.google",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://geminicli.com/docs/extensions/writing-extensions",
+    "name": "Build Gemini CLI extensions",
+    "snippet": "Gemini CLI extensions let you expand the capabilities of Gemini CLI by adding custom tools, commands, and context. This guide walks you through ...",
+    "host_name": "geminicli.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://cloud.google.com/blog/topics/developers-practitioners/ship-code-within-minutes-with-the-gemini-cli-devops-extension",
+    "name": "Ship code within minutes with the Gemini CLI DevOps Extension",
+    "snippet": "Ship code to Google Cloud in minutes with the new CI/CD extension for Gemini CLI. Automate deployments and pipelines using AI-powered skills ... Missing: list | Show results with: list",
+    "host_name": "cloud.google.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://aiidelist.com/ide/gemini-cli",
+    "name": "Gemini CLI Review: Google Terminal AI Agent, Pricing, Migration, and",
+    "snippet": "Gemini CLI is Google's open-source terminal AI agent for coding, codebase exploration, task automation, and MCP-connected workflows.",
+    "host_name": "aiidelist.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.digitalapplied.com/blog/gemini-cli-to-antigravity-cli-migration-june-18-2026-guide",
+    "name": "Gemini CLI Dies June 18: The Antigravity Migration Guide",
+    "snippet": "The Gemini CLI shutdown lands on June 18, 2026: on that date Google's open-source terminal coding agent stops serving Google AI Pro, Ultra, and ...",
+    "host_name": "www.digitalapplied.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.youtube.com/watch?v=Q9qWsRd9yGM&vl=en",
+    "name": "Google Gemini CLI Full Walkthrough 2026 | The Best Free AI  - YouTube",
+    "snippet": "... Google Cloud developer tools 2026, Gemini CLI slash commands, multimodal AI terminal, fast software development 2026. Missing: features list extensions",
+    "host_name": "www.youtube.com",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]

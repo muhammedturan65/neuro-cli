@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://www.continue.dev",
+    "name": "Continue.dev",
+    "snippet": "Continue has been acquired by Cursor. Our mission has always been to ensure developers are amplified, not automated, and we continue in that commitment.",
+    "host_name": "www.continue.dev",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.youtube.com/watch?v=XADG-qsFafg",
+    "name": "Continue: AI Auto-Completes Code To Create Software For FREE!",
+    "snippet": "In this video, we dive deep into the revolutionary Continue IDE extension, an open-source tool designed to enhance your AI software ...",
+    "host_name": "www.youtube.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/vscode/comments/1je1i6h/what_are_the_best_ai_code_assistants_for_vscode",
+    "name": "What are the best AI code assistants for vscode in 2025? - Reddit",
+    "snippet": "You can give Continue.dev extension a try and use a free Codestral API key for auto-complete. code completion is good at handling repetitive ...",
+    "host_name": "www.reddit.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://weavai.app/blog/en/2026/04/25/continue-dev-review-2026-free-open-source-ai-coding",
+    "name": "Continue.dev Review 2026: Free Open Source AI Coding - AI 織夢",
+    "snippet": "Continue.dev provides three core IDE experiences: Autocompletion (Tab completion), Sidebar Chat, and the new Agent Autonomous Execution Mode ...",
+    "host_name": "weavai.app",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://skywork.ai/skypage/ko/Continue.dev-In-Depth:-My-Guide-to-the-Future-of-AI-Assisted-Development/1972847152152506368",
+    "name": "Continue.dev In-Depth: My Guide to the Future of AI-Assisted  - Skywork",
+    "snippet": "Discover Continue.dev, the open-source AI development framework empowering developers with unmatched control, flexibility, and privacy.",
+    "host_name": "skywork.ai",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.lowcode.agency/blog/cursor-ai-vs-continue-dev",
+    "name": "Cursor vs Continue.dev: Which AI IDE Wins 2026? | LOW/CODE",
+    "snippet": "Continue is an open-source AI coding assistant that works as an extension in VS Code and JetBrains, letting you connect any AI model and fully ...",
+    "host_name": "www.lowcode.agency",
+    "rank": 5,
+    "date": "Jul 11, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/orgs/community/discussions/187143",
+    "name": "Best AI Tools for Developers in 2026: What Are Your Must-Have  - GitHub",
+    "snippet": "OpenCode / Codex CLI‑style tools. Open‑source CLI tools that let you run AI‑assisted coding in the terminal, paying only for the LLM API.",
+    "host_name": "github.com",
+    "rank": 6,
+    "date": "Jul 17, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://pristren.com/blog/continue-dev-open-source-copilot",
+    "name": "Continue.dev Review 2026: Is the Open Source Copilot Worth It?",
+    "snippet": "Continue.dev is a free, open source VS Code and JetBrains extension that gives you AI autocomplete, chat, and codebase search without paying a ...",
+    "host_name": "pristren.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://renard-digital.fr/blog/en/ai-coding-terminal-comparison",
+    "name": "AI Coding in the Terminal: OpenCode vs Continue.dev vs Aider vs Zed vs",
+    "snippet": "Continue is an extension for VS Code and JetBrains that brings AI chat, inline edits, and tab-autocomplete directly into your editor. Think of ...",
+    "host_name": "renard-digital.fr",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.sitepoint.com/continuedev-for-developers-the-complete-local-ai-coding-assistant-setup",
+    "name": "Continue.dev for Developers: The Complete Local AI Coding Assistant",
+    "snippet": "Continue.dev offers a different path: an open-source, local-first AI coding assistant that works across VS Code, JetBrains IDEs, and Neovim.",
+    "host_name": "www.sitepoint.com",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]

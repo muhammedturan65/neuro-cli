@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://marketplace.visualstudio.com/items?itemName=RooVeterinaryInc.roo-cline",
+    "name": "Roo Code - Visual Studio Marketplace",
+    "snippet": "Extension for Visual Studio Code - A whole dev team of AI agents in your editor. The Roo Code Extension was shut down on May 15th. If you're looking for an ...",
+    "host_name": "marketplace.visualstudio.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://vibecodinghub.org/blog/roo-code-shutdown",
+    "name": "Roo Code Review 2026: Extension Shutdown, GitHub, VS Code",
+    "snippet": "Roo Code still has a public GitHub repo and VS Code Marketplace listing, but the official docs now say the extension was shut down on May 15, ...",
+    "host_name": "vibecodinghub.org",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://medium.com/@priyan.prabhu/low-cost-coding-agent-in-vs-code-roo-code-openrouter-4b8e92a1bf68",
+    "name": "Low-Cost Coding Agent in VS Code (Roo Code + OpenRouter) - Medium",
+    "snippet": "Roo Code has full tool-use capability. It can read and write files, execute terminal commands, search the web, call APIs, and reason across ...\nRoo Code has full tool-use capability. It can read and write files, execute terminal commands, search the web, call APIs, and reason across ... What is Roo Code? · Getting Your OpenRouter API...",
+    "host_name": "medium.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.lowcode.agency/blog/claude-code-vs-roo-code",
+    "name": "Claude Code vs Roo Code: Full Comparison 2026 | LOW/CODE",
+    "snippet": "Claude Code vs Roo Code compared feature by feature in 2026. Find out which AI coding tool wins on usability, pricing, and real development performance.",
+    "host_name": "www.lowcode.agency",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://sourceforge.net/projects/roo-code.mirror",
+    "name": "Roo Code download | SourceForge.net",
+    "snippet": "It combines a powerful VS Code extension with cloud-based agents that can take on real development tasks across GitHub, Slack, and the web.",
+    "host_name": "sourceforge.net",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://dev.to/lightningdev123/best-open-source-cli-coding-agents-to-explore-in-2026-5bn7",
+    "name": "Best AI Coding Assistants for the Terminal in 2026 - DEV Community",
+    "snippet": "Roo Code stopped active development and archived its repository in May 2026. Developers using Roo are now commonly migrating toward Cline or ...",
+    "host_name": "dev.to",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://aiagentstore.ai/ai-agent/roo-code",
+    "name": "Roo Code Review 2026: Features, Pricing & Alternatives - AI Agent Store",
+    "snippet": "Free The extension features auto-approval settings for streamlined workflows and can autonomously handle tasks like code generation, refactoring,",
+    "host_name": "aiagentstore.ai",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.datacamp.com/tutorial/roo-code",
+    "name": "Roo Code: A Guide With 7 Practical Examples - DataCamp",
+    "snippet": "Roo Code has on top of the common features all AI coding agents offer like MCP support, codebase chat, terminal command execution and file ...\nRoo Code is an open-source AI coding assistant that works as a VS Code extension. Unlike typical autocomplete tools, it serves as a customizable ...",
+    "host_name": "www.datacamp.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://weavai.app/blog/en/2026/05/11/roo-code-2026-custom-modes-boomerang-tasks-ai-agent",
+    "name": "Roo Code 2026: Custom Modes, Boomerang Tasks & AI Agent",
+    "snippet": "In 2026, Roo Code has become the most powerful free and open-source AI code agent in the VS Code ecosystem. The Custom Modes system makes AI ...",
+    "host_name": "weavai.app",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.qodo.ai/blog/roo-code-vs-cline",
+    "name": "Roo Code vs Cline: AI Coding Agents for VS Code - Qodo",
+    "snippet": "Roo Code and Cline are local, open-source IDE agents that help developers generate and modify code inside VS Code, each with a distinct ...",
+    "host_name": "www.qodo.ai",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]

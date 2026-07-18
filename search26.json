@@ -1,0 +1,47 @@
+[
+  {
+    "url": "https://www.deployhq.com/guides/aider",
+    "name": "How to Use Aider: Atomic Git Commits & Architect Mode (2026 Guide)",
+    "snippet": "This guide walks through installing Aider in 2026, /voice /paste integrations. Linters, tests, model defaults,",
+    "host_name": "www.deployhq.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://aider.chat",
+    "name": "Aider - AI Pair Programming in Your Terminal",
+    "snippet": "Linting & testing Automatically lint and test your code every time aider makes changes. Aider can fix problems detected by your linters and test suites. Missing: output multi- 2026",
+    "host_name": "aider.chat",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.nxcode.io/resources/news/aider-complete-tutorial-guide-install-setup-2026",
+    "name": "Aider Tutorial 2026: Complete Setup Guide for the Open - NxCode",
+    "snippet": "This guide walks through what Aider is, how to install it, how to actually use it day-to-day in 2026, and where it fits next to you. Run your ... Missing: input | Show results with: input",
+    "host_name": "www.nxcode.io",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://tooliverse.ai/tools/aider",
+    "name": "Aider Review 2026 - CLI AI Code Editor - Tooliverse",
+    "snippet": "Aider brings AI pair programming to your command line, Aider enables complex multi-file edits through a sophisticated architect mode that ...",
+    "host_name": "tooliverse.ai",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://weavai.app/blog/en/2026/04/24/aider-ai-review-2026-terminal-ai-vibe-coding-tool",
+    "name": "Aider AI Review 2026: Terminal AI & Vibe Coding Tool - WeavAI Blog",
+    "snippet": "Voice Input Support. By enabling voice input mode with the --voice parameter, developers can speak their requirements into a microphone.",
+    "host_name": "weavai.app",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  }
+]

@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://github.com/ciembor/agent-rules-books",
+    "name": "GitHub - ciembor/agent-rules-books: AGENTS.md rules / skills for AI",
+    "snippet": "AGENTS.md is a Markdown file used to give coding agents project-specific instructions, workflows, constraints, and coding standards. Missing: .clinerules 2025\nAI coding agent rules are project-level instructions that guide tools like Codex, Cursor, Claude Code, and GitHub Copilot when generating, reviewing, or ...",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/netresearch/agents-skill",
+    "name": "netresearch/agent-rules-skill: Agent Skill for generating AGENTS.md",
+    "snippet": "A simple Markdown convention for guiding AI coding agents, supported by Claude Code, GitHub Copilot, Cursor, and 60,000+ open-source projects. Missing: .cursorrules .clinerules system 2025",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://codersera.com/blog/agents-md-vs-claude-md-vs-cursor-rules-comparison-2026",
+    "name": "AGENTS.md vs CLAUDE.md vs Cursor Rules vs Copilot (2026)",
+    "snippet": "In 2026, AI coding agents have converged on one pattern (a markdown file in the repo root) but five competing names. AGENTS.md is the open ... Missing: .clinerules system",
+    "host_name": "codersera.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/agent-rules",
+    "name": "agent-rules · GitHub Topics",
+    "snippet": "AI agent skill for Zod v4 — 27 rules: schema design, parsing, error handling, type inference. Works with Claude Code, Cursor, Codex, Windsurf. Missing: .clinerules system 2025\nAGENTS.md rules / skills for AI coding agents: Codex, Cursor & Claude Code. Inspired by Clean Code, Refactoring, DDD, Clean Architecture and ...",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "Jul 16, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://blog.buildbetter.ai/agents-md-vs-cursorrules-vs-claude-skills-2026-comparison",
+    "name": "AGENTS.md vs .cursorrules vs Claude Skills: 2026 Guide - Product at Work",
+    "snippet": "AGENTS.md is an open specification for providing instructions to AI coding agents in a single markdown file at the repo root. Missing: .clinerules\nAGENTS.md, .cursorrules, and Claude Code Skills each solve a different layer of AI agent configuration. This 2026 guide compares all three, ...",
+    "host_name": "blog.buildbetter.ai",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://pub.towardsai.net/claude-md-vs-agents-md-vs-skill-md-which-file-owns-what-in-2026-13859378f56a",
+    "name": "CLAUDE.md vs AGENTS.md vs SKILL.md: Which File Owns What in 2026",
+    "snippet": "In August 2025, the AGENTS.md specification launched to give AI coding assistants a universal set of instructions. A developer could define ... Missing: .cursorrules .clinerules",
+    "host_name": "pub.towardsai.net",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/AI_Agents/comments/1stcu8e/skillmd_is_quietly_becoming_the_standard_for",
+    "name": "SKILL.md is quietly becoming the standard for teaching AI agents new",
+    "snippet": "SKILL.md … a SKILL.md file is a markdown document with YAML frontmatter that teaches an agent how to handle a specific task. Some are free on ...",
+    "host_name": "www.reddit.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/Mindgard/ai-ide-skills",
+    "name": "Mindgard/ai-ide-skills - GitHub",
+    "snippet": "Claude Code skills plugin for security testing AI-assisted IDEs and coding agents. 8 skills covering 25 vulnerability patterns across 4 classes (code ...",
+    "host_name": "github.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://medium.com/@sourabhshintre7171/what-is-skill-md-a-complete-guide-to-ai-agent-skills-8e7086166398",
+    "name": "What Is SKILL.md? A Complete Guide to AI Agent Skills | by Sourabhshintre",
+    "snippet": "What is SKILL.md? SKILL.md is a Markdown file that teaches an AI coding agent how to perform a specific task. Think of it like giving ...",
+    "host_name": "medium.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://ciembor.github.io/agent-rules-books",
+    "name": "Agent Rules Books / Skills | AGENTS.md, Cursor, Claude Code",
+    "snippet": "Ready-to-use AI agent rules and skills, distilled from software engineering books about refactoring, architecture, DDD, legacy code, reliability, and code ...",
+    "host_name": "ciembor.github.io",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]

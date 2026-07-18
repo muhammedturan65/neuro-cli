@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://github.com/features/copilot/cli",
+    "name": "GitHub Copilot CLI",
+    "snippet": "Run a GitHub-native agent in your terminal. Copilot can search issues, analyze labels and activity, and summarize scope Missing: 2025 | Show results with: 2025",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/github/copilot-cli",
+    "name": "GitHub Copilot CLI",
+    "snippet": "GitHub Copilot CLI brings AI-powered coding assistance directly to your command line, enabling you to build, debug, and understand code through natural language Missing: 2025 | Show results with: 2025",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/overview",
+    "name": "Using GitHub Copilot CLI",
+    "snippet": "The command-line interface (CLI) for GitHub Copilot allows you to use Copilot directly from your terminal. For more information, see About GitHub Copilot CLI. Missing: 2025 | Show results with: 2025",
+    "host_name": "docs.github.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.blog/changelog/2026-02-25-github-copilot-cli-is-now-generally-available",
+    "name": "GitHub Copilot CLI is now generally available - GitHub Changelog",
+    "snippet": "Copilot CLI is more than a chat interface. It's an autonomous coding agent that can plan complex tasks, execute multistep workflows, edit files, ...",
+    "host_name": "github.blog",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://docs.github.com/en/copilot/get-started/features",
+    "name": "GitHub Copilot features",
+    "snippet": "Copilot CLI A command line interface that lets you use Copilot in your terminal. Use the CLI to add features or fix bugs, then create a pull request.",
+    "host_name": "docs.github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/GithubCopilot/comments/1rqgmsz/the_copilot_cli_is_the_best_ai_tool_ive_used_it",
+    "name": "The Copilot CLI is the best AI tool I've used. It only works in  - Reddit",
+    "snippet": "It only works in a terminal. reading your codebase, planning, writing code, running tests, opening PRs. it lives in your terminal.",
+    "host_name": "www.reddit.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.youtube.com/watch?v=82jciNezDMY&vl=en",
+    "name": "Power agentic workflows in your terminal with GitHub Copilot CLI",
+    "snippet": "... GitHub Copilot coding agent directly to your command line. In this GitHub Universe 2025 demo, discover how you can use Copilot CLI to build ... Missing: features gh",
+    "host_name": "www.youtube.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://code.visualstudio.com/docs/agents/agent-types/copilot-cli",
+    "name": "Copilot CLI sessions in Visual Studio Code",
+    "snippet": "Learn how to use Copilot CLI within VS Code for autonomous coding tasks, terminal integration, and isolated development workflows in VS Code. Missing: 2025 | Show results with: 2025",
+    "host_name": "code.visualstudio.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.datacamp.com/tutorial/github-copilot-cli-tutorial",
+    "name": "GitHub Copilot CLI Tutorial: Features, Installation, and Use Cases",
+    "snippet": "GitHub Copilot CLI brings AI assistance directly into the terminal to help developers write code, automate tasks, and manage workflows using ...",
+    "host_name": "www.datacamp.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/features/copilot",
+    "name": "GitHub Copilot · Your AI pair programmer",
+    "snippet": "Access to Cloud agent and code review; Unlimited code completion and next edit suggestions; Access to 3rd party agents (Claude Code and Codex) ...",
+    "host_name": "github.com",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]

@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://www.mindstudio.ai/blog/what-is-windsurf",
+    "name": "What Is Windsurf? Codeium's AI-Native Code Editor Explained",
+    "snippet": "Windsurf is an AI-native code editor from Codeium. It can also run terminal commands, execute code, and check output. can execute multi-step ...",
+    "host_name": "www.mindstudio.ai",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://petronellatech.com/blog/windsurf-codeium-ide-guide-2026",
+    "name": "Windsurf IDE: Codeium's AI-Native Dev Environment",
+    "snippet": "Windsurf is an AI-native integrated development environment built by Codeium ・ an agentic system that can plan multi-step code changes, ...",
+    "host_name": "petronellatech.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://codegen.com/ai-tools/windsurf",
+    "name": "Windsurf - Codegen",
+    "snippet": "Review by The Codegen Team Mar 26, 2026 · Windsurf is an AI native IDE built on VS Code that integrates its Cascade agent directly into the coding experience.",
+    "host_name": "codegen.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://pinklime.io/blog/windsurf-codeium-review-2026",
+    "name": "Windsurf (Codeium) Review 2026: AI Coding Agent Worth Switching To?",
+    "snippet": "It's an AI agent that can plan multi-step changes, edit multiple files, run terminal commands, and iterate on results — all within the IDE. Missing: flow | Show results with: flow",
+    "host_name": "pinklime.io",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://freeacademy.ai/blog/what-is-windsurf-agentic-ai-code-editor",
+    "name": "What Is Windsurf? The Agentic AI Code Editor Explained (2026)",
+    "snippet": "The Windsurf AI code editor represents where software development is heading: humans setting direction while AI agents handle implementation.",
+    "host_name": "freeacademy.ai",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://standardcompute.com/best-ai-agent/roo-code-vs-windsurf",
+    "name": "Roo Code vs Windsurf — Which AI Agent Is Better? - Standard Compute",
+    "snippet": "Windsurf (formerly Codeium) is an AI-first code editor featuring Cascade — an agentic flow that can handle multi-file, multi-step coding tasks.",
+    "host_name": "standardcompute.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.ayautomate.com/blog/windsurf-vs-cursor-vs-claude-code",
+    "name": "Windsurf vs Cursor vs Claude Code (2026) - AY Automate",
+    "snippet": "Windsurf is Codeium's agentic IDE. runs commands in the integrated terminal, observes the output, and continues. Windsurf leans on Cascade, a ...",
+    "host_name": "www.ayautomate.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.callmissed.com/blog/windsurf-and-codeium-the-underdog-ai-ide-reimagining-software-development-in-202",
+    "name": "Windsurf and Codeium: The Underdog AI IDE Reimagining Softwa",
+    "snippet": "Armed with \"Cascade,\" an agentic system designed to think ten steps ahead, Windsurf can write up to 90% of a production codebase autonomously.",
+    "host_name": "www.callmissed.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.deployhq.com/guides/windsurf",
+    "name": "Windsurf IDE Guide: Cascade Agent, Setup & Deployment | DeployHQ",
+    "snippet": "Learn how to use Windsurf IDE with its Cascade AI agent for multi-file coding, project rules, and automated deployments via DeployHQ.",
+    "host_name": "www.deployhq.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.nxcode.io/resources/news/windsurf-ai-review-2026-best-ide-for-beginners",
+    "name": "Windsurf AI Review 2026: The Best Coding IDE for Beginners? | NxCode",
+    "snippet": "Windsurf AI IDE review after daily use in 2026. Features, pricing, Cascade flow, multi-model support, and how it compares to Cursor — an ...",
+    "host_name": "www.nxcode.io",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]

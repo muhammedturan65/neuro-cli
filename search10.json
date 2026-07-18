@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://www.openhands.dev",
+    "name": "OpenHands | The Open Platform for Cloud Coding Agents",
+    "snippet": "The OpenHands SDK is one of the most complete SDKs for agent harness and agentic AI development - including enabling vibecoding with opensource models. Missing: terminal features 2025",
+    "host_name": "www.openhands.dev",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/OpenHands/openhands",
+    "name": "OpenHands: AI-Driven Development - GitHub",
+    "snippet": "OpenHands Agent Canvas turns your coding agents into a self-hosted, always-on engineering team. It's a developer control center for starting conversations ... Missing: 2025 | Show results with: 2025",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://aiagentstore.ai/ai-agent/opendevin",
+    "name": "OpenDevin (OpenHands) Review 2026 - AI Agent Store",
+    "snippet": "Free Open-source AI software development agents platform (renamed to OpenHands): autonomous coding agents that edit repos, run commands, and browse the web. Missing: 2025 formerly",
+    "host_name": "aiagentstore.ai",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/AI_Agents/comments/1sntvev/is_openhands_opendevin_still_the_move_in_2026",
+    "name": "Is OpenHands (OpenDevin) still the move in 2026? Comparing it to",
+    "snippet": "I like that it's open-source and uses Docker sandboxes, but is it actually being used for real work compared to the official Anthropic tool? Missing: terminal 2025",
+    "host_name": "www.reddit.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.openhands.dev/blog/open-source-ai-coding-agents",
+    "name": "Top 7 Self-Hosted and Open-Source AI Coding Agents in 2026",
+    "snippet": "OpenHands is an MIT-licensed, open-source platform for building and running AI coding agents. Its primary interface, Agent Canvas, is a local- ... Missing: features 2025 formerly OpenDevin",
+    "host_name": "www.openhands.dev",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://pinggy.io/blog/best_open_source_cli_coding_agents",
+    "name": "Best Open Source CLI Coding Agents in 2026 - Pinggy",
+    "snippet": "OpenHands (formerly OpenDevin) is the most autonomous option here. It runs the agent inside a sandboxed runtime that can browse the web, ...",
+    "host_name": "pinggy.io",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://vibecoding.app/blog/openhands-review",
+    "name": "OpenHands Review (2026): 70K Stars. Worth the Setup?",
+    "snippet": "Formerly known as OpenDevin, this open-source project popular autonomous AI coding agent. It writes code, runs terminal commands, browses the ... Missing: 2025 | Show results with: 2025",
+    "host_name": "vibecoding.app",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://localaimaster.com/blog/openhands-vs-swe-agent",
+    "name": "OpenHands vs SWE-Agent (2026): SWE-bench Scores Compared",
+    "snippet": "Pick OpenHands (formerly OpenDevin) for enterprise and team work: it has a web UI with built-in VSCode, multi-agent delegation, RBAC and audit ...",
+    "host_name": "localaimaster.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://wetheflywheel.com/en/guides/open-source-ai-coding-agents-2026",
+    "name": "Open-Source AI Coding Agents 2026: The Complete Comparison",
+    "snippet": "Codex CLI is OpenAI's terminal-native coding agent, open-sourced under Apache 2.0 with 60,000 GitHub stars. Built in Rust for speed, it runs a ...",
+    "host_name": "wetheflywheel.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.kdnuggets.com/openhands-open-source-ai-software-developer",
+    "name": "OpenHands: Open Source AI Software Developer - KDnuggets",
+    "snippet": "OpenHands, formerly known as OpenDevin, is an advanced open-source platform for AI-powered software development that has evolved significantly since its ...",
+    "host_name": "www.kdnuggets.com",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]
