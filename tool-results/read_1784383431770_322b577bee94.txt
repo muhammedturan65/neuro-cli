@@ -1,0 +1,865 @@
+     1→// ============================================================
+     2→// NeuroCLI - NeuroEngine v4.0
+     3→// The main engine that ties everything together
+     4→// Now with: Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval,
+     5→// Model Router, Prompt Cache, Undo/Redo, Output Styles,
+     6→// Skill System, Custom Agents, Custom Tools, Ollama,
+     7→// Extended Thinking, Spending Monitor, NeuroIgnore,
+     8→// Telemetry, Vim Mode, i18n, Multimodal, Voice I/O,
+     9→// API Server, Cloud Sync, Web Dashboard,
+    10→// SKILL.md Standard, Auto Mode, Scheduled Tasks,
+    11→// Parallel Agents, Background Sessions, Browser Automation,
+    12→// Tree-sitter, Linting, Testing, Code Review,
+    13→// GitHub Integration, CI/CD, Plugin Bundles, Security Scanner
+    14→// ============================================================
+    15→
+    16→import { NeuroConfig, Message, AgentExecution, PermissionMode } from '../core/types.js';
+    17→import { join } from 'path';
+    18→import { homedir } from 'os';
+    19→import { OpenRouterClient, TokenUsage } from '../api/openrouter.js';
+    20→import { ToolRegistry } from '../tools/registry.js';
+    21→import { registerAllTools } from '../tools/index.js';
+    22→import { BaseAgent, AgentCallbacks } from '../agents/base.js';
+    23→import { Orchestrator } from '../agents/orchestrator.js';
+    24→import { ContextManager } from '../core/context.js';
+    25→import { SessionManager } from '../core/session.js';
+    26→import { TerminalUI } from '../ui/renderer.js';
+    27→import { MODELS } from '../api/models.js';
+    28→import { ApprovalSystem } from '../core/approval.js';
+    29→import { MCPClient } from '../mcp/client.js';
+    30→import { DoomLoopProtection } from '../core/doom-loop.js';
+    31→import { FallbackChain } from '../core/fallback.js';
+    32→import { Sandbox } from '../core/sandbox.js';
+    33→import { PluginManager } from '../core/plugin-sdk.js';
+    34→import { UndoRedoSystem } from './undo-redo.js';
+    35→import { PromptCache } from './prompt-cache.js';
+    36→import { ModelRouter, RoutingDecision, EffortLevel } from './model-router.js';
+    37→import { StyleManager, OutputStyle } from './output-styles.js';
+    38→import { ExtendedThinking, ThinkingMode } from './extended-thinking.js';
+    39→import { SpendingMonitor, SpendingConfig } from './spending-warnings.js';
+    40→import { SkillSystem } from '../context/skill-system.js';
+    41→import { CustomAgentLoader, CustomAgentDefinition } from '../context/custom-agents.js';
+    42→import { CustomToolLoader, CustomToolDefinition } from '../context/custom-tools.js';
+    43→import { NeuroIgnore } from '../context/neuroignore.js';
+    44→import { OllamaProvider, OllamaConfig } from '../api/ollama.js';
+    45→import { TelemetrySystem, TelemetryConfig } from './telemetry.js';
+    46→import { VimModeManager, VimModeConfig } from './vim-mode.js';
+    47→import { I18nSystem, SupportedLocale } from './i18n.js';
+    48→import { MultimodalSupport, MultimodalConfig } from './multimodal.js';
+    49→import { VoiceIO, VoiceConfig } from './voice.js';
+    50→import { APIServer, APIServerConfig } from './api-server.js';
+    51→import { CloudSync, CloudSyncConfig } from './cloud-sync.js';
+    52→import { WebDashboard, DashboardConfig } from './web-dashboard.js';
+    53→import { SkillStandard } from '../context/skill-standard.js';
+    54→import { AutoMode, AutoModeConfig } from './auto-mode.js';
+    55→import { ScheduledTaskManager, ScheduledTaskConfig } from './scheduled-tasks.js';
+    56→import { ParallelAgentManager, ParallelAgentConfig } from './parallel-agents.js';
+    57→import { BackgroundSessionManager, BackgroundSessionConfig } from './background-session.js';
+    58→import { TreeSitterIntegration } from '../context/tree-sitter.js';
+    59→import { LintingIntegration, LinterConfig } from './linting.js';
+    60→import { TestingIntegration, TestingConfig } from './testing.js';
+    61→import { CodeReviewSystem, CodeReviewConfig } from './code-review.js';
+    62→import { SecurityScanner, SecurityScanConfig } from './security-scanner.js';
+    63→import { PluginBundleManager } from './plugin-bundle.js';
+    64→
+    65→export class NeuroEngine {
+    66→  public config: NeuroConfig;
+    67→  public client: OpenRouterClient;
+    68→  public registry: ToolRegistry;
+    69→  public orchestrator: Orchestrator;
+    70→  public contextManager: ContextManager;
+    71→  public sessionManager: SessionManager;
+    72→  public ui: TerminalUI;
+    73→  public agents: Map<string, BaseAgent> = new Map();
+    74→  public mcpClient: MCPClient;
+    75→  public approval: ApprovalSystem;
+    76→  public doomLoop: DoomLoopProtection;
+    77→  public fallback: FallbackChain;
+    78→  public sandbox: Sandbox;
+    79→  public pluginManager: PluginManager;
+    80→
+    81→  // v3.0 new systems
+    82→  public undoRedo: UndoRedoSystem;
+    83→  public promptCache: PromptCache;
+    84→  public modelRouter: ModelRouter;
+    85→  public styleManager: StyleManager;
+    86→  public extendedThinking: ExtendedThinking;
+    87→  public spendingMonitor: SpendingMonitor;
+    88→  public skillSystem: SkillSystem;
+    89→  public customAgentLoader: CustomAgentLoader;
+    90→  public customToolLoader: CustomToolLoader;
+    91→  public neuroIgnore: NeuroIgnore;
+    92→  public ollamaProvider: OllamaProvider;
+    93→
+    94→  // P2/P3 new systems
+    95→  public telemetry: TelemetrySystem;
+    96→  public vimMode: VimModeManager;
+    97→  public i18n: I18nSystem;
+    98→  public multimodal: MultimodalSupport;
+    99→  public voice: VoiceIO;
+   100→  public apiServer: APIServer;
+   101→  public cloudSync: CloudSync;
+   102→  public dashboard: WebDashboard;
+   103→
+   104→  // v4.0 new systems
+   105→  public skillStandard: SkillStandard;
+   106→  public autoMode: AutoMode;
+   107→  public scheduledTasks: ScheduledTaskManager;
+   108→  public parallelAgents: ParallelAgentManager;
+   109→  public backgroundSessions: BackgroundSessionManager;
+   110→  public treeSitter: TreeSitterIntegration;
+   111→  public linting: LintingIntegration;
+   112→  public testing: TestingIntegration;
+   113→  public codeReview: CodeReviewSystem;
+   114→  public securityScanner: SecurityScanner;
+   115→  public pluginBundles: PluginBundleManager;
+   116→
+   117→  private autoApproveSet: Set<string>;
+   118→  private requireApprovalSet: Set<string>;
+   119→
+   120→  constructor(config: NeuroConfig) {
+   121→    this.config = config;
+   122→    this.client = new OpenRouterClient(config.apiKey, config.baseUrl);
+   123→    this.registry = registerAllTools(new ToolRegistry());
+   124→    this.contextManager = new ContextManager(config.defaultModel, config.context.maxTokens);
+   125→    this.sessionManager = new SessionManager();
+   126→    this.ui = new TerminalUI(config.ui.theme, config.ui.showTokenCount, config.ui.showCost);
+   127→
+   128→    this.autoApproveSet = new Set(config.tools.autoApprove);
+   129→    this.requireApprovalSet = new Set(config.tools.requireApproval);
+   130→
+   131→    // Initialize core systems
+   132→    this.approval = new ApprovalSystem(config.permissionMode, {
+   133→      showDiffPreview: config.diffPreview,
+   134→      whitelist: config.tools.autoApprove,
+   135→      blacklist: config.tools.denied,
+   136→    });
+   137→
+   138→    this.mcpClient = new MCPClient();
+   139→
+   140→    this.doomLoop = new DoomLoopProtection(config.doomLoop, async (reason, state) => {
+   141→      this.ui.warning(`Doom loop detected: ${reason}. Pausing agent.`);
+   142→      return false;
+   143→    });
+   144→
+   145→    this.fallback = new FallbackChain(this.client, config.fallbackChain);
+   146→
+   147→    // Sandbox system
+   148→    this.sandbox = new Sandbox(config.sandbox);
+   149→
+   150→    // Plugin system
+   151→    this.pluginManager = new PluginManager();
+   152→
+   153→    // --- v3.0 Systems ---
+   154→
+   155→    // Undo/Redo system
+   156→    this.undoRedo = new UndoRedoSystem();
+   157→
+   158→    // Prompt cache
+   159→    this.promptCache = new PromptCache({
+   160→      cacheDir: config.promptCache.cacheDir,
+   161→      maxEntries: config.promptCache.maxEntries,
+   162→      ttlMs: config.promptCache.ttlMs,
+   163→      similarityThreshold: config.promptCache.similarityThreshold,
+   164→      enabled: config.promptCache.enabled,
+   165→    });
+   166→
+   167→    // Model router
+   168→    this.modelRouter = new ModelRouter(
+   169→      {
+   170→        defaultModel: config.defaultModel,
+   171→        simpleModel: 'google/gemma-4-31b-it:free',
+   172→        moderateModel: 'qwen/qwen3-coder:free',
+   173→        complexModel: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+   174→        effortModels: {
+   175→          low: 'google/gemma-4-31b-it:free',
+   176→          medium: 'qwen/qwen3-coder:free',
+   177→          high: 'nvidia/nemotron-3-super-120b-a12b:free',
+   178→          ultrathink: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+   179→        },
+   180→        categoryOverrides: {},
+   181→        maxTokenBudget: config.context.maxTokens,
+   182→      },
+   183→      Object.fromEntries(
+   184→        Object.entries(MODELS).map(([id, m]) => [id, { name: m.name, contextWindow: m.contextWindow, maxOutput: m.maxOutput }])
+   185→      ),
+   186→    );
+   187→
+   188→    // Output styles
+   189→    this.styleManager = new StyleManager(process.cwd());
+   190→
+   191→    // Extended thinking
+   192→    this.extendedThinking = new ExtendedThinking({
+   193→      mode: 'none',
+   194→      showThinking: false,
+   195→    });
+   196→
+   197→    // Spending monitor
+   198→    this.spendingMonitor = new SpendingMonitor({
+   199→      dailyLimit: config.spendingLimit > 0 ? config.spendingLimit : 0,
+   200→      sessionLimit: 0,
+   201→      autoStopAtLimit: config.spendingLimit > 0,
+   202→      trackByModel: true,
+   203→    });
+   204→
+   205→    // Skill system
+   206→    this.skillSystem = new SkillSystem(process.cwd());
+   207→    this.skillSystem.discover();
+   208→
+   209→    // Custom agents
+   210→    this.customAgentLoader = new CustomAgentLoader(process.cwd());
+   211→    this.customAgentLoader.discover();
+   212→
+   213→    // Custom tools
+   214→    this.customToolLoader = new CustomToolLoader(process.cwd());
+   215→    this.customToolLoader.discover();
+   216→
+   217→    // .neuroignore
+   218→    this.neuroIgnore = new NeuroIgnore(process.cwd());
+   219→    this.neuroIgnore.load();
+   220→
+   221→    // Ollama provider
+   222→    this.ollamaProvider = new OllamaProvider({
+   223→      baseUrl: process.env.OLLAMA_HOST || 'http://localhost:11434',
+   224→      defaultModel: 'llama3',
+   225→    });
+   226→
+   227→    // --- P2/P3 New Systems ---
+   228→
+   229→    // Telemetry (opt-in, disabled by default)
+   230→    this.telemetry = new TelemetrySystem({
+   231→      enabled: false,
+   232→    });
+   233→
+   234→    // Vim mode
+   235→    this.vimMode = new VimModeManager({
+   236→      enabled: false,
+   237→    });
+   238→
+   239→    // i18n
+   240→    this.i18n = new I18nSystem();
+   241→
+   242→    // Multimodal support
+   243→    this.multimodal = new MultimodalSupport();
+   244→
+   245→    // Voice I/O
+   246→    this.voice = new VoiceIO({
+   247→      enabled: false,
+   248→    });
+   249→
+   250→    // API server
+   251→    this.apiServer = new APIServer({
+   252→      enabled: false,
+   253→    });
+   254→    this.apiServer.setEngine(this);
+   255→
+   256→    // Cloud sync
+   257→    this.cloudSync = new CloudSync({
+   258→      enabled: false,
+   259→    });
+   260→
+   261→    // Web dashboard
+   262→    this.dashboard = new WebDashboard({
+   263→      enabled: false,
+   264→    });
+   265→    this.dashboard.setEngine(this);
+   266→
+   267→    // --- v4.0 New Systems ---
+   268→
+   269→    // SKILL.md standard (agentskills.io compliant)
+   270→    this.skillStandard = new SkillStandard();
+   271→
+   272→    // Auto mode (full autonomous)
+   273→    this.autoMode = new AutoMode({
+   274→      enabled: false,
+   275→      safetyLevel: 'conservative',
+   276→      maxIterations: 50,
+   277→      maxCost: 0,
+   278→      maxTimeMs: 0,
+   279→      blockedCommands: ['rm -rf /', 'mkfs', 'dd if=/dev/zero'],
+   280→      blockedPatterns: ['/etc/passwd', '/etc/shadow'],
+   281→      autoCommit: false,
+   282→      autoTest: false,
+   283→      pauseOnError: true,
+   284→    });
+   285→
+   286→    // Scheduled tasks (/loop)
+   287→    this.scheduledTasks = new ScheduledTaskManager();
+   288→
+   289→    // Parallel agents
+   290→    this.parallelAgents = new ParallelAgentManager({
+   291→      maxConcurrent: 5,
+   292→    });
+   293→
+   294→    // Background sessions
+   295→    this.backgroundSessions = new BackgroundSessionManager();
+   296→
+   297→    // Tree-sitter integration (repo map)
+   298→    this.treeSitter = new TreeSitterIntegration(process.cwd());
+   299→
+   300→    // Linting integration
+   301→    this.linting = new LintingIntegration(process.cwd(), {
+   302→      enabled: true,
+   303→      autoRunOnChange: false,
+   304→      autoFix: false,
+   305→      failOnError: false,
+   306→      timeout: 30000,
+   307→      excludePatterns: ['node_modules', '.git', 'dist'],
+   308→    });
+   309→
+   310→    // Testing integration
+   311→    this.testing = new TestingIntegration(process.cwd(), {
+   312→      enabled: true,
+   313→      autoRunOnChange: false,
+   314→      runOnSave: false,
+   315→      coverageThreshold: 80,
+   316→      timeout: 60000,
+   317→      relatedTestsOnly: false,
+   318→    });
+   319→
+   320→    // Code review
+   321→    this.codeReview = new CodeReviewSystem(process.cwd(), {
+   322→      enabled: true,
+   323→      autoReviewOnChange: false,
+   324→      focusAreas: ['security', 'performance', 'correctness', 'style'],
+   325→      severityThreshold: 'minor',
+   326→      excludePatterns: ['node_modules', '.git', 'dist'],
+   327→    });
+   328→
+   329→    // Security scanner
+   330→    this.securityScanner = new SecurityScanner(process.cwd(), {
+   331→      enabled: true,
+   332→      autoScanOnChange: false,
+   333→      failOnSeverity: 'high',
+   334→      excludePatterns: ['node_modules', '.git', 'dist', 'coverage'],
+   335→      customRules: [],
+   336→    });
+   337→
+   338→    // Plugin bundles
+   339→    this.pluginBundles = new PluginBundleManager(
+   340→      join(homedir(), '.neuro', 'bundles'),
+   341→    );
+   342→
+   343→    // --- End v4.0 ---
+   344→
+   345→    // --- End P2/P3 ---
+   346→
+   347→    // --- End v3.0 ---
+   348→
+   349→    // Connect MCP servers if configured
+   350→    if (config.mcp.autoConnect) {
+   351→      this.mcpClient.connectAll().then(count => {
+   352→        if (count > 0) this.ui.info(`MCP: ${count} server(s) connected`);
+   353→      }).catch(() => {});
+   354→    }
+   355→
+   356→    // Load plugins
+   357→    this.pluginManager.loadAll().then(count => {
+   358→      if (count > 0) this.ui.info(`Plugins: ${count} loaded`);
+   359→    }).catch(() => {});
+   360→
+   361→    // Register plugin tools with the tool registry
+   362→    this.registerPluginTools();
+   363→
+   364→    // Register custom tools
+   365→    this.registerCustomTools();
+   366→
+   367→    // Initialize agents from config
+   368→    this.initializeAgents();
+   369→
+   370→    // Load custom agents from .neuro/agents/
+   371→    this.loadCustomAgents();
+   372→
+   373→    // Create orchestrator
+   374→    const orchestratorConfig = {
+   375→      name: 'Orchestrator',
+   376→      description: 'Central coordinator that manages sub-agents for complex tasks',
+   377→      systemPrompt: `You are the Orchestrator, the central coordinator of the NeuroCLI multi-agent system. Your job is to analyze tasks and delegate them to the appropriate specialist agents. You ensure tasks are completed efficiently and correctly.
+   378→
+   379→Key responsibilities:
+   380→- Analyze complex tasks and break them into sub-tasks
+   381→- Assign sub-tasks to the most appropriate specialist agent
+   382→- Manage dependencies between sub-tasks
+   383→- Synthesize results from multiple agents
+   384→- Handle errors and re-plan if needed
+   385→
+   386→Always consider the strengths of each agent when delegating:
+   387→- Planner: For task decomposition and architecture decisions
+   388→- Coder: For writing and modifying code
+   389→- Reviewer: For code quality assurance
+   390→- Researcher: For information gathering and documentation
+   391→- Tester: For writing and running tests
+   392→- Debugger: For investigating and fixing bugs
+   393→- Architect: For system design and technology decisions
+   394→- DevOps: For deployment and infrastructure`,
+   395→      model: 'qwen/qwen3-coder:free',
+   396→      temperature: 0.7,
+   397→      maxTokens: 4096,
+   398→      tools: [],
+   399→      maxIterations: 5,
+   400→    };
+   401→
+   402→    this.orchestrator = new Orchestrator(
+   403→      orchestratorConfig,
+   404→      this.client,
+   405→      this.registry,
+   406→      process.cwd(),
+   407→      this.sessionManager.getCurrent()?.id || 'default',
+   408→    );
+   409→
+   410→    // Register all agents with orchestrator
+   411→    for (const [name, agent] of this.agents) {
+   412→      this.orchestrator.registerAgent(agent);
+   413→    }
+   414→  }
+   415→
+   416→  /**
+   417→   * Register plugin tools with the tool registry
+   418→   */
+   419→  private registerPluginTools(): void {
+   420→    const pluginTools = this.pluginManager.getToolDefinitions();
+   421→    for (const toolDef of pluginTools) {
+   422→      this.registry.register({
+   423→        name: toolDef.name,
+   424→        risk: toolDef.risk,
+   425→        execute: async (args, context) => {
+   426→          const result = await this.pluginManager.executeTool(toolDef.name, args, {
+   427→            workingDirectory: context.workingDirectory,
+   428→            sessionId: context.sessionId,
+   429→            agentName: context.agentName,
+   430→            onProgress: context.onProgress || (() => {}),
+   431→            callTool: async (name, callArgs) => {
+   432→              return this.registry.execute(name, callArgs, context);
+   433→            },
+   434→            memory: {
+   435→              get: () => undefined,
+   436→              set: () => {},
+   437→              delete: () => {},
+   438→              list: () => [],
+   439→            },
+   440→          });
+   441→          return result.content;
+   442→        },
+   443→      });
+   444→    }
+   445→  }
+   446→
+   447→  /**
+   448→   * Register custom tools from .neuro/tools/
+   449→   */
+   450→  private registerCustomTools(): void {
+   451→    const customTools = this.customToolLoader.getAll();
+   452→    for (const toolDef of customTools) {
+   453→      const executor = this.customToolLoader.createExecutor(toolDef);
+   454→      this.registry.register({
+   455→        name: `custom_${toolDef.name}`,
+   456→        risk: toolDef.risk || 'medium',
+   457→        execute: async (args) => {
+   458→          try {
+   459→            const result = await executor(args);
+   460→            return typeof result === 'string' ? result : JSON.stringify(result);
+   461→          } catch (error) {
+   462→            return `Custom tool error: ${error instanceof Error ? error.message : String(error)}`;
+   463→          }
+   464→        },
+   465→      });
+   466→    }
+   467→  }
+   468→
+   469→  /**
+   470→   * Load custom agents from .neuro/agents/
+   471→   */
+   472→  private loadCustomAgents(): void {
+   473→    const customAgents = this.customAgentLoader.getAll();
+   474→    const cwd = process.cwd();
+   475→    const sessionId = this.sessionManager.getCurrent()?.id || 'default';
+   476→
+   477→    for (const def of customAgents) {
+   478→      const agentConfig = this.customAgentLoader.toAgentConfig(def, this.config.defaultModel);
+   479→      const agent = new BaseAgent(agentConfig, this.client, this.registry, cwd, sessionId);
+   480→      this.agents.set(def.name, agent);
+   481→
+   482→      // Save to config custom agents
+   483→      if (!this.config.customAgents) this.config.customAgents = {};
+   484→      this.config.customAgents[def.name] = agentConfig;
+   485→    }
+   486→  }
+   487→
+   488→  /**
+   489→   * Initialize all agents from config
+   490→   */
+   491→  private initializeAgents(): void {
+   492→    const sessionId = 'init';
+   493→    const cwd = process.cwd();
+   494→
+   495→    // Built-in agents
+   496→    for (const [key, agentConfig] of Object.entries(this.config.agents)) {
+   497→      const overrideConfig = { ...agentConfig, model: this.config.defaultModel };
+   498→      const agent = new BaseAgent(
+   499→        overrideConfig,
+   500→        this.client,
+   501→        this.registry,
+   502→        cwd,
+   503→        sessionId,
+   504→      );
+   505→      this.agents.set(agentConfig.name, agent);
+   506→    }
+   507→
+   508→    // Custom agents from config
+   509→    for (const [key, agentConfig] of Object.entries(this.config.customAgents || {})) {
+   510→      const overrideConfig = { ...agentConfig, model: this.config.defaultModel, isCustom: true };
+   511→      const agent = new BaseAgent(
+   512→        overrideConfig,
+   513→        this.client,
+   514→        this.registry,
+   515→        cwd,
+   516→        sessionId,
+   517→      );
+   518→      this.agents.set(agentConfig.name, agent);
+   519→    }
+   520→  }
+   521→
+   522→  /**
+   523→   * Process a user message
+   524→   */
+   525→  async processMessage(
+   526→    message: string,
+   527→    mode: 'auto' | 'agent' | 'direct' = 'auto',
+   528→    targetAgent?: string,
+   529→  ): Promise<{ content: string; usage: TokenUsage; execution?: AgentExecution }> {
+   530→    // Check spending limit via spending monitor
+   531→    const limitCheck = this.spendingMonitor.checkLimit();
+   532→    if (!limitCheck.allowed) {
+   533→      this.ui.error(`Spending limit reached (${limitCheck.limitReached}). Use /spending to check or /config to adjust.`);
+   534→      return { content: 'Spending limit reached.', usage: { inputTokens: 0, outputTokens: 0, cost: 0 } };
+   535→    }
+   536→
+   537→    // Auto-activate skills based on prompt
+   538→    const activatedSkills = this.skillSystem.autoActivate(message);
+   539→    if (activatedSkills.length > 0) {
+   540→      for (const skill of activatedSkills) {
+   541→        this.ui.info(`Skill activated: ${skill.skill.name} (${skill.activatedBy})`);
+   542→      }
+   543→    }
+   544→
+   545→    // Model routing (if auto mode)
+   546→    let routeDecision: RoutingDecision | null = null;
+   547→    if (mode === 'auto') {
+   548→      routeDecision = this.modelRouter.route(message);
+   549→      if (routeDecision.model !== this.config.defaultModel) {
+   550→        this.ui.info(`Model router: ${routeDecision.complexity} task -> ${MODELS[routeDecision.model]?.name || routeDecision.model}`);
+   551→      }
+   552→    }
+   553→
+   554→    // Check prompt cache
+   555→    if (this.promptCache && this.config.promptCache.enabled) {
+   556→      const session = this.sessionManager.getCurrent();
+   557→      if (session) {
+   558→        const cached = this.promptCache.get(
+   559→          routeDecision?.model || this.config.defaultModel,
+   560→          session.messages,
+   561→        );
+   562→        if (cached) {
+   563→          this.ui.info('Cache hit - using cached response');
+   564→          return {
+   565→            content: cached.response,
+   566→            usage: { inputTokens: cached.inputTokens, outputTokens: cached.outputTokens, cost: 0 },
+   567→          };
+   568→        }
+   569→      }
+   570→    }
+   571→
+   572→    // Start or get session
+   573→    let session = this.sessionManager.getCurrent();
+   574→    if (!session) {
+   575→      session = this.sessionManager.create(process.cwd(), this.config.defaultModel);
+   576→    }
+   577→
+   578→    // Add user message to session
+   579→    this.sessionManager.addMessage({
+   580→      role: 'user',
+   581→      content: message,
+   582→      timestamp: Date.now(),
+   583→    });
+   584→
+   585→    // Build system prompt additions from skills and styles
+   586→    const skillAdditions = this.skillSystem.getSystemPromptAdditions();
+   587→    const styleAddition = this.styleManager.getSystemPromptAddition();
+   588→    const thinkingAddition = this.extendedThinking.getSystemPromptAddition();
+   589→
+   590→    // Build UI callbacks
+   591→    const callbacks: AgentCallbacks = {
+   592→      onThinking: (thinking) => this.ui.thinking(thinking),
+   593→      onToken: (token) => this.ui.streamingToken(token),
+   594→      onToolCall: (name, args) => {
+   595→        // Check .neuroignore for file paths
+   596→        if (args.path && typeof args.path === 'string' && this.neuroIgnore.isIgnored(args.path)) {
+   597→          this.ui.warning(`Ignored path: ${args.path} (matches .neuroignore rule)`);
+   598→          return;
+   599→        }
+   600→        // Sandbox check before tool execution
+   601→        if (this.sandbox.isEnabled() && !this.checkSandboxForTool(name, args)) {
+   602→          return;
+   603→        }
+   604→        this.ui.toolCall(name, args);
+   605→
+   606→        // Record in undo/redo for file modification tools
+   607→        if (['write_file', 'edit_file', 'apply_diff', 'delete_file'].includes(name)) {
+   608→          // The undo/redo push will happen in the tool execution result handler
+   609→        }
+   610→      },
+   611→      onToolResult: (name, result, isError) => this.ui.toolResult(name, result, isError),
+   612→      onApprovalNeeded: async (name, args, risk) => {
+   613→        return this.handleApproval(name, args, risk as 'low' | 'medium' | 'high');
+   614→      },
+   615→      onIteration: (i, max) => {
+   616→        this.ui.info(`Iteration ${i}/${max}`);
+   617→      },
+   618→    };
+   619→
+   620→    let result;
+   621→    const activeModel = routeDecision?.model || this.config.defaultModel;
+   622→
+   623→    if (mode === 'direct' && targetAgent) {
+   624→      const agent = this.agents.get(targetAgent);
+   625→      if (!agent) {
+   626→        this.ui.error(`Agent not found: ${targetAgent}`);
+   627→        return { content: '', usage: { inputTokens: 0, outputTokens: 0, cost: 0 } };
+   628→      }
+   629→      this.ui.startStreaming();
+   630→      result = await agent.run(message, callbacks);
+   631→      this.ui.endStreaming();
+   632→    } else if (mode === 'agent') {
+   633→      const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
+   634→      result = {
+   635→        content: orchestrateResult.content,
+   636→        toolCallsMade: 0,
+   637→        iterations: orchestrateResult.execution.iterations,
+   638→        usage: orchestrateResult.totalUsage,
+   639→        execution: orchestrateResult.execution,
+   640→      };
+   641→    } else {
+   642→      const complexity = routeDecision?.complexity || this.assessComplexity(message);
+   643→      if (complexity === 'simple') {
+   644→        const agent = this.agents.get('Coder');
+   645→        if (agent) {
+   646→          this.ui.startStreaming();
+   647→          result = await agent.run(message, callbacks);
+   648→          this.ui.endStreaming();
+   649→        } else {
+   650→          throw new Error('Coder agent not initialized');
+   651→        }
+   652→      } else {
+   653→        this.ui.thinking('Analyzing task complexity... Using multi-agent orchestration');
+   654→        const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
+   655→        result = {
+   656→          content: orchestrateResult.content,
+   657→          toolCallsMade: 0,
+   658→          iterations: orchestrateResult.execution.iterations,
+   659→          usage: orchestrateResult.totalUsage,
+   660→          execution: orchestrateResult.execution,
+   661→        };
+   662→      }
+   663→    }
+   664→
+   665→    // Parse extended thinking blocks from response
+   666→    const thinkingResult = this.extendedThinking.parseResponse(result.content);
+   667→    if (thinkingResult.hadThinking && this.extendedThinking.isDisplayEnabled()) {
+   668→      // Thinking blocks were already displayed during streaming
+   669→    }
+   670→    // Use cleaned response (without thinking blocks) if thinking is hidden
+   671→    if (thinkingResult.hadThinking && !this.extendedThinking.isDisplayEnabled()) {
+   672→      result.content = thinkingResult.cleanedResponse;
+   673→    }
+   674→
+   675→    // Record spending
+   676→    const spendResult = this.spendingMonitor.record({
+   677→      model: activeModel,
+   678→      inputTokens: result.usage.inputTokens,
+   679→      outputTokens: result.usage.outputTokens,
+   680→      cost: result.usage.cost,
+   681→      sessionId: this.sessionManager.getCurrent()?.id || 'unknown',
+   682→    });
+   683→    if (spendResult.warning) {
+   684→      this.ui.warning(spendResult.warning);
+   685→    }
+   686→    if (!spendResult.allowed) {
+   687→      this.ui.error('Spending limit reached. Operation completed but further requests may be blocked.');
+   688→    }
+   689→
+   690→    // Cache the response if caching is enabled
+   691→    if (this.promptCache && this.config.promptCache.enabled && session) {
+   692→      this.promptCache.set(activeModel, session.messages, result.content, result.usage);
+   693→    }
+   694→
+   695→    // Print usage
+   696→    this.ui.tokenUsage(result.usage, activeModel);
+   697→
+   698→    // Update session
+   699→    this.sessionManager.addMessage({
+   700→      role: 'assistant',
+   701→      content: result.content,
+   702→      timestamp: Date.now(),
+   703→    });
+   704→    this.sessionManager.updateUsage(
+   705→      result.usage.inputTokens,
+   706→      result.usage.outputTokens,
+   707→      result.usage.cost,
+   708→    );
+   709→    this.sessionManager.save();
+   710→
+   711→    return {
+   712→      content: result.content,
+   713→      usage: result.usage,
+   714→      execution: result.execution,
+   715→    };
+   716→  }
+   717→
+   718→  /**
+   719→   * Check sandbox permissions for a tool call
+   720→   */
+   721→  private checkSandboxForTool(toolName: string, args: Record<string, unknown>): boolean {
+   722→    // File operations
+   723→    if (['write_file', 'edit_file', 'apply_diff'].includes(toolName)) {
+   724→      const path = args.path as string;
+   725→      if (path && !this.sandbox.canWrite(path)) {
+   726→        this.ui.warning(`Sandbox: Write access denied for ${path}`);
+   727→        return false;
+   728→      }
+   729→      // Check neuroignore
+   730→      if (path && this.neuroIgnore.isIgnored(path)) {
+   731→        this.ui.warning(`Ignored: ${path} is in .neuroignore`);
+   732→        return false;
+   733→      }
+   734→      // Backup file before modification
+   735→      if (path) this.sandbox.backupFile(path);
+   736→    }
+   737→
+   738→    if (['delete_file'].includes(toolName)) {
+   739→      const path = args.path as string;
+   740→      if (path && !this.sandbox.canDelete(path)) {
+   741→        this.ui.warning(`Sandbox: Delete access denied for ${path}`);
+   742→        return false;
+   743→      }
+   744→      if (path && this.neuroIgnore.isIgnored(path)) {
+   745→        this.ui.warning(`Ignored: ${path} is in .neuroignore`);
+   746→        return false;
+   747→      }
+   748→    }
+   749→
+   750→    if (['read_file', 'search_files', 'list_directory'].includes(toolName)) {
+   751→      const path = (args.path || args.directory) as string;
+   752→      if (path && !this.sandbox.canRead(path)) {
+   753→        this.ui.warning(`Sandbox: Read access denied for ${path}`);
+   754→        return false;
+   755→      }
+   756→      if (path && this.neuroIgnore.isIgnored(path)) {
+   757→        this.ui.warning(`Ignored: ${path} is in .neuroignore`);
+   758→        return false;
+   759→      }
+   760→    }
+   761→
+   762→    // Command execution
+   763→    if (['run_command', 'bash'].includes(toolName)) {
+   764→      const command = args.command as string;
+   765→      if (command && !this.sandbox.canRunCommand(command)) {
+   766→        this.ui.warning('Sandbox: Command execution denied');
+   767→        return false;
+   768→      }
+   769→    }
+   770→
+   771→    // Network access
+   772→    if (['web_search', 'web_fetch'].includes(toolName)) {
+   773→      if (!this.sandbox.canAccessNetwork()) {
+   774→        this.ui.warning('Sandbox: Network access denied');
+   775→        return false;
+   776→      }
+   777→    }
+   778→
+   779→    return true;
+   780→  }
+   781→
+   782→  /**
+   783→   * Handle tool approval using the enhanced ApprovalSystem
+   784→   */
+   785→  private async handleApproval(
+   786→    toolName: string,
+   787→    args: Record<string, unknown>,
+   788→    risk: 'low' | 'medium' | 'high',
+   789→  ): Promise<boolean> {
+   790→    if (this.autoApproveSet.has(toolName)) return true;
+   791→
+   792→    const result = await this.approval.requestApproval(toolName, args, risk);
+   793→    return result.approved;
+   794→  }
+   795→
+   796→  /**
+   797→   * Assess task complexity to decide execution mode
+   798→   * Now delegates to ModelRouter for more sophisticated analysis
+   799→   */
+   800→  private assessComplexity(message: string): 'simple' | 'moderate' | 'complex' {
+   801→    const decision = this.modelRouter.route(message);
+   802→    return decision.complexity;
+   803→  }
+   804→
+   805→  /**
+   806→   * Switch the active model
+   807→   */
+   808→  switchModel(modelId: string): boolean {
+   809→    if (!MODELS[modelId]) {
+   810→      this.ui.error(`Unknown model: ${modelId}`);
+   811→      return false;
+   812→    }
+   813→    this.config.defaultModel = modelId;
+   814→    this.contextManager = new ContextManager(modelId, this.config.context.maxTokens);
+   815→    this.ui.success(`Switched to ${MODELS[modelId].name}`);
+   816→    return true;
+   817→  }
+   818→
+   819→  /**
+   820→   * Get current session stats
+   821→   */
+   822→  getSessionStats(): { inputTokens: number; outputTokens: number; cost: number; messages: number } {
+   823→    const session = this.sessionManager.getCurrent();
+   824→    if (!session) return { inputTokens: 0, outputTokens: 0, cost: 0, messages: 0 };
+   825→    return {
+   826→      inputTokens: session.totalInputTokens,
+   827→      outputTokens: session.totalOutputTokens,
+   828→      cost: session.totalCost,
+   829→      messages: session.messages.length,
+   830→    };
+   831→  }
+   832→
+   833→  /**
+   834→   * Register a custom agent
+   835→   */
+   836→  registerCustomAgent(name: string, config: { description: string; systemPrompt: string; tools?: string[]; maxIterations?: number }): void {
+   837→    const agentConfig = {
+   838→      name,
+   839→      description: config.description,
+   840→      systemPrompt: config.systemPrompt,
+   841→      model: this.config.defaultModel,
+   842→      temperature: 0.5,
+   843→      maxTokens: 8192,
+   844→      tools: config.tools || [],
+   845→      maxIterations: config.maxIterations || 10,
+   846→      isCustom: true,
+   847→    };
+   848→
+   849→    const agent = new BaseAgent(
+   850→      agentConfig,
+   851→      this.client,
+   852→      this.registry,
+   853→      process.cwd(),
+   854→      this.sessionManager.getCurrent()?.id || 'default',
+   855→    );
+   856→
+   857→    this.agents.set(name, agent);
+   858→    this.orchestrator.registerAgent(agent);
+   859→
+   860→    // Save to config
+   861→    if (!this.config.customAgents) this.config.customAgents = {};
+   862→    this.config.customAgents[name] = agentConfig;
+   863→  }
+   864→}
+   865→

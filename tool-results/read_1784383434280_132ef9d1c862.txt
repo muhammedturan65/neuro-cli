@@ -1,0 +1,810 @@
+     1→     1→// ============================================================
+     2→     2→// NeuroCLI - MCP (Model Context Protocol) Client
+     3→     3→// Full MCP support: stdio, SSE, HTTP transports
+     4→     4→// With reconnect, health-check, resource support, and streaming
+     5→     5→// ============================================================
+     6→     6→
+     7→     7→import { ChildProcess, spawn } from 'child_process';
+     8→     8→import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+     9→     9→import { join } from 'path';
+    10→    10→import { homedir } from 'os';
+    11→    11→import { ToolDefinition } from '../core/types.js';
+    12→    12→import chalk from 'chalk';
+    13→    13→
+    14→    14→// --- MCP Types ---
+    15→    15→
+    16→    16→export interface MCPServerConfig {
+    17→    17→  name: string;
+    18→    18→  transport: 'stdio' | 'sse' | 'http';
+    19→    19→  command?: string;
+    20→    20→  args?: string[];
+    21→    21→  env?: Record<string, string>;
+    22→    22→  url?: string;
+    23→    23→  headers?: Record<string, string>;
+    24→    24→  timeout?: number;
+    25→    25→  disabled?: boolean;
+    26→    26→  /** Auto-reconnect on disconnect (default: true) */
+    27→    27→  autoReconnect?: boolean;
+    28→    28→  /** Max reconnect attempts (default: 3) */
+    29→    29→  maxReconnectAttempts?: number;
+    30→    30→  /** Health check interval in ms (default: 60000 = 1 min) */
+    31→    31→  healthCheckIntervalMs?: number;
+    32→    32→}
+    33→    33→
+    34→    34→export interface MCPConfig {
+    35→    35→  mcpServers: Record<string, MCPServerConfig>;
+    36→    36→}
+    37→    37→
+    38→    38→export interface MCPTool {
+    39→    39→  name: string;
+    40→    40→  description: string;
+    41→    41→  inputSchema: {
+    42→    42→    type: 'object';
+    43→    43→    properties: Record<string, unknown>;
+    44→    44→    required?: string[];
+    45→    45→  };
+    46→    46→}
+    47→    47→
+    48→    48→export interface MCPResource {
+    49→    49→  uri: string;
+    50→    50→  name: string;
+    51→    51→  description?: string;
+    52→    52→  mimeType?: string;
+    53→    53→}
+    54→    54→
+    55→    55→export interface MCPPrompt {
+    56→    56→  name: string;
+    57→    57→  description?: string;
+    58→    58→  arguments?: Array<{
+    59→    59→    name: string;
+    60→    60→    description?: string;
+    61→    61→    required?: boolean;
+    62→    62→  }>;
+    63→    63→}
+    64→    64→
+    65→    65→export interface MCPConnectionState {
+    66→    66→  name: string;
+    67→    67→  status: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+    68→    68→  lastConnected?: number;
+    69→    69→  lastError?: string;
+    70→    70→  reconnectAttempts: number;
+    71→    71→  toolCount: number;
+    72→    72→  resourceCount: number;
+    73→    73→  promptCount: number;
+    74→    74→}
+    75→    75→
+    76→    76→interface JSONRPCRequest {
+    77→    77→  jsonrpc: '2.0';
+    78→    78→  id: number;
+    79→    79→  method: string;
+    80→    80→  params?: Record<string, unknown>;
+    81→    81→}
+    82→    82→
+    83→    83→interface JSONRPCResponse {
+    84→    84→  jsonrpc: '2.0';
+    85→    85→  id: number;
+    86→    86→  result?: unknown;
+    87→    87→  error?: { code: number; message: string; data?: unknown };
+    88→    88→}
+    89→    89→
+    90→    90→// --- MCP Client ---
+    91→    91→
+    92→    92→export class MCPClient {
+    93→    93→  private processes: Map<string, ChildProcess> = new Map();
+    94→    94→  private nextId = 1;
+    95→    95→  private pendingRequests: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }> = new Map();
+    96→    96→  private tools: Map<string, MCPTool[]> = new Map();
+    97→    97→  private resources: Map<string, MCPResource[]> = new Map();
+    98→    98→  private prompts: Map<string, MCPPrompt[]> = new Map();
+    99→    99→  private servers: Map<string, MCPServerConfig> = new Map();
+   100→   100→  private inputBuffers: Map<string, string> = new Map();
+   101→   101→  private configPath: string;
+   102→   102→  private connectionStates: Map<string, MCPConnectionState> = new Map();
+   103→   103→  private healthCheckTimers: Map<string, ReturnType<typeof setInterval>> = new Map();
+   104→   104→  private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+   105→   105→  private eventSource: Map<string, { close: () => void }> = new Map();
+   106→   106→  private sseEventHandlers: Map<string, (event: string, data: string) => void> = new Map();
+   107→   107→
+   108→   108→  constructor(configPath?: string) {
+   109→   109→    this.configPath = configPath || join(homedir(), '.neuro', 'mcp.json');
+   110→   110→  }
+   111→   111→
+   112→   112→  loadConfig(): MCPConfig {
+   113→   113→    const projectConfig = join(process.cwd(), '.neuro', 'mcp.json');
+   114→   114→    const paths = [projectConfig, this.configPath];
+   115→   115→    let merged: MCPConfig = { mcpServers: {} };
+   116→   116→    for (const p of paths) {
+   117→   117→      if (existsSync(p)) {
+   118→   118→        try {
+   119→   119→          const data = JSON.parse(readFileSync(p, 'utf-8'));
+   120→   120→          if (data.mcpServers) Object.assign(merged.mcpServers, data.mcpServers);
+   121→   121→        } catch {}
+   122→   122→      }
+   123→   123→    }
+   124→   124→    return merged;
+   125→   125→  }
+   126→   126→
+   127→   127→  saveConfig(config: MCPConfig, global: boolean = true): void {
+   128→   128→    const path = global ? this.configPath : join(process.cwd(), '.neuro', 'mcp.json');
+   129→   129→    const dir = join(path, '..');
+   130→   130→    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+   131→   131→    writeFileSync(path, JSON.stringify(config, null, 2), 'utf-8');
+   132→   132→  }
+   133→   133→
+   134→   134→  addServer(name: string, config: MCPServerConfig): void {
+   135→   135→    const cfg = this.loadConfig();
+   136→   136→    cfg.mcpServers[name] = config;
+   137→   137→    this.saveConfig(cfg);
+   138→   138→  }
+   139→   139→
+   140→   140→  removeServer(name: string): boolean {
+   141→   141→    const cfg = this.loadConfig();
+   142→   142→    if (!cfg.mcpServers[name]) return false;
+   143→   143→    delete cfg.mcpServers[name];
+   144→   144→    this.saveConfig(cfg);
+   145→   145→    return true;
+   146→   146→  }
+   147→   147→
+   148→   148→  listServers(): Array<{ name: string; config: MCPServerConfig; connected: boolean; toolCount: number; resourceCount: number }> {
+   149→   149→    const cfg = this.loadConfig();
+   150→   150→    const result: Array<{ name: string; config: MCPServerConfig; connected: boolean; toolCount: number; resourceCount: number }> = [];
+   151→   151→    for (const [name, config] of Object.entries(cfg.mcpServers)) {
+   152→   152→      result.push({
+   153→   153→        name,
+   154→   154→        config,
+   155→   155→        connected: this.processes.has(name) || this.eventSource.has(name),
+   156→   156→        toolCount: this.tools.get(name)?.length || 0,
+   157→   157→        resourceCount: this.resources.get(name)?.length || 0,
+   158→   158→      });
+   159→   159→    }
+   160→   160→    return result;
+   161→   161→  }
+   162→   162→
+   163→   163→  // --- Connection State ---
+   164→   164→
+   165→   165→  getConnectionStates(): MCPConnectionState[] {
+   166→   166→    return Array.from(this.connectionStates.values());
+   167→   167→  }
+   168→   168→
+   169→   169→  getConnectionState(name: string): MCPConnectionState | undefined {
+   170→   170→    return this.connectionStates.get(name);
+   171→   171→  }
+   172→   172→
+   173→   173→  private setConnectionState(name: string, status: MCPConnectionState['status'], error?: string): void {
+   174→   174→    const existing = this.connectionStates.get(name);
+   175→   175→    this.connectionStates.set(name, {
+   176→   176→      name,
+   177→   177→      status,
+   178→   178→      lastConnected: status === 'connected' ? Date.now() : existing?.lastConnected,
+   179→   179→      lastError: error || existing?.lastError,
+   180→   180→      reconnectAttempts: status === 'reconnecting' ? (existing?.reconnectAttempts || 0) + 1 : 0,
+   181→   181→      toolCount: this.tools.get(name)?.length || 0,
+   182→   182→      resourceCount: this.resources.get(name)?.length || 0,
+   183→   183→      promptCount: this.prompts.get(name)?.length || 0,
+   184→   184→    });
+   185→   185→  }
+   186→   186→
+   187→   187→  // --- Health Check ---
+   188→   188→
+   189→   189→  private startHealthCheck(name: string): void {
+   190→   190→    this.stopHealthCheck(name);
+   191→   191→    const config = this.servers.get(name);
+   192→   192→    if (!config) return;
+   193→   193→
+   194→   194→    const interval = config.healthCheckIntervalMs || 60000;
+   195→   195→    const timer = setInterval(async () => {
+   196→   196→      try {
+   197→   197→        await this.sendRequest(name, 'ping', {});
+   198→   198→        this.setConnectionState(name, 'connected');
+   199→   199→      } catch {
+   200→   200→        this.setConnectionState(name, 'error', 'Health check failed');
+   201→   201→        // Attempt reconnect if auto-reconnect is enabled
+   202→   202→        if (config.autoReconnect !== false) {
+   203→   203→          this.attemptReconnect(name, config);
+   204→   204→        }
+   205→   205→      }
+   206→   206→    }, interval);
+   207→   207→
+   208→   208→    this.healthCheckTimers.set(name, timer);
+   209→   209→  }
+   210→   210→
+   211→   211→  private stopHealthCheck(name: string): void {
+   212→   212→    const timer = this.healthCheckTimers.get(name);
+   213→   213→    if (timer) {
+   214→   214→      clearInterval(timer);
+   215→   215→      this.healthCheckTimers.delete(name);
+   216→   216→    }
+   217→   217→  }
+   218→   218→
+   219→   219→  // --- Reconnect ---
+   220→   220→
+   221→   221→  private attemptReconnect(name: string, config: MCPServerConfig): void {
+   222→   222→    const state = this.connectionStates.get(name);
+   223→   223→    const maxAttempts = config.maxReconnectAttempts || 3;
+   224→   224→    if (state && state.reconnectAttempts >= maxAttempts) {
+   225→   225→      this.setConnectionState(name, 'error', `Max reconnect attempts (${maxAttempts}) reached`);
+   226→   226→      return;
+   227→   227→    }
+   228→   228→
+   229→   229→    this.setConnectionState(name, 'reconnecting');
+   230→   230→    const delay = Math.min(1000 * Math.pow(2, state?.reconnectAttempts || 0), 30000);
+   231→   231→
+   232→   232→    // Clear existing reconnect timer
+   233→   233→    const existingTimer = this.reconnectTimers.get(name);
+   234→   234→    if (existingTimer) clearTimeout(existingTimer);
+   235→   235→
+   236→   236→    const timer = setTimeout(async () => {
+   237→   237→      try {
+   238→   238→        console.log(chalk.gray(`  MCP: Reconnecting to ${name}...`));
+   239→   239→        await this.connect(name, config);
+   240→   240→        console.log(chalk.green(`  MCP: Reconnected to ${name}`));
+   241→   241→      } catch (error) {
+   242→   242→        const errMsg = error instanceof Error ? error.message : String(error);
+   243→   243→        this.setConnectionState(name, 'error', `Reconnect failed: ${errMsg}`);
+   244→   244→        // Try again
+   245→   245→        this.attemptReconnect(name, config);
+   246→   246→      }
+   247→   247→    }, delay);
+   248→   248→
+   249→   249→    this.reconnectTimers.set(name, timer);
+   250→   250→  }
+   251→   251→
+   252→   252→  // --- Connect All ---
+   253→   253→
+   254→   254→  async connectAll(): Promise<number> {
+   255→   255→    const cfg = this.loadConfig();
+   256→   256→    let connected = 0;
+   257→   257→    for (const [name, config] of Object.entries(cfg.mcpServers)) {
+   258→   258→      if (config.disabled) continue;
+   259→   259→      try {
+   260→   260→        await this.connect(name, config);
+   261→   261→        connected++;
+   262→   262→      } catch (error) {
+   263→   263→        console.error(`MCP: Failed to connect to ${name}: ${error instanceof Error ? error.message : String(error)}`);
+   264→   264→      }
+   265→   265→    }
+   266→   266→    return connected;
+   267→   267→  }
+   268→   268→
+   269→   269→  // --- Connect ---
+   270→   270→
+   271→   271→  async connect(name: string, config: MCPServerConfig): Promise<void> {
+   272→   272→    if (this.processes.has(name) || this.eventSource.has(name)) {
+   273→   273→      await this.disconnect(name);
+   274→   274→    }
+   275→   275→    this.servers.set(name, config);
+   276→   276→    this.setConnectionState(name, 'connecting');
+   277→   277→
+   278→   278→    try {
+   279→   279→      if (config.transport === 'stdio') {
+   280→   280→        await this.connectStdio(name, config);
+   281→   281→      } else if (config.transport === 'sse') {
+   282→   282→        await this.connectSSE(name, config);
+   283→   283→      } else if (config.transport === 'http') {
+   284→   284→        // HTTP doesn't maintain a persistent connection
+   285→   285→        this.setConnectionState(name, 'connected');
+   286→   286→      }
+   287→   287→      await this.initialize(name);
+   288→   288→      this.startHealthCheck(name);
+   289→   289→    } catch (error) {
+   290→   290→      const errMsg = error instanceof Error ? error.message : String(error);
+   291→   291→      this.setConnectionState(name, 'error', errMsg);
+   292→   292→      throw error;
+   293→   293→    }
+   294→   294→  }
+   295→   295→
+   296→   296→  // --- stdio Transport ---
+   297→   297→
+   298→   298→  private async connectStdio(name: string, config: MCPServerConfig): Promise<void> {
+   299→   299→    return new Promise((resolve, reject) => {
+   300→   300→      const env = { ...process.env, ...config.env };
+   301→   301→      const proc = spawn(config.command!, config.args || [], { env, stdio: ['pipe', 'pipe', 'pipe'], shell: true });
+   302→   302→      let initialized = false;
+   303→   303→      const timeout = setTimeout(() => {
+   304→   304→        if (!initialized) {
+   305→   305→          reject(new Error(`MCP server ${name} initialization timed out`));
+   306→   306→          proc.kill();
+   307→   307→        }
+   308→   308→      }, config.timeout || 30000);
+   309→   309→
+   310→   310→      proc.stdout!.on('data', (data: Buffer) => {
+   311→   311→        const chunk = data.toString();
+   312→   312→        const existing = this.inputBuffers.get(name) || '';
+   313→   313→        this.inputBuffers.set(name, existing + chunk);
+   314→   314→        let buffer = this.inputBuffers.get(name)!;
+   315→   315→        const lines = buffer.split('\n');
+   316→   316→        for (let i = 0; i < lines.length - 1; i++) {
+   317→   317→          const line = lines[i].trim();
+   318→   318→          if (line) {
+   319→   319→            try {
+   320→   320→              const response = JSON.parse(line);
+   321→   321→              this.handleResponse(name, response);
+   322→   322→            } catch {}
+   323→   323→          }
+   324→   324→        }
+   325→   325→        this.inputBuffers.set(name, lines[lines.length - 1]);
+   326→   326→      });
+   327→   327→
+   328→   328→      proc.stderr!.on('data', (data: Buffer) => {
+   329→   329→        const msg = data.toString().trim();
+   330→   330→        if (msg) console.error(chalk.gray(`  MCP [${name}]: ${msg}`));
+   331→   331→      });
+   332→   332→
+   333→   333→      proc.on('error', (err) => {
+   334→   334→        clearTimeout(timeout);
+   335→   335→        this.processes.delete(name);
+   336→   336→        this.setConnectionState(name, 'error', err.message);
+   337→   337→        if (!initialized) reject(err);
+   338→   338→        else if (this.servers.get(name)?.autoReconnect !== false) {
+   339→   339→          this.attemptReconnect(name, this.servers.get(name)!);
+   340→   340→        }
+   341→   341→      });
+   342→   342→
+   343→   343→      proc.on('exit', (code) => {
+   344→   344→        clearTimeout(timeout);
+   345→   345→        this.processes.delete(name);
+   346→   346→        if (code !== 0 && code !== null) {
+   347→   347→          this.setConnectionState(name, 'error', `Process exited with code ${code}`);
+   348→   348→          if (this.servers.get(name)?.autoReconnect !== false) {
+   349→   349→            this.attemptReconnect(name, this.servers.get(name)!);
+   350→   350→          }
+   351→   351→        } else {
+   352→   352→          this.setConnectionState(name, 'disconnected');
+   353→   353→        }
+   354→   354→      });
+   355→   355→
+   356→   356→      this.processes.set(name, proc);
+   357→   357→      initialized = true;
+   358→   358→      clearTimeout(timeout);
+   359→   359→      resolve();
+   360→   360→    });
+   361→   361→  }
+   362→   362→
+   363→   363→  // --- SSE Transport ---
+   364→   364→
+   365→   365→  private async connectSSE(name: string, config: MCPServerConfig): Promise<void> {
+   366→   366→    if (!config.url) throw new Error(`No URL for SSE MCP server ${name}`);
+   367→   367→
+   368→   368→    return new Promise((resolve, reject) => {
+   369→   369→      try {
+   370→   370→        const url = new URL(config.url!);
+   371→   371→        const headers: Record<string, string> = {
+   372→   372→          'Accept': 'text/event-stream',
+   373→   373→          'Cache-Control': 'no-cache',
+   374→   374→          ...config.headers,
+   375→   375→        };
+   376→   376→
+   377→   377→        // Use native fetch for SSE
+   378→   378→        const controller = new AbortController();
+   379→   379→        const timeout = setTimeout(() => {
+   380→   380→          controller.abort();
+   381→   381→          reject(new Error(`SSE connection to ${name} timed out`));
+   382→   382→        }, config.timeout || 30000);
+   383→   383→
+   384→   384→        let resolved = false;
+   385→   385→
+   386→   386→        // Simple SSE client using fetch
+   387→   387→        fetch(config.url!, {
+   388→   388→          method: 'GET',
+   389→   389→          headers,
+   390→   390→          signal: controller.signal,
+   391→   391→        }).then(async (response) => {
+   392→   392→          clearTimeout(timeout);
+   393→   393→          if (!response.ok) {
+   394→   394→            throw new Error(`SSE connection failed: ${response.status} ${response.statusText}`);
+   395→   395→          }
+   396→   396→
+   397→   397→          const reader = response.body?.getReader();
+   398→   398→          if (!reader) throw new Error('No response body for SSE');
+   399→   399→
+   400→   400→          const decoder = new TextDecoder();
+   401→   401→          let buffer = '';
+   402→   402→          let eventType = '';
+   403→   403→          let eventData = '';
+   404→   404→
+   405→   405→          // Store the close handler
+   406→   406→          this.eventSource.set(name, {
+   407→   407→            close: () => {
+   408→   408→              controller.abort();
+   409→   409→              reader.cancel().catch(() => {});
+   410→   410→            }
+   411→   411→          });
+   412→   412→
+   413→   413→          this.setConnectionState(name, 'connected');
+   414→   414→          resolved = true;
+   415→   415→          resolve();
+   416→   416→
+   417→   417→          try {
+   418→   418→            while (true) {
+   419→   419→              const { done, value } = await reader.read();
+   420→   420→              if (done) break;
+   421→   421→
+   422→   422→              buffer += decoder.decode(value, { stream: true });
+   423→   423→              const lines = buffer.split('\n');
+   424→   424→              buffer = lines.pop() || '';
+   425→   425→
+   426→   426→              for (const line of lines) {
+   427→   427→                if (line.startsWith('event: ')) {
+   428→   428→                  eventType = line.slice(7).trim();
+   429→   429→                } else if (line.startsWith('data: ')) {
+   430→   430→                  eventData = line.slice(6);
+   431→   431→                } else if (line === '' && eventData) {
+   432→   432→                  // End of event
+   433→   433→                  this.handleSSEEvent(name, eventType, eventData);
+   434→   434→                  eventType = '';
+   435→   435→                  eventData = '';
+   436→   436→                }
+   437→   437→              }
+   438→   438→            }
+   439→   439→          } catch (error) {
+   440→   440→            if (!controller.signal.aborted) {
+   441→   441→              this.setConnectionState(name, 'error', `SSE stream error: ${error instanceof Error ? error.message : String(error)}`);
+   442→   442→              if (this.servers.get(name)?.autoReconnect !== false) {
+   443→   443→                this.attemptReconnect(name, this.servers.get(name)!);
+   444→   444→              }
+   445→   445→            }
+   446→   446→          }
+   447→   447→        }).catch((error) => {
+   448→   448→          clearTimeout(timeout);
+   449→   449→          this.setConnectionState(name, 'error', error.message);
+   450→   450→          if (!resolved) reject(error);
+   451→   451→          else if (this.servers.get(name)?.autoReconnect !== false) {
+   452→   452→            this.attemptReconnect(name, this.servers.get(name)!);
+   453→   453→          }
+   454→   454→        });
+   455→   455→      } catch (error) {
+   456→   456→        reject(error);
+   457→   457→      }
+   458→   458→    });
+   459→   459→  }
+   460→   460→
+   461→   461→  private handleSSEEvent(serverName: string, eventType: string, data: string): void {
+   462→   462→    try {
+   463→   463→      const parsed = JSON.parse(data);
+   464→   464→      if (parsed.jsonrpc && parsed.id !== undefined) {
+   465→   465→        this.handleResponse(serverName, parsed as JSONRPCResponse);
+   466→   466→      }
+   467→   467→    } catch {
+   468→   468→      // Not a JSON-RPC response, might be a server notification
+   469→   469→      const handler = this.sseEventHandlers.get(serverName);
+   470→   470→      if (handler) handler(eventType, data);
+   471→   471→    }
+   472→   472→  }
+   473→   473→
+   474→   474→  /**
+   475→   475→   * Register a custom SSE event handler
+   476→   476→   */
+   477→   477→  onSSEEvent(serverName: string, handler: (event: string, data: string) => void): void {
+   478→   478→    this.sseEventHandlers.set(serverName, handler);
+   479→   479→  }
+   480→   480→
+   481→   481→  // --- Disconnect ---
+   482→   482→
+   483→   483→  async disconnect(name: string): Promise<void> {
+   484→   484→    this.stopHealthCheck(name);
+   485→   485→
+   486→   486→    const reconnectTimer = this.reconnectTimers.get(name);
+   487→   487→    if (reconnectTimer) {
+   488→   488→      clearTimeout(reconnectTimer);
+   489→   489→      this.reconnectTimers.delete(name);
+   490→   490→    }
+   491→   491→
+   492→   492→    const es = this.eventSource.get(name);
+   493→   493→    if (es) {
+   494→   494→      es.close();
+   495→   495→      this.eventSource.delete(name);
+   496→   496→    }
+   497→   497→
+   498→   498→    const proc = this.processes.get(name);
+   499→   499→    if (proc) {
+   500→   500→      proc.kill();
+   501→   501→      this.processes.delete(name);
+   502→   502→    }
+   503→   503→
+   504→   504→    this.tools.delete(name);
+   505→   505→    this.resources.delete(name);
+   506→   506→    this.prompts.delete(name);
+   507→   507→    this.servers.delete(name);
+   508→   508→    this.inputBuffers.delete(name);
+   509→   509→    this.sseEventHandlers.delete(name);
+   510→   510→    this.setConnectionState(name, 'disconnected');
+   511→   511→  }
+   512→   512→
+   513→   513→  async disconnectAll(): Promise<void> {
+   514→   514→    for (const name of Array.from(this.processes.keys())) await this.disconnect(name);
+   515→   515→    for (const name of Array.from(this.eventSource.keys())) await this.disconnect(name);
+   516→   516→  }
+   517→   517→
+   518→   518→  // --- Initialize ---
+   519→   519→
+   520→   520→  private async initialize(name: string): Promise<void> {
+   521→   521→    try {
+   522→   522→      await this.sendRequest(name, 'initialize', {
+   523→   523→        protocolVersion: '2024-11-05',
+   524→   524→        capabilities: {
+   525→   525→          roots: { listChanged: true },
+   526→   526→          sampling: {},
+   527→   527→        },
+   528→   528→        clientInfo: { name: 'neuro-cli', version: '2.0.0' },
+   529→   529→      });
+   530→   530→      await this.sendNotification(name, 'notifications/initialized', {});
+   531→   531→
+   532→   532→      // List tools
+   533→   533→      try {
+   534→   534→        const toolsResult = await this.sendRequest(name, 'tools/list', {}) as { tools: MCPTool[] };
+   535→   535→        this.tools.set(name, toolsResult.tools || []);
+   536→   536→      } catch {}
+   537→   537→
+   538→   538→      // List resources
+   539→   539→      try {
+   540→   540→        const resourcesResult = await this.sendRequest(name, 'resources/list', {}) as { resources: MCPResource[] };
+   541→   541→        this.resources.set(name, resourcesResult.resources || []);
+   542→   542→      } catch {}
+   543→   543→
+   544→   544→      // List prompts
+   545→   545→      try {
+   546→   546→        const promptsResult = await this.sendRequest(name, 'prompts/list', {}) as { prompts: MCPPrompt[] };
+   547→   547→        this.prompts.set(name, promptsResult.prompts || []);
+   548→   548→      } catch {}
+   549→   549→
+   550→   550→      this.setConnectionState(name, 'connected');
+   551→   551→    } catch (error) {
+   552→   552→      console.error(`MCP: Failed to initialize ${name}: ${error instanceof Error ? error.message : String(error)}`);
+   553→   553→      this.setConnectionState(name, 'error', error instanceof Error ? error.message : String(error));
+   554→   554→    }
+   555→   555→  }
+   556→   556→
+   557→   557→  // --- Tool Calls ---
+   558→   558→
+   559→   559→  async callTool(serverName: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
+   560→   560→    const config = this.servers.get(serverName);
+   561→   561→    if (!config) throw new Error(`MCP server ${serverName} not found`);
+   562→   562→
+   563→   563→    if (config.transport === 'http') {
+   564→   564→      return this.callToolHTTP(serverName, toolName, args);
+   565→   565→    }
+   566→   566→    return this.sendRequest(serverName, 'tools/call', { name: toolName, arguments: args });
+   567→   567→  }
+   568→   568→
+   569→   569→  private async callToolHTTP(serverName: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
+   570→   570→    const config = this.servers.get(serverName);
+   571→   571→    if (!config?.url) throw new Error(`No URL for MCP server ${serverName}`);
+   572→   572→
+   573→   573→    const response = await fetch(config.url, {
+   574→   574→      method: 'POST',
+   575→   575→      headers: {
+   576→   576→        'Content-Type': 'application/json',
+   577→   577→        ...config.headers,
+   578→   578→      },
+   579→   579→      body: JSON.stringify({
+   580→   580→        jsonrpc: '2.0',
+   581→   581→        id: this.nextId++,
+   582→   582→        method: 'tools/call',
+   583→   583→        params: { name: toolName, arguments: args },
+   584→   584→      }),
+   585→   585→    });
+   586→   586→
+   587→   587→    const data = await response.json() as JSONRPCResponse;
+   588→   588→    if (data.error) throw new Error(`MCP error from ${serverName}: ${data.error.message}`);
+   589→   589→    return data.result;
+   590→   590→  }
+   591→   591→
+   592→   592→  // --- Resource Access ---
+   593→   593→
+   594→   594→  async readResource(serverName: string, uri: string): Promise<unknown> {
+   595→   595→    const config = this.servers.get(serverName);
+   596→   596→    if (!config) throw new Error(`MCP server ${serverName} not found`);
+   597→   597→
+   598→   598→    if (config.transport === 'http') {
+   599→   599→      const response = await fetch(config.url!, {
+   600→   600→        method: 'POST',
+   601→   601→        headers: { 'Content-Type': 'application/json', ...config.headers },
+   602→   602→        body: JSON.stringify({
+   603→   603→          jsonrpc: '2.0',
+   604→   604→          id: this.nextId++,
+   605→   605→          method: 'resources/read',
+   606→   606→          params: { uri },
+   607→   607→        }),
+   608→   608→      });
+   609→   609→      const data = await response.json() as JSONRPCResponse;
+   610→   610→      if (data.error) throw new Error(`MCP resource error: ${data.error.message}`);
+   611→   611→      return data.result;
+   612→   612→    }
+   613→   613→    return this.sendRequest(serverName, 'resources/read', { uri });
+   614→   614→  }
+   615→   615→
+   616→   616→  // --- Prompt Access ---
+   617→   617→
+   618→   618→  async getPrompt(serverName: string, promptName: string, args?: Record<string, string>): Promise<unknown> {
+   619→   619→    const config = this.servers.get(serverName);
+   620→   620→    if (!config) throw new Error(`MCP server ${serverName} not found`);
+   621→   621→
+   622→   622→    if (config.transport === 'http') {
+   623→   623→      const response = await fetch(config.url!, {
+   624→   624→        method: 'POST',
+   625→   625→        headers: { 'Content-Type': 'application/json', ...config.headers },
+   626→   626→        body: JSON.stringify({
+   627→   627→          jsonrpc: '2.0',
+   628→   628→          id: this.nextId++,
+   629→   629→          method: 'prompts/get',
+   630→   630→          params: { name: promptName, arguments: args || {} },
+   631→   631→        }),
+   632→   632→      });
+   633→   633→      const data = await response.json() as JSONRPCResponse;
+   634→   634→      if (data.error) throw new Error(`MCP prompt error: ${data.error.message}`);
+   635→   635→      return data.result;
+   636→   636→    }
+   637→   637→    return this.sendRequest(serverName, 'prompts/get', { name: promptName, arguments: args || {} });
+   638→   638→  }
+   639→   639→
+   640→   640→  // --- JSON-RPC Transport ---
+   641→   641→
+   642→   642→  private sendRequest(serverName: string, method: string, params: Record<string, unknown>): Promise<unknown> {
+   643→   643→    const proc = this.processes.get(serverName);
+   644→   644→    if (!proc || !proc.stdin?.writable) {
+   645→   645→      // Try SSE
+   646→   646→      if (this.eventSource.has(serverName)) {
+   647→   647→        return this.sendRequestSSE(serverName, method, params);
+   648→   648→      }
+   649→   649→      return Promise.reject(new Error(`MCP server ${serverName} not connected`));
+   650→   650→    }
+   651→   651→
+   652→   652→    const id = this.nextId++;
+   653→   653→    const request: JSONRPCRequest = { jsonrpc: '2.0', id, method, params };
+   654→   654→
+   655→   655→    return new Promise((resolve, reject) => {
+   656→   656→      const timeout = setTimeout(() => {
+   657→   657→        this.pendingRequests.delete(id);
+   658→   658→        reject(new Error(`MCP request to ${serverName} timed out`));
+   659→   659→      }, this.servers.get(serverName)?.timeout || 30000);
+   660→   660→
+   661→   661→      this.pendingRequests.set(id, { resolve, reject, timer: timeout });
+   662→   662→      if (proc.stdin) {
+   663→   663→        proc.stdin.write(JSON.stringify(request) + '\n');
+   664→   664→      } else {
+   665→   665→        clearTimeout(timeout);
+   666→   666→        this.pendingRequests.delete(id);
+   667→   667→        reject(new Error(`MCP server ${serverName} stdin not available`));
+   668→   668→      }
+   669→   669→    });
+   670→   670→  }
+   671→   671→
+   672→   672→  private async sendRequestSSE(serverName: string, method: string, params: Record<string, unknown>): Promise<unknown> {
+   673→   673→    const config = this.servers.get(serverName);
+   674→   674→    if (!config?.url) throw new Error(`No URL for SSE MCP server ${serverName}`);
+   675→   675→
+   676→   676→    // For SSE transport, we use a separate POST request for sending
+   677→   677→    // The response will come back through the SSE stream
+   678→   678→    const id = this.nextId++;
+   679→   679→    const request: JSONRPCRequest = { jsonrpc: '2.0', id, method, params };
+   680→   680→
+   681→   681→    // Create a pending request that will be resolved by the SSE handler
+   682→   682→    return new Promise((resolve, reject) => {
+   683→   683→      const timeout = setTimeout(() => {
+   684→   684→        this.pendingRequests.delete(id);
+   685→   685→        reject(new Error(`MCP SSE request to ${serverName} timed out`));
+   686→   686→      }, config.timeout || 30000);
+   687→   687→
+   688→   688→      this.pendingRequests.set(id, { resolve, reject, timer: timeout });
+   689→   689→
+   690→   690→      // Send via HTTP POST to the same endpoint
+   691→   691→      const postUrl = (config.url || '').replace(/\/sse$/, '/message') || config.url || '';
+   692→   692→      fetch(postUrl, {
+   693→   693→        method: 'POST',
+   694→   694→        headers: { 'Content-Type': 'application/json', ...config.headers },
+   695→   695→        body: JSON.stringify(request),
+   696→   696→      }).catch((error) => {
+   697→   697→        clearTimeout(timeout);
+   698→   698→        this.pendingRequests.delete(id);
+   699→   699→        reject(error);
+   700→   700→      });
+   701→   701→    });
+   702→   702→  }
+   703→   703→
+   704→   704→  private async sendNotification(serverName: string, method: string, params: Record<string, unknown>): Promise<void> {
+   705→   705→    const proc = this.processes.get(serverName);
+   706→   706→    if (proc && proc.stdin?.writable) {
+   707→   707→      proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n');
+   708→   708→    }
+   709→   709→    // For SSE/HTTP, notifications are best-effort
+   710→   710→  }
+   711→   711→
+   712→   712→  private handleResponse(_serverName: string, response: JSONRPCResponse): void {
+   713→   713→    const pending = this.pendingRequests.get(response.id);
+   714→   714→    if (!pending) return;
+   715→   715→    clearTimeout(pending.timer);
+   716→   716→    this.pendingRequests.delete(response.id);
+   717→   717→    if (response.error) pending.reject(new Error(response.error.message));
+   718→   718→    else pending.resolve(response.result);
+   719→   719→  }
+   720→   720→
+   721→   721→  // --- Tool Definitions for AI ---
+   722→   722→
+   723→   723→  getAllTools(): Array<{ serverName: string; tool: MCPTool }> {
+   724→   724→    const result: Array<{ serverName: string; tool: MCPTool }> = [];
+   725→   725→    for (const [serverName, tools] of this.tools) {
+   726→   726→      for (const tool of tools) result.push({ serverName, tool });
+   727→   727→    }
+   728→   728→    return result;
+   729→   729→  }
+   730→   730→
+   731→   731→  getToolDefinitions(): ToolDefinition[] {
+   732→   732→    const definitions: ToolDefinition[] = [];
+   733→   733→    for (const [serverName, tools] of this.tools) {
+   734→   734→      for (const tool of tools) {
+   735→   735→        definitions.push({
+   736→   736→          name: `mcp_${serverName}__${tool.name}`,
+   737→   737→          description: `[MCP:${serverName}] ${tool.description}`,
+   738→   738→          parameters: {
+   739→   739→            type: 'object',
+   740→   740→            properties: (tool.inputSchema.properties || {}) as Record<string, { type: string; description: string; enum?: string[] }>,
+   741→   741→            required: tool.inputSchema.required || [],
+   742→   742→          },
+   743→   743→        });
+   744→   744→      }
+   745→   745→    }
+   746→   746→    return definitions;
+   747→   747→  }
+   748→   748→
+   749→   749→  getAllResources(): Array<{ serverName: string; resource: MCPResource }> {
+   750→   750→    const result: Array<{ serverName: string; resource: MCPResource }> = [];
+   751→   751→    for (const [serverName, resources] of this.resources) {
+   752→   752→      for (const resource of resources) result.push({ serverName, resource });
+   753→   753→    }
+   754→   754→    return result;
+   755→   755→  }
+   756→   756→
+   757→   757→  getAllPrompts(): Array<{ serverName: string; prompt: MCPPrompt }> {
+   758→   758→    const result: Array<{ serverName: string; prompt: MCPPrompt }> = [];
+   759→   759→    for (const [serverName, prompts] of this.prompts) {
+   760→   760→      for (const prompt of prompts) result.push({ serverName, prompt });
+   761→   761→    }
+   762→   762→    return result;
+   763→   763→  }
+   764→   764→
+   765→   765→  parseMCPToolName(fullName: string): { serverName: string; toolName: string } | null {
+   766→   766→    if (!fullName.startsWith('mcp_')) return null;
+   767→   767→    const rest = fullName.slice(4);
+   768→   768→    const sep = rest.indexOf('__');
+   769→   769→    if (sep === -1) return null;
+   770→   770→    return { serverName: rest.slice(0, sep), toolName: rest.slice(sep + 2) };
+   771→   771→  }
+   772→   772→
+   773→   773→  isConnected(name: string): boolean {
+   774→   774→    return this.processes.has(name) || this.eventSource.has(name);
+   775→   775→  }
+   776→   776→
+   777→   777→  getServerNames(): string[] {
+   778→   778→    return Array.from(this.servers.keys());
+   779→   779→  }
+   780→   780→
+   781→   781→  // --- Diagnostics ---
+   782→   782→
+   783→   783→  /**
+   784→   784→   * Print a health report of all MCP connections
+   785→   785→   */
+   786→   786→  healthReport(): void {
+   787→   787→    const states = this.getConnectionStates();
+   788→   788→    if (states.length === 0) {
+   789→   789→      console.log(chalk.gray('  No MCP servers configured.'));
+   790→   790→      return;
+   791→   791→    }
+   792→   792→
+   793→   793→    console.log(chalk.bold('\n  MCP Health Report:\n'));
+   794→   794→    for (const state of states) {
+   795→   795→      const statusIcon = state.status === 'connected' ? chalk.green('●') :
+   796→   796→                         state.status === 'connecting' ? chalk.yellow('◎') :
+   797→   797→                         state.status === 'reconnecting' ? chalk.yellow('↻') :
+   798→   798→                         chalk.red('○');
+   799→   799→      const lastConnected = state.lastConnected
+   800→   800→        ? new Date(state.lastConnected).toLocaleTimeString()
+   801→   801→        : 'never';
+   802→   802→      console.log(`  ${statusIcon} ${chalk.cyan(state.name.padEnd(20))} ${state.status.padEnd(15)} tools: ${chalk.green(String(state.toolCount))}  resources: ${chalk.green(String(state.resourceCount))}  prompts: ${chalk.green(String(state.promptCount))}  last: ${chalk.gray(lastConnected)}`);
+   803→   803→      if (state.lastError) {
+   804→   804→        console.log(`    ${chalk.red('⚠ ' + state.lastError)}`);
+   805→   805→      }
+   806→   806→    }
+   807→   807→    console.log();
+   808→   808→  }
+   809→   809→}
+   810→   810→

@@ -1,0 +1,1067 @@
+     1→// ============================================================
+     2→// NeuroCLI - Auto Mode
+     3→// Full autonomous execution mode similar to Claude Code's Auto Mode
+     4→// Skips approval prompts while maintaining safety guardrails
+     5→// Supports /goal and /routine commands for autonomous workflows
+     6→// ============================================================
+     7→
+     8→import {
+     9→  existsSync,
+    10→  mkdirSync,
+    11→  readFileSync,
+    12→  writeFileSync,
+    13→  readdirSync,
+    14→  unlinkSync,
+    15→} from 'fs';
+    16→import { join, resolve, relative } from 'path';
+    17→import { homedir } from 'os';
+    18→import { randomUUID } from 'crypto';
+    19→import { execSync, spawn } from 'child_process';
+    20→
+    21→// ---------------------------------------------------------------------------
+    22→// Interfaces
+    23→// ---------------------------------------------------------------------------
+    24→
+    25→export type SafetyLevel = 'conservative' | 'moderate' | 'aggressive';
+    26→
+    27→export interface AutoModeConfig {
+    28→  /** Whether auto mode is currently enabled */
+    29→  enabled: boolean;
+    30→  /** Safety level controlling what operations are permitted */
+    31→  safetyLevel: SafetyLevel;
+    32→  /** Maximum iterations before auto mode stops (default 50) */
+    33→  maxIterations: number;
+    34→  /** Maximum spend in USD – 0 = unlimited */
+    35→  maxCost: number;
+    36→  /** Maximum execution time in ms – 0 = unlimited */
+    37→  maxTimeMs: number;
+    38→  /** Commands that are ALWAYS blocked, even in auto mode */
+    39→  blockedCommands: string[];
+    40→  /** File glob patterns that can never be modified in auto mode */
+    41→  blockedPatterns: string[];
+    42→  /** Auto git commit after each change */
+    43→  autoCommit: boolean;
+    44→  /** Auto run tests after each change */
+    45→  autoTest: boolean;
+    46→  /** Pause auto mode when an error is encountered */
+    47→  pauseOnError: boolean;
+    48→}
+    49→
+    50→export interface AutoModeStats {
+    51→  /** Number of iterations completed */
+    52→  iterations: number;
+    53→  /** Number of files changed (created, modified, or deleted) */
+    54→  filesChanged: number;
+    55→  /** Number of commands executed */
+    56→  commandsRun: number;
+    57→  /** Total elapsed time in ms */
+    58→  timeElapsedMs: number;
+    59→  /** Total cost accrued in USD */
+    60→  totalCost: number;
+    61→  /** Number of operations blocked by safety */
+    62→  blockedOperations: number;
+    63→  /** Number of errors encountered */
+    64→  errors: number;
+    65→}
+    66→
+    67→export interface GoalDefinition {
+    68→  /** Unique identifier */
+    69→  id: string;
+    70→  /** Short human-readable name */
+    71→  name: string;
+    72→  /** High-level goal description */
+    73→  description: string;
+    74→  /** Optional success criteria – when all pass, the goal is considered complete */
+    75→  successCriteria: string[];
+    76→  /** Optional list of sub-goals */
+    77→  subGoals: GoalDefinition[];
+    78→  /** ISO timestamp when the goal was created */
+    79→  createdAt: string;
+    80→  /** ISO timestamp when the goal was completed (if applicable) */
+    81→  completedAt?: string;
+    82→  /** Current status */
+    83→  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
+    84→  /** Progress from 0 to 1 */
+    85→  progress: number;
+    86→}
+    87→
+    88→export interface RoutineStep {
+    89→  /** Optional label for the step */
+    90→  label?: string;
+    91→  /** The prompt or command to execute */
+    92→  prompt: string;
+    93→  /** Optional model override for this step */
+    94→  model?: string;
+    95→  /** Whether to pause between this step and the next */
+    96→  pauseAfter?: boolean;
+    97→  /** Maximum iterations allowed for this step */
+    98→  maxIterations?: number;
+    99→}
+   100→
+   101→export interface RoutineDefinition {
+   102→  /** Unique identifier */
+   103→  id: string;
+   104→  /** Short human-readable name */
+   105→  name: string;
+   106→  /** Description of what the routine accomplishes */
+   107→  description: string;
+   108→  /** Ordered list of steps */
+   109→  steps: RoutineStep[];
+   110→  /** ISO timestamp when the routine was created */
+   111→  createdAt: string;
+   112→  /** ISO timestamp of last run */
+   113→  lastRunAt?: string;
+   114→  /** Number of times this routine has been run */
+   115→  runCount: number;
+   116→  /** Tags for categorisation */
+   117→  tags: string[];
+   118→}
+   119→
+   120→export interface AutoModeCheckpoint {
+   121→  id: string;
+   122→  timestamp: string;
+   123→  iteration: number;
+   124→  goalId?: string;
+   125→  routineId?: string;
+   126→  snapshot: string; // serialised state description
+   127→}
+   128→
+   129→// ---------------------------------------------------------------------------
+   130→// Dangerous-command patterns – always blocked regardless of safety level
+   131→// ---------------------------------------------------------------------------
+   132→
+   133→const ALWAYS_BLOCKED_COMMANDS: string[] = [
+   134→  'rm -rf /',
+   135→  'rm -rf /*',
+   136→  'sudo rm -rf',
+   137→  'mkfs',
+   138→  'dd if=',
+   139→  ':(){ :|:& };:',        // fork bomb
+   140→  'chmod 777 /',
+   141→  'chown -R root',
+   142→  'curl | sh',
+   143→  'wget | sh',
+   144→  'curl | bash',
+   145→  'wget | bash',
+   146→  '> /dev/sda',
+   147→  'mv / ',
+   148→  'shutdown',
+   149→  'reboot',
+   150→  'init 0',
+   151→  'init 6',
+   152→  'systemctl poweroff',
+   153→  'systemctl reboot',
+   154→];
+   155→
+   156→const CONSERVATIVE_BLOCKED_COMMANDS: string[] = [
+   157→  'rm -rf',
+   158→  'rm -r',
+   159→  'sudo',
+   160→  'chmod',
+   161→  'chown',
+   162→  'kill -9',
+   163→  'pkill',
+   164→  'killall',
+   165→  'pip uninstall',
+   166→  'npm uninstall',
+   167→  'npm publish',
+   168→  'git push --force',
+   169→  'git reset --hard',
+   170→  'git clean -fd',
+   171→  'drop table',
+   172→  'drop database',
+   173→  'truncate table',
+   174→];
+   175→
+   176→const MODERATE_BLOCKED_COMMANDS: string[] = [
+   177→  'rm -rf',
+   178→  'sudo rm',
+   179→  'npm publish',
+   180→  'git push --force',
+   181→  'drop table',
+   182→  'drop database',
+   183→];
+   184→
+   185→const ALWAYS_BLOCKED_PATTERNS: string[] = [
+   186→  '**/.env',
+   187→  '**/.env.*',
+   188→  '**/id_rsa*',
+   189→  '**/id_ed25519*',
+   190→  '**/*.pem',
+   191→  '**/*.key',
+   192→  '**/credentials.json',
+   193→  '**/secrets.*',
+   194→  '**/.ssh/*',
+   195→  '**/.gnupg/*',
+   196→  '**/etc/shadow',
+   197→  '**/etc/passwd',
+   198→];
+   199→
+   200→const CONSERVATIVE_BLOCKED_PATTERNS: string[] = [
+   201→  '**/package.json',
+   202→  '**/package-lock.json',
+   203→  '**/yarn.lock',
+   204→  '**/.gitignore',
+   205→  '**/tsconfig.json',
+   206→  '**/next.config.*',
+   207→  '**/webpack.config.*',
+   208→  '**/docker-compose.*',
+   209→  '**/Dockerfile*',
+   210→];
+   211→
+   212→// ---------------------------------------------------------------------------
+   213→// Engine type – minimal contract so auto-mode can drive the engine
+   214→// ---------------------------------------------------------------------------
+   215→
+   216→/**
+   217→ * Minimal interface that any execution engine must satisfy for AutoMode
+   218→ * to orchestrate it.  This avoids a hard import of NeuroEngine while
+   219→ * keeping the two modules loosely coupled.
+   220→ */
+   221→export interface AutoModeEngine {
+   222→  /** Run a single prompt through the engine and return the assistant text */
+   223→  runPrompt(prompt: string, model?: string): Promise<{
+   224→    text: string;
+   225→    inputTokens: number;
+   226→    outputTokens: number;
+   227→    cost: number;
+   228→    filesChanged: number;
+   229→    commandsRun: number;
+   230→    error?: string;
+   231→  }>;
+   232→}
+   233→
+   234→// ---------------------------------------------------------------------------
+   235→// AutoMode class
+   236→// ---------------------------------------------------------------------------
+   237→
+   238→const NEURO_DIR = join(homedir(), '.neuro');
+   239→const AUTO_STATE_FILE = join(NEURO_DIR, 'auto-mode-state.json');
+   240→const GOALS_FILE = join(NEURO_DIR, 'auto-mode-goals.json');
+   241→const ROUTINES_FILE = join(NEURO_DIR, 'auto-mode-routines.json');
+   242→const CHECKPOINTS_DIR = join(NEURO_DIR, 'auto-checkpoints');
+   243→
+   244→export class AutoMode {
+   245→  private config: AutoModeConfig;
+   246→  private stats: AutoModeStats;
+   247→  private goals: Map<string, GoalDefinition> = new Map();
+   248→  private routines: Map<string, RoutineDefinition> = new Map();
+   249→  private checkpoints: AutoModeCheckpoint[] = [];
+   250→  private startTime: number = 0;
+   251→  private running: boolean = false;
+   252→  private abortController: AbortController | null = null;
+   253→  private onStatusChange?: (status: AutoModeStatus) => void;
+   254→
+   255→  constructor(config?: Partial<AutoModeConfig>, onStatusChange?: (status: AutoModeStatus) => void) {
+   256→    this.config = {
+   257→      enabled: false,
+   258→      safetyLevel: 'moderate',
+   259→      maxIterations: 50,
+   260→      maxCost: 0,
+   261→      maxTimeMs: 0,
+   262→      blockedCommands: [...ALWAYS_BLOCKED_COMMANDS],
+   263→      blockedPatterns: [...ALWAYS_BLOCKED_PATTERNS],
+   264→      autoCommit: false,
+   265→      autoTest: false,
+   266→      pauseOnError: true,
+   267→      ...config,
+   268→    };
+   269→    this.onStatusChange = onStatusChange;
+   270→    this.stats = this.freshStats();
+   271→    this.loadState();
+   272→  }
+   273→
+   274→  // -----------------------------------------------------------------------
+   275→  // Enable / Disable
+   276→  // -----------------------------------------------------------------------
+   277→
+   278→  /** Enable auto mode – skip all approval prompts, run safety checks in background */
+   279→  enable(): void {
+   280→    this.config.enabled = true;
+   281→    this.emitStatus('enabled');
+   282→    this.persistState();
+   283→  }
+   284→
+   285→  /** Disable auto mode, return to interactive */
+   286→  disable(): void {
+   287→    this.config.enabled = false;
+   288→    this.running = false;
+   289→    if (this.abortController) {
+   290→      this.abortController.abort();
+   291→      this.abortController = null;
+   292→    }
+   293→    this.emitStatus('disabled');
+   294→    this.persistState();
+   295→  }
+   296→
+   297→  /** Check whether auto mode is currently enabled */
+   298→  isEnabled(): boolean {
+   299→    return this.config.enabled;
+   300→  }
+   301→
+   302→  /** Check whether auto mode is currently running a task */
+   303→  isRunning(): boolean {
+   304→    return this.running;
+   305→  }
+   306→
+   307→  // -----------------------------------------------------------------------
+   308→  // Configuration
+   309→  // -----------------------------------------------------------------------
+   310→
+   311→  getConfig(): Readonly<AutoModeConfig> {
+   312→    return Object.freeze({ ...this.config });
+   313→  }
+   314→
+   315→  updateConfig(updates: Partial<AutoModeConfig>): void {
+   316→    // Merge blocked lists so ALWAYS_BLOCKED are never removed
+   317→    if (updates.blockedCommands) {
+   318→      const merged = new Set([...ALWAYS_BLOCKED_COMMANDS, ...updates.blockedCommands]);
+   319→      updates.blockedCommands = Array.from(merged);
+   320→    }
+   321→    if (updates.blockedPatterns) {
+   322→      const merged = new Set([...ALWAYS_BLOCKED_PATTERNS, ...updates.blockedPatterns]);
+   323→      updates.blockedPatterns = Array.from(merged);
+   324→    }
+   325→    Object.assign(this.config, updates);
+   326→    this.persistState();
+   327→  }
+   328→
+   329→  setSafetyLevel(level: SafetyLevel): void {
+   330→    this.config.safetyLevel = level;
+   331→    // Re-apply the pattern / command block lists for the new level
+   332→    this.config.blockedCommands = this.buildBlockedCommands(level);
+   333→    this.config.blockedPatterns = this.buildBlockedPatterns(level);
+   334→    this.persistState();
+   335→  }
+   336→
+   337→  // -----------------------------------------------------------------------
+   338→  // Core autonomous execution
+   339→  // -----------------------------------------------------------------------
+   340→
+   341→  /**
+   342→   * Run a task fully autonomously.
+   343→   *
+   344→   * The engine will be called repeatedly until:
+   345→   * - maxIterations is reached
+   346→   * - maxCost is exceeded
+   347→   * - maxTimeMs is exceeded
+   348→   * - The task appears complete (engine signals no further action needed)
+   349→   * - An error occurs and pauseOnError is true
+   350→   * - The user aborts
+   351→   */
+   352→  async executeAuto(
+   353→    prompt: string,
+   354→    engine: AutoModeEngine,
+   355→    maxIterations?: number,
+   356→  ): Promise<AutoModeResult> {
+   357→    if (this.running) {
+   358→      return { ok: false, iterations: 0, finalText: '', error: 'Auto mode is already running a task' };
+   359→    }
+   360→
+   361→    const limit = maxIterations ?? this.config.maxIterations;
+   362→    this.running = true;
+   363→    this.abortController = new AbortController();
+   364→    this.startTime = Date.now();
+   365→    this.stats = this.freshStats();
+   366→
+   367→    this.emitStatus('running');
+   368→
+   369→    const result: AutoModeResult = { ok: true, iterations: 0, finalText: '' };
+   370→
+   371→    try {
+   372→      let currentPrompt = prompt;
+   373→
+   374→      for (let i = 0; i < limit; i++) {
+   375→        // ---- Abort check ----
+   376→        if (this.abortController.signal.aborted) {
+   377→          result.ok = false;
+   378→          result.error = 'Aborted by user';
+   379→          break;
+   380→        }
+   381→
+   382→        // ---- Time limit ----
+   383→        if (this.config.maxTimeMs > 0 && Date.now() - this.startTime > this.config.maxTimeMs) {
+   384→          result.error = `Time limit of ${this.config.maxTimeMs}ms exceeded`;
+   385→          break;
+   386→        }
+   387→
+   388→        // ---- Cost limit ----
+   389→        if (this.config.maxCost > 0 && this.stats.totalCost >= this.config.maxCost) {
+   390→          result.error = `Cost limit of $${this.config.maxCost} exceeded`;
+   391→          break;
+   392→        }
+   393→
+   394→        // ---- Safety pre-check ----
+   395→        const safetyResult = this.preFlightSafetyCheck(currentPrompt);
+   396→        if (!safetyResult.allowed) {
+   397→          this.stats.blockedOperations++;
+   398→          result.error = `Safety check blocked execution: ${safetyResult.reason}`;
+   399→          if (this.config.pauseOnError) break;
+   400→          // If not pausing on error, try to continue with a modified prompt
+   401→          currentPrompt = `The previous action was blocked for safety reasons (${safetyResult.reason}). ` +
+   402→            `Please try a different, safer approach to accomplish the goal. Original task: ${prompt}`;
+   403→          continue;
+   404→        }
+   405→
+   406→        // ---- Execute ----
+   407→        try {
+   408→          const response = await engine.runPrompt(currentPrompt);
+   409→          this.stats.iterations = i + 1;
+   410→          this.stats.filesChanged += response.filesChanged;
+   411→          this.stats.commandsRun += response.commandsRun;
+   412→          this.stats.totalCost += response.cost;
+   413→          this.stats.timeElapsedMs = Date.now() - this.startTime;
+   414→
+   415→          if (response.error) {
+   416→            this.stats.errors++;
+   417→            if (this.config.pauseOnError) {
+   418→              result.error = response.error;
+   419→              break;
+   420→            }
+   421→          }
+   422→
+   423→          result.iterations = i + 1;
+   424→          result.finalText = response.text;
+   425→
+   426→          // ---- Auto-commit ----
+   427→          if (this.config.autoCommit && response.filesChanged > 0) {
+   428→            this.autoGitCommit(i + 1);
+   429→          }
+   430→
+   431→          // ---- Auto-test ----
+   432→          if (this.config.autoTest && response.filesChanged > 0) {
+   433→            const testResult = this.autoRunTests();
+   434→            if (!testResult.passed && this.config.pauseOnError) {
+   435→              result.error = `Tests failed after iteration ${i + 1}`;
+   436→              break;
+   437→            }
+   438→          }
+   439→
+   440→          // ---- Checkpoint ----
+   441→          if (i > 0 && i % 5 === 0) {
+   442→            this.createCheckpoint(i, undefined, undefined);
+   443→          }
+   444→
+   445→          // ---- Detect completion ----
+   446→          if (this.detectCompletion(response.text)) {
+   447→            result.completed = true;
+   448→            break;
+   449→          }
+   450→
+   451→          // Feed the response back as context for the next iteration
+   452→          currentPrompt =
+   453→            `Continuing autonomous task. Previous iteration result:\n` +
+   454→            `${response.text.slice(0, 2000)}\n\n` +
+   455→            `If the task is complete, respond with "TASK_COMPLETE". ` +
+   456→            `Otherwise continue working towards: ${prompt}`;
+   457→
+   458→        } catch (err) {
+   459→          this.stats.errors++;
+   460→          if (this.config.pauseOnError) {
+   461→            result.ok = false;
+   462→            result.error = `Execution error: ${err instanceof Error ? err.message : String(err)}`;
+   463→            break;
+   464→          }
+   465→          // Otherwise swallow and continue
+   466→        }
+   467→      }
+   468→    } finally {
+   469→      this.running = false;
+   470→      this.abortController = null;
+   471→      this.emitStatus(this.config.enabled ? 'enabled' : 'disabled');
+   472→      this.persistState();
+   473→    }
+   474→
+   475→    return result;
+   476→  }
+   477→
+   478→  /** Abort the currently running auto execution */
+   479→  abort(): void {
+   480→    if (this.abortController) {
+   481→      this.abortController.abort();
+   482→    }
+   483→  }
+   484→
+   485→  // -----------------------------------------------------------------------
+   486→  // /goal command support
+   487→  // -----------------------------------------------------------------------
+   488→
+   489→  /** Set a high-level goal and let the agent work towards it autonomously */
+   490→  setGoal(name: string, description: string, successCriteria: string[] = []): GoalDefinition {
+   491→    const goal: GoalDefinition = {
+   492→      id: randomUUID(),
+   493→      name,
+   494→      description,
+   495→      successCriteria,
+   496→      subGoals: [],
+   497→      createdAt: new Date().toISOString(),
+   498→      status: 'pending',
+   499→      progress: 0,
+   500→    };
+   501→    this.goals.set(goal.id, goal);
+   502→    this.persistGoals();
+   503→    return goal;
+   504→  }
+   505→
+   506→  /** Get a goal by ID */
+   507→  getGoal(goalId: string): GoalDefinition | undefined {
+   508→    return this.goals.get(goalId);
+   509→  }
+   510→
+   511→  /** List all goals */
+   512→  listGoals(): GoalDefinition[] {
+   513→    return Array.from(this.goals.values());
+   514→  }
+   515→
+   516→  /** Update goal progress */
+   517→  updateGoalProgress(goalId: string, progress: number, status?: GoalDefinition['status']): void {
+   518→    const goal = this.goals.get(goalId);
+   519→    if (!goal) return;
+   520→    goal.progress = Math.min(1, Math.max(0, progress));
+   521→    if (status) goal.status = status;
+   522→    if (goal.progress >= 1 && goal.status !== 'failed' && goal.status !== 'cancelled') {
+   523→      goal.status = 'completed';
+   524→      goal.completedAt = new Date().toISOString();
+   525→    }
+   526→    this.persistGoals();
+   527→  }
+   528→
+   529→  /** Add a sub-goal */
+   530→  addSubGoal(parentId: string, name: string, description: string): GoalDefinition | null {
+   531→    const parent = this.goals.get(parentId);
+   532→    if (!parent) return null;
+   533→    const sub: GoalDefinition = {
+   534→      id: randomUUID(),
+   535→      name,
+   536→      description,
+   537→      successCriteria: [],
+   538→      subGoals: [],
+   539→      createdAt: new Date().toISOString(),
+   540→      status: 'pending',
+   541→      progress: 0,
+   542→    };
+   543→    parent.subGoals.push(sub);
+   544→    this.goals.set(sub.id, sub); // flat index too
+   545→    this.persistGoals();
+   546→    return sub;
+   547→  }
+   548→
+   549→  /** Delete a goal */
+   550→  deleteGoal(goalId: string): boolean {
+   551→    if (!this.goals.has(goalId)) return false;
+   552→    // Also remove from any parent's subGoals
+   553→    for (const g of Array.from(this.goals.values())) {
+   554→      g.subGoals = g.subGoals.filter((s: GoalDefinition) => s.id !== goalId);
+   555→    }
+   556→    this.goals.delete(goalId);
+   557→    this.persistGoals();
+   558→    return true;
+   559→  }
+   560→
+   561→  /**
+   562→   * Execute a goal autonomously – will iterate until the goal is reached
+   563→   * or limits are hit
+   564→   */
+   565→  async executeGoal(goalId: string, engine: AutoModeEngine): Promise<AutoModeResult> {
+   566→    const goal = this.goals.get(goalId);
+   567→    if (!goal) return { ok: false, iterations: 0, finalText: '', error: `Goal "${goalId}" not found` };
+   568→
+   569→    goal.status = 'in_progress';
+   570→    this.persistGoals();
+   571→
+   572→    const prompt = this.buildGoalPrompt(goal);
+   573→    const result = await this.executeAuto(prompt, engine, this.config.maxIterations);
+   574→
+   575→    if (result.completed) {
+   576→      goal.status = 'completed';
+   577→      goal.progress = 1;
+   578→      goal.completedAt = new Date().toISOString();
+   579→    } else if (result.error) {
+   580→      goal.status = 'failed';
+   581→    }
+   582→    this.persistGoals();
+   583→
+   584→    return result;
+   585→  }
+   586→
+   587→  // -----------------------------------------------------------------------
+   588→  // /routine command support
+   589→  // -----------------------------------------------------------------------
+   590→
+   591→  /** Create a new routine */
+   592→  createRoutine(name: string, description: string, steps: RoutineStep[], tags: string[] = []): RoutineDefinition {
+   593→    const routine: RoutineDefinition = {
+   594→      id: randomUUID(),
+   595→      name,
+   596→      description,
+   597→      steps,
+   598→      createdAt: new Date().toISOString(),
+   599→      runCount: 0,
+   600→      tags,
+   601→    };
+   602→    this.routines.set(routine.id, routine);
+   603→    this.persistRoutines();
+   604→    return routine;
+   605→  }
+   606→
+   607→  /** Get a routine by ID */
+   608→  getRoutine(routineId: string): RoutineDefinition | undefined {
+   609→    return this.routines.get(routineId);
+   610→  }
+   611→
+   612→  /** List all routines, optionally filtered by tag */
+   613→  listRoutines(tag?: string): RoutineDefinition[] {
+   614→    const all = Array.from(this.routines.values());
+   615→    if (tag) return all.filter(r => r.tags.includes(tag));
+   616→    return all;
+   617→  }
+   618→
+   619→  /** Delete a routine */
+   620→  deleteRoutine(routineId: string): boolean {
+   621→    if (!this.routines.has(routineId)) return false;
+   622→    this.routines.delete(routineId);
+   623→    this.persistRoutines();
+   624→    return true;
+   625→  }
+   626→
+   627→  /** Update a routine's steps */
+   628→  updateRoutineSteps(routineId: string, steps: RoutineStep[]): boolean {
+   629→    const routine = this.routines.get(routineId);
+   630→    if (!routine) return false;
+   631→    routine.steps = steps;
+   632→    this.persistRoutines();
+   633→    return true;
+   634→  }
+   635→
+   636→  /** Replay a saved routine */
+   637→  async executeRoutine(routineId: string, engine: AutoModeEngine): Promise<AutoModeResult> {
+   638→    const routine = this.routines.get(routineId);
+   639→    if (!routine) return { ok: false, iterations: 0, finalText: '', error: `Routine "${routineId}" not found` };
+   640→    if (routine.steps.length === 0) return { ok: false, iterations: 0, finalText: '', error: 'Routine has no steps' };
+   641→
+   642→    routine.runCount++;
+   643→    routine.lastRunAt = new Date().toISOString();
+   644→    this.persistRoutines();
+   645→
+   646→    const overallResult: AutoModeResult = { ok: true, iterations: 0, finalText: '' };
+   647→    const stepResults: string[] = [];
+   648→
+   649→    for (let i = 0; i < routine.steps.length; i++) {
+   650→      const step = routine.steps[i];
+   651→
+   652→      // Build context from previous steps
+   653→      const contextPrompt = stepResults.length > 0
+   654→        ? `Context from previous steps:\n${stepResults.map((r, idx) => `Step ${idx + 1}: ${r.slice(0, 500)}`).join('\n')}\n\n`
+   655→        : '';
+   656→
+   657→      const fullPrompt = `${contextPrompt}Step ${i + 1}/${routine.steps.length}: ${step.prompt}`;
+   658→
+   659→      const stepMaxIter = step.maxIterations ?? Math.max(5, Math.floor(this.config.maxIterations / routine.steps.length));
+   660→      const result = await this.executeAuto(fullPrompt, engine, stepMaxIter);
+   661→
+   662→      overallResult.iterations += result.iterations;
+   663→
+   664→      if (!result.ok) {
+   665→        overallResult.ok = false;
+   666→        overallResult.error = `Routine failed at step ${i + 1}: ${result.error}`;
+   667→        break;
+   668→      }
+   669→
+   670→      stepResults.push(result.finalText);
+   671→      overallResult.finalText = result.finalText;
+   672→
+   673→      if (step.pauseAfter && i < routine.steps.length - 1) {
+   674→        // In auto mode we just log; in interactive mode a real prompt would appear
+   675→        // eslint-disable-next-line no-console
+   676→        console.log(`[auto-mode] Routine "${routine.name}" paused after step ${i + 1}. Continuing automatically in auto mode.`);
+   677→      }
+   678→    }
+   679→
+   680→    if (overallResult.ok) {
+   681→      overallResult.completed = true;
+   682→    }
+   683→
+   684→    return overallResult;
+   685→  }
+   686→
+   687→  // -----------------------------------------------------------------------
+   688→  // Safety
+   689→  // -----------------------------------------------------------------------
+   690→
+   691→  /**
+   692→   * Pre-flight safety check – examines the prompt for dangerous commands
+   693→   * or patterns that should be blocked even in auto mode.
+   694→   */
+   695→  preFlightSafetyCheck(prompt: string): { allowed: boolean; reason?: string } {
+   696→    const lower = prompt.toLowerCase();
+   697→
+   698→    // Check always-blocked commands
+   699→    for (const cmd of this.config.blockedCommands) {
+   700→      if (lower.includes(cmd.toLowerCase())) {
+   701→        return { allowed: false, reason: `Blocked command detected: "${cmd}"` };
+   702→      }
+   703→    }
+   704→
+   705→    // Safety-level-specific checks for conservative / moderate
+   706→    if (this.config.safetyLevel === 'conservative') {
+   707→      for (const cmd of CONSERVATIVE_BLOCKED_COMMANDS) {
+   708→        if (lower.includes(cmd.toLowerCase())) {
+   709→          return { allowed: false, reason: `Conservative mode blocked command: "${cmd}"` };
+   710→        }
+   711→      }
+   712→    } else if (this.config.safetyLevel === 'moderate') {
+   713→      for (const cmd of MODERATE_BLOCKED_COMMANDS) {
+   714→        if (lower.includes(cmd.toLowerCase())) {
+   715→          return { allowed: false, reason: `Moderate mode blocked command: "${cmd}"` };
+   716→        }
+   717→      }
+   718→    }
+   719→    // 'aggressive' – only always-blocked commands are blocked
+   720→
+   721→    // Check blocked file patterns
+   722→    for (const pattern of this.config.blockedPatterns) {
+   723→      // Simple substring check for path-like strings in prompt
+   724→      if (lower.includes(pattern.replace(/\*\*/g, '').replace(/\*/g, '').toLowerCase())) {
+   725→        return { allowed: false, reason: `Blocked file pattern detected: "${pattern}"` };
+   726→      }
+   727→    }
+   728→
+   729→    return { allowed: true };
+   730→  }
+   731→
+   732→  /**
+   733→   * Runtime safety check for a specific command about to be executed.
+   734→   * This is meant to be called by the engine before running any shell command.
+   735→   */
+   736→  isCommandAllowed(command: string): { allowed: boolean; reason?: string } {
+   737→    const trimmed = command.trim();
+   738→
+   739→    // Always-blocked
+   740→    for (const blocked of ALWAYS_BLOCKED_COMMANDS) {
+   741→      if (trimmed.includes(blocked) || trimmed.startsWith(blocked.split(' ')[0])) {
+   742→        return { allowed: false, reason: `Command blocked (always): "${blocked}"` };
+   743→      }
+   744→    }
+   745→
+   746→    // Config-level blocked
+   747→    for (const blocked of this.config.blockedCommands) {
+   748→      if (trimmed.includes(blocked)) {
+   749→        return { allowed: false, reason: `Command blocked (config): "${blocked}"` };
+   750→      }
+   751→    }
+   752→
+   753→    // Safety-level checks
+   754→    const levelLists: Record<SafetyLevel, string[]> = {
+   755→      conservative: CONSERVATIVE_BLOCKED_COMMANDS,
+   756→      moderate: MODERATE_BLOCKED_COMMANDS,
+   757→      aggressive: [],
+   758→    };
+   759→    for (const blocked of levelLists[this.config.safetyLevel]) {
+   760→      if (trimmed.includes(blocked)) {
+   761→        return { allowed: false, reason: `Command blocked (${this.config.safetyLevel}): "${blocked}"` };
+   762→      }
+   763→    }
+   764→
+   765→    return { allowed: true };
+   766→  }
+   767→
+   768→  /**
+   769→   * Runtime safety check for a file path about to be modified.
+   770→   * This is meant to be called by the engine before any file write.
+   771→   */
+   772→  isFileModificationAllowed(filePath: string): { allowed: boolean; reason?: string } {
+   773→    const normalised = filePath.replace(/\\/g, '/');
+   774→
+   775→    for (const pattern of this.config.blockedPatterns) {
+   776→      if (this.matchesGlobPattern(normalised, pattern)) {
+   777→        return { allowed: false, reason: `File pattern blocked: "${pattern}"` };
+   778→      }
+   779→    }
+   780→
+   781→    // Safety-level-specific patterns
+   782→    const patternLists: Record<SafetyLevel, string[]> = {
+   783→      conservative: CONSERVATIVE_BLOCKED_PATTERNS,
+   784→      moderate: [],
+   785→      aggressive: [],
+   786→    };
+   787→    for (const pattern of patternLists[this.config.safetyLevel]) {
+   788→      if (this.matchesGlobPattern(normalised, pattern)) {
+   789→        return { allowed: false, reason: `File pattern blocked (${this.config.safetyLevel}): "${pattern}"` };
+   790→      }
+   791→    }
+   792→
+   793→    return { allowed: true };
+   794→  }
+   795→
+   796→  // -----------------------------------------------------------------------
+   797→  // Statistics
+   798→  // -----------------------------------------------------------------------
+   799→
+   800→  getStats(): Readonly<AutoModeStats> {
+   801→    if (this.running) {
+   802→      return { ...this.stats, timeElapsedMs: Date.now() - this.startTime };
+   803→    }
+   804→    return { ...this.stats };
+   805→  }
+   806→
+   807→  resetStats(): void {
+   808→    this.stats = this.freshStats();
+   809→  }
+   810→
+   811→  // -----------------------------------------------------------------------
+   812→  // Checkpoints
+   813→  // -----------------------------------------------------------------------
+   814→
+   815→  listCheckpoints(): AutoModeCheckpoint[] {
+   816→    return [...this.checkpoints];
+   817→  }
+   818→
+   819→  getLatestCheckpoint(): AutoModeCheckpoint | undefined {
+   820→    return this.checkpoints.length > 0
+   821→      ? this.checkpoints[this.checkpoints.length - 1]
+   822→      : undefined;
+   823→  }
+   824→
+   825→  /** Create a checkpoint of the current state */
+   826→  createCheckpoint(iteration: number, goalId?: string, routineId?: string): AutoModeCheckpoint {
+   827→    const cp: AutoModeCheckpoint = {
+   828→      id: randomUUID(),
+   829→      timestamp: new Date().toISOString(),
+   830→      iteration,
+   831→      goalId,
+   832→      routineId,
+   833→      snapshot: JSON.stringify({
+   834→        stats: this.stats,
+   835→        config: { ...this.config, enabled: false }, // don't persist enabled state in snapshot
+   836→      }),
+   837→    };
+   838→    this.checkpoints.push(cp);
+   839→
+   840→    // Persist to disk
+   841→    try {
+   842→      if (!existsSync(CHECKPOINTS_DIR)) mkdirSync(CHECKPOINTS_DIR, { recursive: true });
+   843→      const cpFile = join(CHECKPOINTS_DIR, `checkpoint-${cp.id}.json`);
+   844→      writeFileSync(cpFile, JSON.stringify(cp, null, 2), 'utf-8');
+   845→    } catch {
+   846→      // Best-effort persistence
+   847→    }
+   848→
+   849→    // Keep at most 50 checkpoints in memory
+   850→    if (this.checkpoints.length > 50) {
+   851→      const removed = this.checkpoints.shift();
+   852→      if (removed) {
+   853→        try {
+   854→          const cpFile = join(CHECKPOINTS_DIR, `checkpoint-${removed.id}.json`);
+   855→          if (existsSync(cpFile)) unlinkSync(cpFile);
+   856→        } catch { /* ignore */ }
+   857→      }
+   858→    }
+   859→
+   860→    return cp;
+   861→  }
+   862→
+   863→  // -----------------------------------------------------------------------
+   864→  // Private helpers
+   865→  // -----------------------------------------------------------------------
+   866→
+   867→  private freshStats(): AutoModeStats {
+   868→    return {
+   869→      iterations: 0,
+   870→      filesChanged: 0,
+   871→      commandsRun: 0,
+   872→      timeElapsedMs: 0,
+   873→      totalCost: 0,
+   874→      blockedOperations: 0,
+   875→      errors: 0,
+   876→    };
+   877→  }
+   878→
+   879→  private emitStatus(status: AutoModeStatus): void {
+   880→    if (this.onStatusChange) {
+   881→      this.onStatusChange(status);
+   882→    }
+   883→  }
+   884→
+   885→  private buildBlockedCommands(level: SafetyLevel): string[] {
+   886→    const base = new Set(ALWAYS_BLOCKED_COMMANDS);
+   887→    if (level === 'conservative') {
+   888→      CONSERVATIVE_BLOCKED_COMMANDS.forEach(c => base.add(c));
+   889→    } else if (level === 'moderate') {
+   890→      MODERATE_BLOCKED_COMMANDS.forEach(c => base.add(c));
+   891→    }
+   892→    // Merge user-defined on top
+   893→    this.config.blockedCommands.forEach(c => base.add(c));
+   894→    return Array.from(base);
+   895→  }
+   896→
+   897→  private buildBlockedPatterns(level: SafetyLevel): string[] {
+   898→    const base = new Set(ALWAYS_BLOCKED_PATTERNS);
+   899→    if (level === 'conservative') {
+   900→      CONSERVATIVE_BLOCKED_PATTERNS.forEach(p => base.add(p));
+   901→    }
+   902→    this.config.blockedPatterns.forEach(p => base.add(p));
+   903→    return Array.from(base);
+   904→  }
+   905→
+   906→  private detectCompletion(text: string): boolean {
+   907→    const markers = [
+   908→      'TASK_COMPLETE',
+   909→      'task complete',
+   910→      'task is complete',
+   911→      'goal achieved',
+   912→      'goal reached',
+   913→      'all done',
+   914→      'finished successfully',
+   915→    ];
+   916→    const lower = text.toLowerCase();
+   917→    return markers.some(m => lower.includes(m));
+   918→  }
+   919→
+   920→  private buildGoalPrompt(goal: GoalDefinition): string {
+   921→    const criteria = goal.successCriteria.length > 0
+   922→      ? `\n\nSuccess criteria:\n${goal.successCriteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}`
+   923→      : '';
+   924→
+   925→    const subGoals = goal.subGoals.length > 0
+   926→      ? `\n\nSub-goals:\n${goal.subGoals.map((sg, i) => `${i + 1}. ${sg.name}: ${sg.description}`).join('\n')}`
+   927→      : '';
+   928→
+   929→    return (
+   930→      `Goal: ${goal.name}\n\n` +
+   931→      `Description: ${goal.description}${criteria}${subGoals}\n\n` +
+   932→      `Work towards this goal autonomously. When the goal is achieved, respond with "TASK_COMPLETE".`
+   933→    );
+   934→  }
+   935→
+   936→  private autoGitCommit(iteration: number): void {
+   937→    try {
+   938→      execSync('git add -A', { stdio: 'pipe', timeout: 10_000 });
+   939→      execSync(`git commit -m "auto-mode: iteration ${iteration}" --allow-empty`, {
+   940→        stdio: 'pipe',
+   941→        timeout: 10_000,
+   942→      });
+   943→    } catch {
+   944→      // Not a git repo, or nothing to commit – ignore
+   945→    }
+   946→  }
+   947→
+   948→  private autoRunTests(): { passed: boolean; output: string } {
+   949→    // Try common test commands
+   950→    const testCommands = ['npm test', 'bun test', 'yarn test', 'pnpm test'];
+   951→    for (const cmd of testCommands) {
+   952→      try {
+   953→        const output = execSync(cmd, { stdio: 'pipe', timeout: 60_000 }).toString('utf-8');
+   954→        return { passed: true, output };
+   955→      } catch (err: unknown) {
+   956→        // execSync throws on non-zero exit
+   957→        if (err instanceof Error && 'stdout' in err) {
+   958→          const output = String((err as unknown as { stdout: Buffer }).stdout);
+   959→          return { passed: false, output };
+   960→        }
+   961→        // Command not found – try the next one
+   962→        continue;
+   963→      }
+   964→    }
+   965→    return { passed: true, output: 'No test runner found' };
+   966→  }
+   967→
+   968→  private matchesGlobPattern(filePath: string, pattern: string): boolean {
+   969→    // Convert simple glob to regex
+   970→    const regexStr = pattern
+   971→      .replace(/[.+^${}()|[\]\\]/g, '\\$&')   // escape regex special chars (except * and ?)
+   972→      .replace(/\*\*/g, '{{GLOBSTAR}}')          // preserve **
+   973→      .replace(/\*/g, '[^/]*')                   // * matches anything except /
+   974→      .replace(/\?/g, '[^/]')                    // ? matches single non-/
+   975→      .replace(/\{\{GLOBSTAR\}\}/g, '.*');       // ** matches anything
+   976→    try {
+   977→      const regex = new RegExp(regexStr + '$', 'i');
+   978→      return regex.test(filePath);
+   979→    } catch {
+   980→      return false;
+   981→    }
+   982→  }
+   983→
+   984→  // -----------------------------------------------------------------------
+   985→  // Persistence
+   986→  // -----------------------------------------------------------------------
+   987→
+   988→  private persistState(): void {
+   989→    try {
+   990→      if (!existsSync(NEURO_DIR)) mkdirSync(NEURO_DIR, { recursive: true });
+   991→      writeFileSync(AUTO_STATE_FILE, JSON.stringify({
+   992→        config: this.config,
+   993→        stats: this.stats,
+   994→      }, null, 2), 'utf-8');
+   995→    } catch { /* best effort */ }
+   996→  }
+   997→
+   998→  private loadState(): void {
+   999→    try {
+  1000→      if (existsSync(AUTO_STATE_FILE)) {
+  1001→        const data = JSON.parse(readFileSync(AUTO_STATE_FILE, 'utf-8'));
+  1002→        if (data.config) Object.assign(this.config, data.config);
+  1003→        if (data.stats) Object.assign(this.stats, data.stats);
+  1004→      }
+  1005→    } catch { /* ignore corrupt state */ }
+  1006→
+  1007→    // Load goals
+  1008→    try {
+  1009→      if (existsSync(GOALS_FILE)) {
+  1010→        const data = JSON.parse(readFileSync(GOALS_FILE, 'utf-8')) as GoalDefinition[];
+  1011→        for (const g of data) this.goals.set(g.id, g);
+  1012→      }
+  1013→    } catch { /* ignore */ }
+  1014→
+  1015→    // Load routines
+  1016→    try {
+  1017→      if (existsSync(ROUTINES_FILE)) {
+  1018→        const data = JSON.parse(readFileSync(ROUTINES_FILE, 'utf-8')) as RoutineDefinition[];
+  1019→        for (const r of data) this.routines.set(r.id, r);
+  1020→      }
+  1021→    } catch { /* ignore */ }
+  1022→
+  1023→    // Load checkpoints from disk
+  1024→    try {
+  1025→      if (existsSync(CHECKPOINTS_DIR)) {
+  1026→        const files = readdirSync(CHECKPOINTS_DIR).filter(f => f.startsWith('checkpoint-'));
+  1027→        for (const f of files.slice(-50)) {
+  1028→          try {
+  1029→            const cp = JSON.parse(readFileSync(join(CHECKPOINTS_DIR, f), 'utf-8')) as AutoModeCheckpoint;
+  1030→            this.checkpoints.push(cp);
+  1031→          } catch { /* skip corrupt */ }
+  1032→        }
+  1033→        // Sort by timestamp
+  1034→        this.checkpoints.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  1035→      }
+  1036→    } catch { /* ignore */ }
+  1037→  }
+  1038→
+  1039→  private persistGoals(): void {
+  1040→    try {
+  1041→      if (!existsSync(NEURO_DIR)) mkdirSync(NEURO_DIR, { recursive: true });
+  1042→      writeFileSync(GOALS_FILE, JSON.stringify(Array.from(this.goals.values()), null, 2), 'utf-8');
+  1043→    } catch { /* best effort */ }
+  1044→  }
+  1045→
+  1046→  private persistRoutines(): void {
+  1047→    try {
+  1048→      if (!existsSync(NEURO_DIR)) mkdirSync(NEURO_DIR, { recursive: true });
+  1049→      writeFileSync(ROUTINES_FILE, JSON.stringify(Array.from(this.routines.values()), null, 2), 'utf-8');
+  1050→    } catch { /* best effort */ }
+  1051→  }
+  1052→}
+  1053→
+  1054→// ---------------------------------------------------------------------------
+  1055→// Supporting types
+  1056→// ---------------------------------------------------------------------------
+  1057→
+  1058→export type AutoModeStatus = 'disabled' | 'enabled' | 'running';
+  1059→
+  1060→export interface AutoModeResult {
+  1061→  ok: boolean;
+  1062→  iterations: number;
+  1063→  finalText: string;
+  1064→  completed?: boolean;
+  1065→  error?: string;
+  1066→}
+  1067→
