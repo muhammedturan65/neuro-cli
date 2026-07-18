@@ -1,6 +1,6 @@
 // ============================================================
 // NeuroCLI - Advanced AI Terminal Coding Assistant
-// Core Types & Interfaces
+// Core Types & Interfaces - v2.0 with all new features
 // ============================================================
 
 export interface Message {
@@ -51,6 +51,10 @@ export interface AgentConfig {
   tools?: string[];
   autoApprove?: boolean;
   maxIterations?: number;
+  /** Custom agent defined by user */
+  isCustom?: boolean;
+  /** Tags for categorizing agents */
+  tags?: string[];
 }
 
 export interface ModelConfig {
@@ -99,6 +103,14 @@ export interface NeuroConfig {
     autoConnect: boolean;
   };
   diffPreview: boolean;
+  /** Sandbox configuration */
+  sandbox: SandboxConfigType;
+  /** Spending limit in USD (0 = unlimited) */
+  spendingLimit: number;
+  /** Prompt cache configuration */
+  promptCache: PromptCacheConfig;
+  /** Custom agents defined by the user */
+  customAgents: Record<string, AgentConfig>;
 }
 
 export interface Session {
@@ -112,6 +124,14 @@ export interface Session {
   totalOutputTokens: number;
   totalCost: number;
   agentHistory: AgentExecution[];
+  /** Session tags for categorization */
+  tags: string[];
+  /** Session description (auto-generated or user-set) */
+  description?: string;
+  /** Whether this is a fork of another session */
+  forkedFrom?: string;
+  /** Parent session ID */
+  parentSessionId?: string;
 }
 
 export interface AgentExecution {
@@ -200,4 +220,46 @@ export interface MCPServerConfig {
   headers?: Record<string, string>;
   timeout?: number;
   disabled?: boolean;
+  autoReconnect?: boolean;
+  maxReconnectAttempts?: number;
+  healthCheckIntervalMs?: number;
+}
+
+// Sandbox configuration type
+export interface SandboxConfigType {
+  enabled: boolean;
+  rootDir: string;
+  allowedDirs: string[];
+  deniedDirs: string[];
+  deniedPatterns: string[];
+  allowCommands: boolean;
+  allowedCommands: string[];
+  deniedCommands: string[];
+  backupOnModify: boolean;
+  backupDir: string;
+  maxFileSize: number;
+  allowNetwork: boolean;
+  allowEnvAccess: boolean;
+  readOnly: boolean;
+}
+
+// Prompt cache configuration
+export interface PromptCacheConfig {
+  enabled: boolean;
+  /** Cache directory */
+  cacheDir: string;
+  /** Maximum cache entries */
+  maxEntries: number;
+  /** TTL in milliseconds (default: 1 hour) */
+  ttlMs: number;
+  /** Similarity threshold for cache hits (0-1) */
+  similarityThreshold: number;
+}
+
+// Session export format
+export interface SessionExport {
+  version: string;
+  exportedAt: number;
+  session: Session;
+  neuroVersion: string;
 }

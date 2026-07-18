@@ -1,6 +1,7 @@
 // ============================================================
-// NeuroCLI - NeuroEngine
+// NeuroCLI - NeuroEngine v2.0
 // The main engine that ties everything together
+// Now with Sandbox, Plugin SDK, Enhanced MCP, Enhanced Approval
 // ============================================================
 
 import { NeuroConfig, Message, AgentExecution, PermissionMode } from '../core/types.js';
@@ -17,6 +18,8 @@ import { ApprovalSystem } from '../core/approval.js';
 import { MCPClient } from '../mcp/client.js';
 import { DoomLoopProtection } from '../core/doom-loop.js';
 import { FallbackChain } from '../core/fallback.js';
+import { Sandbox } from '../core/sandbox.js';
+import { PluginManager } from '../core/plugin-sdk.js';
 
 export class NeuroEngine {
   public config: NeuroConfig;
@@ -31,6 +34,8 @@ export class NeuroEngine {
   public approval: ApprovalSystem;
   public doomLoop: DoomLoopProtection;
   public fallback: FallbackChain;
+  public sandbox: Sandbox;
+  public pluginManager: PluginManager;
 
   private autoApproveSet: Set<string>;
   private requireApprovalSet: Set<string>;
@@ -46,14 +51,27 @@ export class NeuroEngine {
     this.autoApproveSet = new Set(config.tools.autoApprove);
     this.requireApprovalSet = new Set(config.tools.requireApproval);
 
-    // Initialize new systems
-    this.approval = new ApprovalSystem(config.permissionMode);
+    // Initialize all systems
+    this.approval = new ApprovalSystem(config.permissionMode, {
+      showDiffPreview: config.diffPreview,
+      whitelist: config.tools.autoApprove,
+      blacklist: config.tools.denied,
+    });
+
     this.mcpClient = new MCPClient();
+
     this.doomLoop = new DoomLoopProtection(config.doomLoop, async (reason, state) => {
       this.ui.warning(`Doom loop detected: ${reason}. Pausing agent.`);
-      return false; // Don't auto-continue
+      return false;
     });
+
     this.fallback = new FallbackChain(this.client, config.fallbackChain);
+
+    // Sandbox system
+    this.sandbox = new Sandbox(config.sandbox);
+
+    // Plugin system
+    this.pluginManager = new PluginManager();
 
     // Connect MCP servers if configured
     if (config.mcp.autoConnect) {
@@ -61,6 +79,14 @@ export class NeuroEngine {
         if (count > 0) this.ui.info(`MCP: ${count} server(s) connected`);
       }).catch(() => {});
     }
+
+    // Load plugins
+    this.pluginManager.loadAll().then(count => {
+      if (count > 0) this.ui.info(`Plugins: ${count} loaded`);
+    }).catch(() => {});
+
+    // Register plugin tools with the tool registry
+    this.registerPluginTools();
 
     // Initialize agents from config
     this.initializeAgents();
@@ -109,15 +135,61 @@ Always consider the strengths of each agent when delegating:
   }
 
   /**
+   * Register plugin tools with the tool registry
+   */
+  private registerPluginTools(): void {
+    const pluginTools = this.pluginManager.getToolDefinitions();
+    for (const toolDef of pluginTools) {
+      // Plugin tools are registered with the registry so the AI can use them
+      this.registry.register({
+        name: toolDef.name,
+        description: toolDef.description,
+        parameters: toolDef.parameters,
+        risk: toolDef.risk,
+        execute: async (args, context) => {
+          return this.pluginManager.executeTool(toolDef.name, args, {
+            workingDirectory: context.workingDirectory,
+            sessionId: context.sessionId,
+            agentName: context.agentName,
+            onProgress: context.onProgress,
+            callTool: async (name, callArgs) => {
+              return this.registry.execute(name, callArgs, context);
+            },
+            memory: {
+              get: () => undefined,
+              set: () => {},
+              delete: () => {},
+              list: () => [],
+            },
+          });
+        },
+      });
+    }
+  }
+
+  /**
    * Initialize all agents from config
    */
   private initializeAgents(): void {
     const sessionId = 'init';
     const cwd = process.cwd();
 
+    // Built-in agents
     for (const [key, agentConfig] of Object.entries(this.config.agents)) {
-      // Always use default model from config (allows easy model switching)
       const overrideConfig = { ...agentConfig, model: this.config.defaultModel };
+      const agent = new BaseAgent(
+        overrideConfig,
+        this.client,
+        this.registry,
+        cwd,
+        sessionId,
+      );
+      this.agents.set(agentConfig.name, agent);
+    }
+
+    // Custom agents
+    for (const [key, agentConfig] of Object.entries(this.config.customAgents || {})) {
+      const overrideConfig = { ...agentConfig, model: this.config.defaultModel, isCustom: true };
       const agent = new BaseAgent(
         overrideConfig,
         this.client,
@@ -137,6 +209,15 @@ Always consider the strengths of each agent when delegating:
     mode: 'auto' | 'agent' | 'direct' = 'auto',
     targetAgent?: string,
   ): Promise<{ content: string; usage: TokenUsage; execution?: AgentExecution }> {
+    // Check spending limit
+    if (this.config.spendingLimit > 0) {
+      const currentSession = this.sessionManager.getCurrent();
+      if (currentSession && currentSession.totalCost >= this.config.spendingLimit) {
+        this.ui.error(`Spending limit reached ($${this.config.spendingLimit.toFixed(4)}). Use /config to adjust.`);
+        return { content: 'Spending limit reached.', usage: { inputTokens: 0, outputTokens: 0, cost: 0 } };
+      }
+    }
+
     // Start or get session
     let session = this.sessionManager.getCurrent();
     if (!session) {
@@ -154,7 +235,13 @@ Always consider the strengths of each agent when delegating:
     const callbacks: AgentCallbacks = {
       onThinking: (thinking) => this.ui.thinking(thinking),
       onToken: (token) => this.ui.streamingToken(token),
-      onToolCall: (name, args) => this.ui.toolCall(name, args),
+      onToolCall: (name, args) => {
+        // Sandbox check before tool execution
+        if (this.sandbox.isEnabled() && !this.checkSandboxForTool(name, args)) {
+          return; // Sandbox blocked this tool call
+        }
+        this.ui.toolCall(name, args);
+      },
       onToolResult: (name, result, isError) => this.ui.toolResult(name, result, isError),
       onApprovalNeeded: async (name, args, risk) => {
         return this.handleApproval(name, args, risk as 'low' | 'medium' | 'high');
@@ -167,7 +254,6 @@ Always consider the strengths of each agent when delegating:
     let result;
 
     if (mode === 'direct' && targetAgent) {
-      // Direct mode: use specific agent
       const agent = this.agents.get(targetAgent);
       if (!agent) {
         this.ui.error(`Agent not found: ${targetAgent}`);
@@ -177,7 +263,6 @@ Always consider the strengths of each agent when delegating:
       result = await agent.run(message, callbacks);
       this.ui.endStreaming();
     } else if (mode === 'agent') {
-      // Agent mode: use orchestrator for planning
       const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
       result = {
         content: orchestrateResult.content,
@@ -187,10 +272,8 @@ Always consider the strengths of each agent when delegating:
         execution: orchestrateResult.execution,
       };
     } else {
-      // Auto mode: decide between direct and orchestrated
       const complexity = this.assessComplexity(message);
       if (complexity === 'simple') {
-        // Use coder directly for simple tasks
         const agent = this.agents.get('Coder');
         if (agent) {
           this.ui.startStreaming();
@@ -200,7 +283,6 @@ Always consider the strengths of each agent when delegating:
           throw new Error('Coder agent not initialized');
         }
       } else {
-        // Use orchestrator for complex tasks
         this.ui.thinking('🧠 Analyzing task complexity... Using multi-agent orchestration');
         const orchestrateResult = await this.orchestrator.orchestrate(message, callbacks);
         result = {
@@ -237,19 +319,66 @@ Always consider the strengths of each agent when delegating:
   }
 
   /**
-   * Handle tool approval using the new ApprovalSystem
+   * Check sandbox permissions for a tool call
+   */
+  private checkSandboxForTool(toolName: string, args: Record<string, unknown>): boolean {
+    // File operations
+    if (['write_file', 'edit_file', 'apply_diff'].includes(toolName)) {
+      const path = args.path as string;
+      if (path && !this.sandbox.canWrite(path)) {
+        this.ui.warning(`Sandbox: Write access denied for ${path}`);
+        return false;
+      }
+      // Backup file before modification
+      if (path) this.sandbox.backupFile(path);
+    }
+
+    if (['delete_file'].includes(toolName)) {
+      const path = args.path as string;
+      if (path && !this.sandbox.canDelete(path)) {
+        this.ui.warning(`Sandbox: Delete access denied for ${path}`);
+        return false;
+      }
+    }
+
+    if (['read_file', 'search_files', 'list_directory'].includes(toolName)) {
+      const path = (args.path || args.directory) as string;
+      if (path && !this.sandbox.canRead(path)) {
+        this.ui.warning(`Sandbox: Read access denied for ${path}`);
+        return false;
+      }
+    }
+
+    // Command execution
+    if (['run_command', 'bash'].includes(toolName)) {
+      const command = args.command as string;
+      if (command && !this.sandbox.canRunCommand(command)) {
+        this.ui.warning(`Sandbox: Command execution denied`);
+        return false;
+      }
+    }
+
+    // Network access
+    if (['web_search', 'web_fetch'].includes(toolName)) {
+      if (!this.sandbox.canAccessNetwork()) {
+        this.ui.warning('Sandbox: Network access denied');
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Handle tool approval using the enhanced ApprovalSystem
    */
   private async handleApproval(
     toolName: string,
     args: Record<string, unknown>,
     risk: 'low' | 'medium' | 'high',
   ): Promise<boolean> {
-    // Auto-approve tools in auto-approve list
-    if (this.autoApproveSet.has(toolName)) {
-      return true;
-    }
+    if (this.autoApproveSet.has(toolName)) return true;
 
-    // Use the new approval system
     const result = await this.approval.requestApproval(toolName, args, risk);
     return result.approved;
   }
@@ -300,5 +429,37 @@ Always consider the strengths of each agent when delegating:
       cost: session.totalCost,
       messages: session.messages.length,
     };
+  }
+
+  /**
+   * Register a custom agent
+   */
+  registerCustomAgent(name: string, config: { description: string; systemPrompt: string; tools?: string[]; maxIterations?: number }): void {
+    const agentConfig = {
+      name,
+      description: config.description,
+      systemPrompt: config.systemPrompt,
+      model: this.config.defaultModel,
+      temperature: 0.5,
+      maxTokens: 8192,
+      tools: config.tools || [],
+      maxIterations: config.maxIterations || 10,
+      isCustom: true,
+    };
+
+    const agent = new BaseAgent(
+      agentConfig,
+      this.client,
+      this.registry,
+      process.cwd(),
+      this.sessionManager.getCurrent()?.id || 'default',
+    );
+
+    this.agents.set(name, agent);
+    this.orchestrator.registerAgent(agent);
+
+    // Save to config
+    if (!this.config.customAgents) this.config.customAgents = {};
+    this.config.customAgents[name] = agentConfig;
   }
 }

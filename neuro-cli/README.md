@@ -1,6 +1,6 @@
-# 🧠 NeuroCLI
+# 🧠 NeuroCLI v2.0
 
-**Advanced AI Terminal Coding Assistant** — Multi-agent architecture, 23 free models, MCP support, and deep context management.
+**Advanced AI Terminal Coding Assistant** — Multi-agent architecture, 23 free models, MCP support, sandbox mode, plugin SDK, and deep context management.
 
 ## Features
 
@@ -9,9 +9,10 @@
 - **NVIDIA Nemotron 3** (120B/550B) — powerful reasoning
 - **Google Gemma 4** (31B) — multimodal + tools
 - **Cohere North Mini Code** — fast code generation
+- **Llama 3.3 70B**, **Hermes 3 405B**, **Tencent Hy3**, **Poolside Laguna**, **OpenAI gpt-oss-20b**
 - $0 cost per developer per day
 
-### 🤖 8 Specialized Agents
+### 🤖 8+ Specialized Agents
 | Agent | Specialty |
 |-------|-----------|
 | Planner | Task decomposition |
@@ -22,21 +23,82 @@
 | Debugger | Bug investigation & fixing |
 | Architect | System design |
 | DevOps | Deployment & infrastructure |
+| **Custom** | Define your own agents! |
 
-### 🔌 MCP (Model Context Protocol)
-Full MCP support with stdio, SSE, and HTTP transports:
+### 🔌 MCP (Model Context Protocol) — Enhanced
+Full MCP support with **stdio, SSE, and HTTP** transports:
+- Auto-reconnect with exponential backoff
+- Health check monitoring
+- Resource & Prompt support
+- Connection state tracking
 ```bash
 neuro mcp add myserver "npx -y @modelcontextprotocol/server-everything"
+neuro mcp add remote "https://mcp.example.com/sse" -t sse
 neuro mcp list
 /mcp connect myserver    # in interactive mode
+/mcp health              # show connection health report
 ```
 
-### 🛡️ Permission System
-4 permission modes with interactive approval:
+### 🛡️ Enhanced Permission System
+4 permission modes with **interactive approval + diff preview**:
 - **Manual** — Ask for every action
 - **Auto** — Auto-approve safe operations, ask for dangerous ones
 - **Plan** — Read-only mode (no modifications)
 - **Yolo** — Auto-approve everything (dangerous)
+
+New features:
+- **Whitelist/Blacklist** — Persist tool approvals/denials across sessions
+- **Batch Approval** — Group similar operations and approve/deny together
+- **Diff Preview** — See file changes before approving modifications
+- **"Always" mode** — Persist approval decisions (`A` key)
+- **Approval Statistics** — Track which tools you approve/deny most
+- **Edit args** — Modify tool arguments before execution (`e` key)
+
+```bash
+/whitelist add write_file     # Always allow file writes
+/blacklist add run_command    # Never allow command execution
+/whitelist list               # Show whitelisted tools
+/blacklist list               # Show blacklisted tools
+```
+
+### 🔒 Sandbox Mode
+Protect your filesystem with configurable sandbox:
+- Restrict file modifications to project directory
+- Deny access to sensitive files (.env, .pem, .key)
+- Block dangerous commands (rm -rf /, sudo, mkfs)
+- Auto-backup files before modification
+- Undo all sandbox changes with one command
+```bash
+/sandbox              # Toggle sandbox mode
+/sandbox on           # Enable sandbox
+/sandbox status       # Show sandbox configuration
+/sandbox undo         # Undo all modifications made in sandbox
+```
+
+### 🧩 Plugin SDK
+Extend NeuroCLI with custom tools:
+```javascript
+// ~/.neuro/plugins/my-plugin/index.js
+import { createPlugin } from 'neuro-cli';
+
+export default createPlugin({
+  name: 'my-plugin',
+  version: '1.0.0',
+  description: 'My custom tools',
+  tools: [{
+    name: 'my_tool',
+    description: 'Does something custom',
+    parameters: { type: 'object', properties: { input: { type: 'string', description: 'Input' } }, required: ['input'] },
+    risk: 'low',
+    execute: async (args, ctx) => `Result: ${args.input}`,
+  }],
+});
+```
+
+```bash
+/plugins list          # List loaded plugins
+/plugins load my-plugin  # Load a plugin
+```
 
 ### 🔄 Doom Loop Protection
 Detects and prevents agent stuck loops with:
@@ -57,6 +119,10 @@ Automatic model fallback on failure:
 
 ### 📋 Diff Preview
 Preview file changes before applying them with color-coded diff display.
+- Automatic diff preview on file modifications (with approval)
+- LCS-based diff algorithm
+- Summary view for multiple changes
+- Interactive confirmation
 
 ### 🖥️ Headless/CI Mode
 ```bash
@@ -84,11 +150,26 @@ Language Server Protocol support for TypeScript, Python, Go, and Rust — go-to-
 ### 🪝 20 Lifecycle Hooks
 8 categories of hook events: Session, Agent, Model, Tool, Permission, User, Context, Environment.
 
+### 💰 Spending Limit
+Set a maximum spending limit per session:
+```bash
+neuro config --set-spending-limit 1.00   # $1 max per session
+```
+
+### 🔍 Enhanced Tab Completion
+- Slash commands with descriptions
+- Model names and categories (`/model free` shows free models)
+- File path completion (./, ~/, absolute paths)
+- Session ID completion
+- Agent name completion (@-mentions)
+- Command history with search
+- Context-aware suggestions
+
 ## Installation
 
 ```bash
 # Clone and install
-git clone https://github.com/your-username/neuro-cli.git
+git clone https://github.com/muhammedturan65/neuro-cli.git
 cd neuro-cli
 npm install
 npm run build
@@ -109,6 +190,7 @@ neuro                          # Start interactive session
 neuro -c                       # Continue last session
 neuro -r session_abc123        # Resume specific session
 neuro --permission-mode auto   # Set permission mode
+neuro --sandbox                # Start with sandbox enabled
 ```
 
 ### One-Shot Mode
@@ -143,7 +225,12 @@ neuro mcp remove filesystem
 | `/compact` | Compact context |
 | `/undo` | Undo last change |
 | `/mcp [cmd]` | Manage MCP servers |
+| `/mcp health` | Show MCP health report |
 | `/init` | Initialize NEURO.md |
+| `/sandbox` | Toggle sandbox mode |
+| `/plugins` | Manage plugins |
+| `/whitelist` | Manage tool whitelist |
+| `/blacklist` | Manage tool blacklist |
 | `/doctor` | Health check |
 | `/export` | Export session as JSON |
 | `/stats` | Session statistics |
@@ -176,6 +263,15 @@ Config stored at `~/.neuro/config.json`:
   "defaultModel": "qwen/qwen3-coder:free",
   "permissionMode": "auto",
   "diffPreview": true,
+  "sandbox": {
+    "enabled": false,
+    "rootDir": "/path/to/project",
+    "deniedDirs": ["node_modules", ".git"],
+    "deniedPatterns": ["**/.env", "**/*.pem"],
+    "allowCommands": true,
+    "backupOnModify": true
+  },
+  "spendingLimit": 0,
   "fallbackChain": {
     "models": ["qwen/qwen3-coder:free", "nvidia/nemotron-3-super-120b-a12b:free"]
   },
@@ -194,19 +290,21 @@ src/
 ├── core/
 │   ├── types.ts          Shared interfaces
 │   ├── engine.ts         Main NeuroEngine
-│   ├── approval.ts       Permission & approval system
-│   ├── completion.ts     Tab completion engine
+│   ├── approval.ts       Enhanced permission & approval system
+│   ├── completion.ts     Enhanced tab completion
 │   ├── diff-preview.ts   Diff preview UI
 │   ├── doom-loop.ts      Doom loop protection
 │   ├── fallback.ts       Fallback model chain
 │   ├── headless.ts       Headless/CI mode
 │   ├── context.ts        Context window manager
-│   └── session.ts        Session persistence
+│   ├── session.ts        Session persistence
+│   ├── sandbox.ts        Sandbox mode (file isolation)
+│   └── plugin-sdk.ts     Plugin/custom tools SDK
 ├── api/
 │   ├── models.ts         36 model registry (23 free)
 │   └── openrouter.ts     OpenRouter client + streaming
 ├── mcp/
-│   └── client.ts         MCP protocol client
+│   └── client.ts         Enhanced MCP client (stdio/SSE/HTTP)
 ├── agents/
 │   ├── base.ts           BaseAgent (tool loop)
 │   ├── orchestrator.ts   Multi-agent orchestrator

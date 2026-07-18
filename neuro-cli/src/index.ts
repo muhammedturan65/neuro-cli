@@ -438,11 +438,14 @@ async function startInteractive(options: any) {
           } else if (mcpSub === 'disconnect' && args[1]) {
             await engine.mcpClient.disconnect(args[1]);
             engine.ui.success(`Disconnected from ${args[1]}`);
+          } else if (mcpSub === 'health') {
+            engine.mcpClient.healthReport();
           } else {
             console.log(chalk.bold('\nMCP Commands:\n'));
             console.log('  /mcp list              List MCP servers');
             console.log('  /mcp connect <name>    Connect to a server');
             console.log('  /mcp disconnect <name> Disconnect from a server');
+            console.log('  /mcp health            Show MCP health report');
             console.log('  neuro mcp add <name> <cmd>  Add server (CLI)');
             console.log('  neuro mcp list               List servers (CLI)');
           }
@@ -476,6 +479,78 @@ async function startInteractive(options: any) {
           engine.doomLoop.unpause();
           break;
 
+        case 'sandbox':
+          if (args[0] === 'on' || args[0] === 'enable') {
+            engine.sandbox.enable();
+            engine.ui.success('🔒 Sandbox mode enabled');
+          } else if (args[0] === 'off' || args[0] === 'disable') {
+            engine.sandbox.disable();
+            engine.ui.success('🔓 Sandbox mode disabled');
+          } else if (args[0] === 'status') {
+            engine.sandbox.printStatus();
+          } else if (args[0] === 'undo') {
+            const undone = engine.sandbox.undoAll();
+            engine.ui.success(`Undone ${undone} file modifications`);
+          } else {
+            const enabled = engine.sandbox.toggle();
+            engine.ui.success(enabled ? '🔒 Sandbox mode enabled' : '🔓 Sandbox mode disabled');
+          }
+          break;
+
+        case 'plugins':
+        case 'plugin':
+          const pluginSub = args[0];
+          if (pluginSub === 'list') {
+            const plugins = engine.pluginManager.listPlugins();
+            if (plugins.length === 0) { engine.ui.info('No plugins loaded'); break; }
+            console.log(chalk.bold('\nPlugins:\n'));
+            for (const p of plugins) {
+              console.log(`  ${chalk.cyan(p.name)} v${p.version} - ${chalk.gray(p.description)} ${chalk.green(`${p.toolCount} tools`)}`);
+            }
+          } else if (pluginSub === 'load' && args[1]) {
+            try {
+              await engine.pluginManager.loadByName(args[1]);
+              engine.ui.success(`Plugin "${args[1]}" loaded`);
+            } catch (e) { engine.ui.error(`Failed to load plugin: ${e instanceof Error ? e.message : String(e)}`); }
+          } else {
+            console.log(chalk.bold('\nPlugin Commands:\n'));
+            console.log('  /plugins list           List loaded plugins');
+            console.log('  /plugins load <name>    Load a plugin');
+          }
+          break;
+
+        case 'whitelist':
+          if (args[0] === 'add' && args[1]) {
+            engine.approval.addToWhitelist(args[1]);
+            engine.ui.success(`Added "${args[1]}" to whitelist`);
+          } else if (args[0] === 'remove' && args[1]) {
+            engine.approval.removeFromWhitelist(args[1]);
+            engine.ui.success(`Removed "${args[1]}" from whitelist`);
+          } else if (args[0] === 'list') {
+            const wl = engine.approval.getWhitelist();
+            console.log(chalk.bold('\nWhitelisted tools:\n'));
+            for (const t of wl) console.log(`  ${chalk.green('✓')} ${t}`);
+          } else {
+            console.log('Usage: /whitelist add|remove|list <tool>');
+          }
+          break;
+
+        case 'blacklist':
+          if (args[0] === 'add' && args[1]) {
+            engine.approval.addToBlacklist(args[1]);
+            engine.ui.success(`Added "${args[1]}" to blacklist`);
+          } else if (args[0] === 'remove' && args[1]) {
+            engine.approval.removeFromBlacklist(args[1]);
+            engine.ui.success(`Removed "${args[1]}" from blacklist`);
+          } else if (args[0] === 'list') {
+            const bl = engine.approval.getBlacklist();
+            console.log(chalk.bold('\nBlacklisted tools:\n'));
+            for (const t of bl) console.log(`  ${chalk.red('✗')} ${t}`);
+          } else {
+            console.log('Usage: /blacklist add|remove|list <tool>');
+          }
+          break;
+
         case 'doctor':
           console.log(chalk.bold('\nNeuroCLI Health Check:\n'));
           console.log(`  API Key: ${config.apiKey ? chalk.green('configured') : chalk.red('MISSING')}`);
@@ -485,7 +560,10 @@ async function startInteractive(options: any) {
           console.log(`  Diff Preview: ${config.diffPreview ? chalk.green('enabled') : chalk.gray('disabled')}`);
           console.log(`  Fallback Chain: ${config.fallbackChain.models.length > 0 ? chalk.green(config.fallbackChain.models.length + ' models') : chalk.yellow('none')}`);
           console.log(`  Doom Loop Protection: ${config.doomLoop.autoBreak ? chalk.green('enabled') : chalk.yellow('disabled')}`);
+          console.log(`  Sandbox: ${engine.sandbox.isEnabled() ? chalk.green('enabled') : chalk.gray('disabled')}`);
+          console.log(`  Plugins: ${chalk.cyan(String(engine.pluginManager.listPlugins().length))}`);
           console.log(`  Sessions: ${chalk.cyan(String(engine.sessionManager.list().length))}`);
+          console.log(`  Spending Limit: ${config.spendingLimit > 0 ? chalk.cyan('$' + config.spendingLimit.toFixed(2)) : chalk.gray('unlimited')}`);
           console.log();
           break;
 
@@ -549,6 +627,10 @@ function printHelp(engine: NeuroEngine): void {
   console.log(`  ${t.tool('/undo')}            Undo last change`);
   console.log(`  ${t.tool('/mcp [cmd]')}       Manage MCP servers`);
   console.log(`  ${t.tool('/init')}            Initialize NEURO.md`);
+  console.log(`  ${t.tool('/sandbox')}         Toggle sandbox mode`);
+  console.log(`  ${t.tool('/plugins')}         Manage plugins`);
+  console.log(`  ${t.tool('/whitelist')}       Manage tool whitelist`);
+  console.log(`  ${t.tool('/blacklist')}       Manage tool blacklist`);
   console.log(`  ${t.tool('/doctor')}          Health check`);
   console.log(`  ${t.tool('/export')}          Export current session as JSON`);
   console.log(`  ${t.tool('/stats')}           Show session statistics`);

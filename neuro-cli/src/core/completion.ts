@@ -1,25 +1,44 @@
 // ============================================================
-// NeuroCLI - Tab Completion System
-// Slash commands, file paths, model names, agent names
+// NeuroCLI - Enhanced Tab Completion System
+// Slash commands, file paths, model names, agent names,
+// command history, context-aware suggestions
 // ============================================================
 
-import { CompleterResult, Completer } from 'readline';
-import { readdirSync, statSync, existsSync } from 'fs';
+import { CompleterResult } from 'readline';
+import { readdirSync, statSync, existsSync, readFileSync } from 'fs';
 import { join, basename, dirname, extname } from 'path';
-import { MODELS } from '../api/models.js';
 import { homedir } from 'os';
+import { MODELS } from '../api/models.js';
 
 export class CompletionEngine {
   private slashCommands: Map<string, string> = new Map();
   private modelIds: string[] = [];
   private agentNames: string[] = [];
   private cwd: string;
+  private commandHistory: string[] = [];
+  private maxHistory: number = 500;
+  private historyPath: string;
+  private permissionModes: string[] = ['manual', 'auto', 'plan', 'yolo'];
+  private themes: string[] = ['dracula', 'dark', 'nord', 'light'];
+  private mcpSubcommands: string[] = ['list', 'add', 'remove', 'connect', 'disconnect', 'health'];
+  private fileExtensions: Map<string, string[]> = new Map([
+    ['typescript', ['.ts', '.tsx', '.d.ts']],
+    ['javascript', ['.js', '.jsx', '.mjs', '.cjs']],
+    ['python', ['.py', '.pyi', '.pyw']],
+    ['rust', ['.rs']],
+    ['go', ['.go']],
+    ['java', ['.java']],
+    ['config', ['.json', '.yaml', '.yml', '.toml', '.env']],
+    ['web', ['.html', '.css', '.scss', '.vue', '.svelte']],
+    ['docs', ['.md', '.txt', '.rst']],
+  ]);
 
   constructor(cwd?: string) {
     this.cwd = cwd || process.cwd();
     this.modelIds = Object.keys(MODELS);
+    this.historyPath = join(homedir(), '.neuro', 'history');
 
-    // Built-in slash commands
+    // Built-in slash commands with descriptions
     const commands: [string, string][] = [
       ['help', 'Show help message'],
       ['model', 'Switch or list models'],
@@ -28,6 +47,7 @@ export class CompletionEngine {
       ['orchestrate', 'Multi-agent orchestration mode'],
       ['plan', 'Plan mode (read-only)'],
       ['direct', 'Direct agent mode'],
+      ['plan-mode', 'Plan mode (read-only, no modifications)'],
       ['stats', 'Show session statistics'],
       ['theme', 'Switch UI theme'],
       ['clear', 'Clear terminal'],
@@ -40,19 +60,66 @@ export class CompletionEngine {
       ['mcp', 'Manage MCP servers'],
       ['fork', 'Fork current session'],
       ['init', 'Initialize NEURO.md for this project'],
+      ['permission', 'Cycle or set permission mode'],
+      ['perm', 'Alias for /permission'],
+      ['doctor', 'Health check'],
+      ['export', 'Export current session as JSON'],
+      ['import', 'Import a session from JSON file'],
+      ['sandbox', 'Toggle sandbox mode'],
+      ['whitelist', 'Manage tool whitelist'],
+      ['blacklist', 'Manage tool blacklist'],
     ];
     for (const [cmd, desc] of commands) {
       this.slashCommands.set(cmd, desc);
     }
+
+    this.loadHistory();
   }
 
   setAgentNames(names: string[]): void {
     this.agentNames = names;
   }
 
-  /**
-   * Main completion handler for readline
-   */
+  // --- Command History ---
+
+  addHistory(command: string): void {
+    if (!command.trim()) return;
+    // Don't add duplicates at the end
+    if (this.commandHistory.length > 0 && this.commandHistory[this.commandHistory.length - 1] === command) return;
+    this.commandHistory.push(command);
+    if (this.commandHistory.length > this.maxHistory) {
+      this.commandHistory = this.commandHistory.slice(-this.maxHistory);
+    }
+    this.saveHistory();
+  }
+
+  private loadHistory(): void {
+    try {
+      if (existsSync(this.historyPath)) {
+        const data = readFileSync(this.historyPath, 'utf-8');
+        this.commandHistory = data.split('\n').filter(Boolean).slice(-this.maxHistory);
+      }
+    } catch { /* Ignore */ }
+  }
+
+  private saveHistory(): void {
+    try {
+      const dir = dirname(this.historyPath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(this.historyPath, this.commandHistory.join('\n'), 'utf-8');
+    } catch { /* Ignore */ }
+  }
+
+  getHistory(): string[] {
+    return [...this.commandHistory];
+  }
+
+  searchHistory(prefix: string): string[] {
+    return this.commandHistory.filter(cmd => cmd.startsWith(prefix)).slice(-10);
+  }
+
+  // --- Main Completion Handler ---
+
   complete = (line: string): CompleterResult => {
     // Slash command completion
     if (line.startsWith('/')) {
@@ -64,12 +131,25 @@ export class CompletionEngine {
       return this.completeFilePath(line);
     }
 
+    // @-mention for agents
+    if (line.startsWith('@')) {
+      return this.completeAgent(line);
+    }
+
+    // History-based completion (if not empty)
+    if (line.length > 0) {
+      const historyMatches = this.searchHistory(line);
+      if (historyMatches.length > 0) {
+        return [historyMatches, line];
+      }
+    }
+
     // Default: try slash commands
     return this.completeSlashCommand('/' + line);
   };
 
   private completeSlashCommand(line: string): CompleterResult {
-    const partial = line.slice(1).toLowerCase(); // Remove /
+    const partial = line.slice(1).toLowerCase();
     const parts = partial.split(/\s+/);
 
     // First part: command name
@@ -79,7 +159,6 @@ export class CompletionEngine {
         .map(cmd => '/' + cmd + ' ');
 
       if (matches.length === 1) {
-        // Auto-include description for single match
         const cmd = matches[0].trim().slice(1);
         const desc = this.slashCommands.get(cmd);
         return [matches, line];
@@ -94,23 +173,59 @@ export class CompletionEngine {
 
     switch (command) {
       case 'model':
-        return [this.modelIds.filter(m => m.startsWith(argPartial) || MODELS[m]?.name.toLowerCase().startsWith(argPartial.toLowerCase())), line];
+        return this.completeModel(argPartial, line);
 
       case 'agent':
         return [this.agentNames.filter(a => a.toLowerCase().startsWith(argPartial.toLowerCase())), line];
 
       case 'theme':
-        return [['dracula', 'dark', 'nord', 'light'].filter(t => t.startsWith(argPartial)), line];
+        return [this.themes.filter(t => t.startsWith(argPartial)), line];
 
       case 'resume':
         return this.completeSessionId(argPartial, line);
 
       case 'mcp':
-        return [['add', 'list', 'remove', 'connect', 'disconnect'].filter(c => c.startsWith(argPartial)), line];
+        if (parts.length === 2) {
+          return [this.mcpSubcommands.filter(c => c.startsWith(argPartial)), line];
+        }
+        return [[], line];
+
+      case 'permission':
+      case 'perm':
+        return [this.permissionModes.filter(m => m.startsWith(argPartial)), line];
+
+      case 'whitelist':
+      case 'blacklist':
+        return [[], line]; // TODO: complete tool names
+
+      case 'import':
+        return this.completeFilePath(argPartial || './');
 
       default:
         return [[], line];
     }
+  }
+
+  private completeModel(partial: string, line: string): CompleterResult {
+    // Match by ID or name
+    const matches = this.modelIds.filter(m =>
+      m.startsWith(partial) ||
+      MODELS[m]?.name.toLowerCase().includes(partial.toLowerCase()) ||
+      m.split('/')[1]?.split(':')[0].startsWith(partial)
+    );
+
+    // Also categorize
+    if (partial === 'free' || partial === 'free-') {
+      const freeMatches = this.modelIds.filter(m => m.includes(':free'));
+      return [freeMatches, line];
+    }
+
+    return [matches.length > 0 ? matches : this.modelIds, line];
+  }
+
+  private completeAgent(line: string): CompleterResult {
+    const partial = line.slice(1).toLowerCase();
+    return [this.agentNames.filter(a => a.toLowerCase().startsWith(partial)), line];
   }
 
   private completeFilePath(line: string): CompleterResult {
@@ -153,10 +268,8 @@ export class CompletionEngine {
   }
 
   private completeSessionId(partial: string, line: string): CompleterResult {
-    // Session IDs are long - just suggest "latest" and let user type
     const suggestions = ['latest'];
     if (partial) {
-      // Could list actual session IDs from ~/.neuro/sessions/
       try {
         const sessionDir = join(homedir(), '.neuro', 'sessions');
         if (existsSync(sessionDir)) {
@@ -181,7 +294,7 @@ export class CompletionEngine {
    */
   static displaySuggestions(suggestions: string[]): void {
     if (suggestions.length === 0) return;
-    if (suggestions.length === 1) return; // Let readline handle it
+    if (suggestions.length === 1) return;
 
     console.log();
     const cols = Math.min(process.stdout.columns || 80, 100);
@@ -198,4 +311,17 @@ export class CompletionEngine {
     }
     if (row) console.log(row);
   }
+
+  /**
+   * Get contextual help for a partial command
+   */
+  getContextualHelp(partial: string): string | null {
+    if (!partial.startsWith('/')) return null;
+    const cmd = partial.slice(1).split(' ')[0];
+    return this.slashCommands.get(cmd) || null;
+  }
 }
+
+// Import required for saveHistory
+import { writeFileSync as writeFileSync2, mkdirSync as mkdirSync2 } from 'fs';
+import { dirname } from 'path';

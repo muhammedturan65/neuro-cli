@@ -133,6 +133,31 @@ export const DEFAULT_CONFIG: NeuroConfig = {
     autoConnect: true,
   },
   diffPreview: true,
+  sandbox: {
+    enabled: false,
+    rootDir: process.cwd(),
+    allowedDirs: [],
+    deniedDirs: ['node_modules', '.git', '__pycache__', '.env'],
+    deniedPatterns: ['**/.env', '**/.env.*', '**/*.pem', '**/*.key', '**/credentials.json'],
+    allowCommands: true,
+    allowedCommands: [],
+    deniedCommands: ['rm -rf /', 'sudo rm', 'mkfs', 'dd if='],
+    backupOnModify: true,
+    backupDir: '.neuro/backups',
+    maxFileSize: 10 * 1024 * 1024,
+    allowNetwork: true,
+    allowEnvAccess: false,
+    readOnly: false,
+  },
+  spendingLimit: 0,
+  promptCache: {
+    enabled: false,
+    cacheDir: join(homedir(), '.neuro', 'cache'),
+    maxEntries: 100,
+    ttlMs: 3600000,
+    similarityThreshold: 0.9,
+  },
+  customAgents: {},
 };
 
 export function loadConfig(): NeuroConfig {
